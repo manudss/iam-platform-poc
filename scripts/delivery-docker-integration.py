@@ -77,6 +77,37 @@ def verify_held_queue_refusals(qmodule,root,bindir,guarded_state,plan,wrapper):
     except ValueError as error:
         if str(error)!='uninitialized or corrupt deployment history':raise
     else:raise RuntimeError('unknown-format-not-refused')
+def queue_failure_diagnostic(stderr, state):
+    # Fixed enums only. Never export stderr, paths, environment, SQL, or credentials.
+    vocabulary = {
+        'pre-update preservation capture failed': 'preservation-before-refused',
+        'pre-update hook failed': 'pre-update-hook-refused',
+        'front gate could not be proven': 'front-closure-not-proved',
+        'another update is running': 'update-lock-busy',
+        'does not support IAM_DEMO_SEED_MODE=never': 'seednever-label-missing',
+        'no Dolt dataset': 'baseline-dataset-missing',
+        'must be immutable': 'mutable-image-refused',
+        'new version is healthy BUT': 'final-front-open-not-proved',
+        'rolled back to': 'rolled-back',
+        'post-update qualification failed': 'qualification-after-refused',
+        'the pg dump is corrupt': 'pg-backup-corrupt',
+        'the pg dump header is missing': 'pg-backup-header-missing',
+        'pre-opening qualification failed': 'qualification-before-open-refused',
+        'pg state capture failed': 'pg-state-capture-refused',
+        'pg backup failed': 'pg-backup-refused',
+        'data backup failed': 'data-backup-refused',
+        'OpenBao did not become ready/unsealed': 'bao-readiness-refused',
+        'bao backup failed': 'bao-backup-refused',
+        'recovery bundle failed': 'recovery-bundle-refused',
+        'preservation changed': 'preservation-diff',
+        'expected origin/form refused': 'oidc-form-refused',
+        'real OIDC login failed': 'oidc-login-refused',
+        'journal schema invalid': 'journal-contract-mismatch',
+    }
+    markers=sorted({code for needle,code in vocabulary.items() if needle in stderr})
+    # Bound numeric code from queue journal, not a parsed arbitrary external string.
+    code=state.get('failed',{}).get('exit')
+    return {'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
 
 
 def main():
@@ -290,6 +321,7 @@ raise SystemExit(r.returncode)
             result['queueExit'] = q.returncode
             result['evidence']['queueState'] = sha(queue)
             if q.returncode:
+                result['queueFailure']=queue_failure_diagnostic(q.stdout+'\n'+q.stderr,json.loads(queue.read_text()))
                 raise RuntimeError('real-queue-update-refused')
             delivered = json.loads(queue.read_text())
             if delivered['history'][-1]['sha'] != result['sha'] or delivered.get('pending') or delivered.get('failed'):

@@ -24,6 +24,7 @@ describe('recertification template (catalog)', () => {
     const t = tpl(); const nodes = t.nodes as any[];
     const cond = nodes.find((n) => n.type === 'if')!;
     assert.equal(cond.config.left, '{{steps.await.denied}}', 'the condition reads the decisions count');
+    assert.equal(nodes.find((n) => n.id === 'prepare').config.maxActions, 50, 'preparation refuses an oversized batch before loops can truncate or revoke');
     const revloop = nodes.find((n) => n.id === 'revloop')!;
     assert.equal(revloop.config.items, '{{steps.prepare.actions}}', 'revocations come from the review results, not fixed ids');
     const revoke = nodes.find((n) => n.id === 'revoke')!;
