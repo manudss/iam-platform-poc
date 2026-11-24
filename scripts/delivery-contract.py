@@ -15,12 +15,16 @@ CHECKS = {
 }
 
 
-def aggregate(needs, receipts, sha, digest):
+def aggregate(needs, receipts, sha, digest, parent_sha, baseline_sha, baseline_digest):
     errors = []
     if not re.fullmatch(r'[a-f0-9]{40}', sha or ''):
         errors.append('invalid-source-sha')
     if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest or ''):
         errors.append('invalid-image-digest')
+    if not re.fullmatch(r'[a-f0-9]{40}', parent_sha or '') or baseline_sha != parent_sha:
+        errors.append('baseline-parent-output-mismatch')
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}', baseline_digest or ''):
+        errors.append('invalid-baseline-digest')
     if set(needs) != set(JOBS):
         errors.append('job-set-mismatch')
     for job in JOBS:
@@ -39,6 +43,8 @@ def aggregate(needs, receipts, sha, digest):
             errors.append('receipt-not-passed:' + scenario)
         if receipt.get('sha') != sha or receipt.get('digest') != digest:
             errors.append('receipt-identity-mismatch:' + scenario)
+        if scenario == 'upgrade' and (receipt.get('baselineSha') != parent_sha or receipt.get('baselineDigest') != baseline_digest):
+            errors.append('baseline-receipt-output-mismatch')
         checks = receipt.get('checks', {})
         if set(checks) != CHECKS[scenario] or any(v is not True for v in checks.values()):
             errors.append('incomplete-checks:' + scenario)
@@ -48,19 +54,20 @@ def aggregate(needs, receipts, sha, digest):
     if seen != set(SCENARIOS):
         errors.append('scenario-set-mismatch')
     return {'format': 1, 'passed': not errors, 'sha': sha, 'digest': digest,
+            'parentSha': parent_sha, 'baselineSha': baseline_sha, 'baselineDigest': baseline_digest,
             'expectedJobs': list(JOBS), 'expectedScenarios': list(SCENARIOS), 'errors': errors}
 
 
 def main():
     parser = argparse.ArgumentParser()
-    for key in ('needs', 'receipts', 'sha', 'digest', 'out'):
+    for key in ('needs', 'receipts', 'sha', 'digest', 'parent-sha', 'baseline-sha', 'baseline-digest', 'out'):
         parser.add_argument('--' + key, required=True)
     args = parser.parse_args()
     root = Path(args.receipts)
     receipts = []
     for path in sorted(root.rglob('delivery-receipt.json')):
         receipts.append(json.loads(path.read_text()))
-    result = aggregate(json.loads(Path(args.needs).read_text()), receipts, args.sha, args.digest)
+    result = aggregate(json.loads(Path(args.needs).read_text()), receipts, args.sha, args.digest, args.parent_sha, args.baseline_sha, args.baseline_digest)
     # Validate uploaded evidence bytes, not merely SHA-shaped strings in a receipt.
     for path in sorted(root.rglob('delivery-receipt.json')):
         record=json.loads(path.read_text())
@@ -69,7 +76,7 @@ def main():
         execution=path.parent/'execution-evidence.json'
         if execution.is_file():
             measured=json.loads(execution.read_text())
-            if any(record.get(key)!=measured.get(key) for key in ['format','scenario','passed','sha','digest','checks','cleanup']):
+            if any(record.get(key)!=measured.get(key) for key in ['format','scenario','passed','sha','digest','checks','cleanup','baselineSha','baselineDigest']):
                 result['errors'].append('receipt-execution-evidence-mismatch')
         for name, expected in record.get('evidence', {}).items():
             item=path.parent/name

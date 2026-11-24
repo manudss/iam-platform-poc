@@ -16,7 +16,7 @@ No production account, volume, host or provider secret is used.
 - `delivery_fresh`: real image boot, helper confinement, real synthetic services,
   actual qualifier auth/ledger check, UI document check, and authenticated
   desktop/mobile Chromium screenshots through natively trusted TLS.
-- `delivery_upgrade`: a persistent fictional dataset from immutable image 310,
+- `delivery_upgrade`: a persistent fictional dataset from the rebuilt exact current parent,
   candidate ordered queue and unmodified update.sh, preservation qualification,
   plus refusal tests with resume-required format2/3 state and a fixture pause,
   then a real closed updater receipt. The incident-specific opening consumer
@@ -91,3 +91,18 @@ Earlier 849 screenshots were taken before all app logos decoded (the browser
 recorded eleven HTTP 200 image responses per viewport); the contract now waits
 for image completion before capturing. Decorative external picsum backgrounds
 remain intentionally blocked and may show a small broken-image marker.
+
+Baseline images use a per-run and per-attempt tag in the delivery-base namespace.
+They never rewrite a source-SHA preview or deployment tag. The extra build has
+a 45-minute timeout and uses the shared demo-image BuildKit cache. An unbuildable
+parent fails explicitly. The aggregate binds baseline SHA to the actual checked
+out first parent and baseline digest to both job output and upgrade receipt.
+This is rebuilt repository parent -> candidate, NOT the production image digest
+-> candidate. It does not replay production state or prove that each repository
+parent was itself deployed.
+
+Activation order requires user merge of this reviewed PR first. Existing open
+PRs then need current main in their merge reference and a successful new contract
+run before they can merge. A missing check or merge conflict remains blocked.
+Do not merge or relax the check to bootstrap. Applying the rule must verify the
+actual check app/name and admin enforcement / absence of bypass via live API.

@@ -121,7 +121,7 @@ jobs:
           set -eu
           SHA=$(git rev-parse HEAD)
           REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          TAGS="ghcr.io/${REPO}:delivery-base-${SHA}"
+          TAGS="ghcr.io/${REPO}:delivery-base-${{ github.run_id }}-${{ github.run_attempt }}-${SHA}"
           # Closed recovery: never move an existing Render-consumed image tag.
           # Exact SHA tags and digest output still support OCI and qualification.
           # Resuming latest publication requires a separate reviewed change.
@@ -274,6 +274,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.sha }}
+          fetch-depth: 2
       - uses: actions/download-artifact@v4
         with:
           pattern: delivery-*
@@ -283,9 +284,11 @@ jobs:
           DELIVERY_NEEDS: ${{ toJSON(needs) }}
           DELIVERY_SHA: ${{ needs.build.outputs.sha }}
           DELIVERY_DIGEST: ${{ needs.build.outputs.digest }}
+          BASELINE_SHA: ${{ needs.baseline_build.outputs.sha }}
+          BASELINE_DIGEST: ${{ needs.baseline_build.outputs.digest }}
         run: |
           printf '%s' "$DELIVERY_NEEDS" > /tmp/delivery-needs.json
-          python3 scripts/delivery-contract.py --needs /tmp/delivery-needs.json --receipts /tmp/delivery-receipts --sha "$DELIVERY_SHA" --digest "$DELIVERY_DIGEST" --out /tmp/delivery-verdict.json
+          python3 scripts/delivery-contract.py --needs /tmp/delivery-needs.json --receipts /tmp/delivery-receipts --sha "$DELIVERY_SHA" --digest "$DELIVERY_DIGEST" --parent-sha "$(git rev-parse HEAD^1)" --baseline-sha "$BASELINE_SHA" --baseline-digest "$BASELINE_DIGEST" --out /tmp/delivery-verdict.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
