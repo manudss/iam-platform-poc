@@ -53,6 +53,8 @@ def settings(manifest):
    if k in env:raise ValueError('duplicate environment setting')
    env[k]=v
  if env.get('IAM_AUTOMATION_HOLD')!='1':raise ValueError('persistent hold required')
+ env.setdefault('LYAM_FRONT_BARRIER_FILE','/var/lib/lyam-front-gate/MAINTENANCE')
+ env.setdefault('LYAM_OPS_BARRIER_FILE','/var/lib/lyam-front-gate/OPS-MAINTENANCE')
  return env
 
 def verify(manifest,container,target,public=503):
