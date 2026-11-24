@@ -147,7 +147,7 @@ import{substituteStepOutputs}from'./model.js';
 describe('generic typed nested native results, no provider or business-specific transformation',()=>{
  const source={read:{result:[{row:2,values:{A:'Camille "Quote"',B:false,C:7}}]}};
  it('resolves nested array paths and typed JSON values without injecting JSON syntax',()=>{
-  const node:any={id:'update',type:'test',config:{row_id:'{{steps.read.result.0.row}}',values:'{"A":"{{steps.read.result.0.values.A}}","B":"{{steps.read.result.0.values.B}}","C":"{{steps.read.result.0.values.C}}"}'}};
+  const node:any={id:'update',type:full.sheetBlockType('update_row'),config:{row_id:'{{steps.read.result.0.row}}',values:'{"A":"{{steps.read.result.0.values.A}}","B":"{{steps.read.result.0.values.B}}","C":"{{steps.read.result.0.values.C}}"}'}};
   const result=substituteStepOutputs(node,source);assert.equal(result.config.row_id,'2');assert.deepEqual(JSON.parse(String(result.config.values)),{A:'Camille "Quote"',B:false,C:7});
  });
  it('rejects prototype paths and missing nested native outputs',()=>{
@@ -157,4 +157,18 @@ describe('generic typed nested native results, no provider or business-specific 
   const b=externalBlock('json-values')!;const rows=[{fields:{status:{name:'Done'}}},{fields:{status:{name:'Open'}}}];
   const result=await b.run({config:b.validate({input:JSON.stringify(rows),operation:'filter-equals',field:'fields.status.name',equals:'Done'}),dryRun:true}as any);assert.equal(result!.count,1);assert.deepEqual(result!.value,[rows[0]]);
  });
+});
+
+import{substituteEventPayload}from'./model.js';
+describe('native JSON placeholders and busy-lock safety regressions',()=>{
+ it('event cell text cannot inject native JSON fields',()=>{
+  const graph:any={nodes:[{id:'write',type:full.sheetBlockType('update_row'),config:{values:'{"A":"{{event.data}}"}'}}],edges:[]};const attack='x","I":"UNAUTHORIZED';const out=substituteEventPayload(graph,{data:attack});assert.deepEqual(JSON.parse(String(out.nodes[0].config.values)),{A:attack});
+ });
+ it('literal nonnative HTTP/Jira/mail JSON stays byte exact including large numbers and spacing',()=>{
+  for(const type of ['http-request','jira-create-issue','lyam-send-mail']){const input=' {"id":9007199254740993123, "spaces" : true}';const node:any={id:'n',type,config:{body:input}};assert.equal(substituteStepOutputs(node,{}).config.body,input);assert.equal(substituteEventPayload({nodes:[node],edges:[]},{data:'x'}).nodes[0].config.body,input);}
+ });
+ it('busy durable action mutex refuses before effect marker and provider invocation',async()=>{
+  const b=externalBlock(full.sheetBlockType('delete_row'))!;let marks=0,calls=0;const action=full.SHEETS_ACTIONS.delete_row,old=action.run;action.run=async()=>{calls++;};try{await assert.rejects(()=>b.run({config:b.validate({spreadsheetId:'fictional',sheetId:'0',rowId:2}),settings,dryRun:false,pieceRuntime:{...runtime,withLock:async()=>{throw Error('busy');}},markEffectPending:async()=>{marks++;}}as any),/busy/);assert.equal(marks,0);assert.equal(calls,0);}finally{action.run=old;}
+ });
+ it('custom read requests cannot smuggle method override headers',()=>{for(const header of ['X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method'])assert.throws(()=>full.validateCustomCall({url:{url:'/v4/spreadsheets/fictional'},method:'GET',headers:{[header]:'DELETE'}}));});
 });

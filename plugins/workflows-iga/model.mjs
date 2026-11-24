@@ -110,7 +110,7 @@ export function substituteStepOutputs(node, outputs) {
       if(typeof value!=='string')return value;
       // Valid JSON containers are parsed before interpolation, so quotes and native
       // object/array/boolean/number values cannot corrupt or inject JSON syntax.
-      if(!typed&&/^[\[{]/.test(value.trim())){try{const parsed=JSON.parse(value);return JSON.stringify(visit(parsed,true));}catch(e){if(e instanceof BadRequestException)throw e;}}
+      if(!typed&&node.type?.startsWith('google-sheets-ap-')&&value.includes('{{steps.')&&/^[\[{]/.test(value.trim())){try{const parsed=JSON.parse(value);return JSON.stringify(visit(parsed,true));}catch(e){if(e instanceof BadRequestException)throw e;}}
       const match=[...value.matchAll(new RegExp(STEP_PLACEHOLDER.source,'g'))];
       if(typed&&match.length===1&&match[0][0]===value)return resolve(match[0][1],match[0][2]);
       return value.replace(new RegExp(STEP_PLACEHOLDER.source,'g'),(_m,id,path)=>{const val=resolve(id,path);return typeof val==='object'?JSON.stringify(val):String(val);});
@@ -322,23 +322,20 @@ export function validateCronExpression(expr) {
 export const TRIGGER_KEYS = ['event', 'match', 'config', 'cron'];
 /** Resolves {{event.<key>}} placeholders in every config string of the graph. Unknown keys refuse the run start. */
 export function substituteEventPayload(graph, payload) {
-    const nodes = graph.nodes.map((n) => {
-        const config = {};
-        for (const [k, v] of Object.entries(n.config)) {
-            if (typeof v !== 'string') {
-                config[k] = v;
-                continue;
-            }
-            config[k] = v.replace(new RegExp(PLACEHOLDER.source, 'g'), (_m, key) => {
-                const val = payload[key];
-                if (val === undefined)
-                    throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);
-                return val;
-            });
-        }
-        return { ...n, config };
+    const nodes=graph.nodes.map(n=>{
+      const visit=(value,typed=false)=>{
+       if(Array.isArray(value))return value.map(x=>visit(x,true));
+       if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,visit(v,true)]));
+       if(typeof value!=='string')return value;
+       if(!typed&&n.type?.startsWith('google-sheets-ap-')&&value.includes('{{event.')&&/^[\[{]/.test(value.trim())){try{return JSON.stringify(visit(JSON.parse(value),true));}catch(e){if(e instanceof BadRequestException)throw e;}}
+       const get=key=>{if(!Object.prototype.hasOwnProperty.call(payload,key)||payload[key]===undefined)throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);return payload[key];};
+       const matches=[...value.matchAll(new RegExp(PLACEHOLDER.source,'g'))];
+       if(typed&&matches.length===1&&matches[0][0]===value)return get(matches[0][1]);
+       return value.replace(new RegExp(PLACEHOLDER.source,'g'),(_m,key)=>String(get(key)));
+      };
+      return {...n,config:Object.fromEntries(Object.entries(n.config).map(([k,v])=>[k,visit(v)]))};
     });
-    return { nodes, edges: graph.edges.map((e) => ({ ...e })) };
+    return {nodes,edges:graph.edges.map(e=>({...e}))};
 }
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const NAME32 = /^[a-z0-9-]{1,32}$/;
