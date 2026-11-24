@@ -120,15 +120,24 @@ jobs:
     env:
       DELIVERY_SHA: ${{ needs.build.outputs.sha }}
       DELIVERY_IMAGE: ghcr.io/${{ github.repository }}@${{ needs.build.outputs.digest }}
+      NODE_PATH: /tmp/delivery-pw/node_modules
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           ref: ${{ needs.build.outputs.sha }}
           fetch-depth: 0
+      - name: Install browser evidence dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnss3-tools
+          mkdir /tmp/delivery-pw
+          cd /tmp/delivery-pw
+          npm init -y
+          npm install playwright-core@1.56.1
       - name: Real candidate image and synthetic services
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "$DELIVERY_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario fresh --delivery-extension scripts/delivery-docker-integration.py --out /tmp/delivery-proof
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,NODE_PATH unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "$DELIVERY_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario fresh --delivery-extension scripts/delivery-docker-integration.py --out /tmp/delivery-proof
       - uses: actions/upload-artifact@v4
         if: always()
         with:

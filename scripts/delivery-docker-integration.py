@@ -106,7 +106,7 @@ https://delivery.localhost:18443 {
                               'No production availability or automatic rollback claim',
                               'Old data is a fresh fictional seed under historical image, not production-migrated data',
                               'Normal delivery uses synthetic format1 queue; guarded formats2/3 are refusal-only',
-                              'UI document check is not a visual desktop/mobile review',
+                              'Browser screenshots require human pixel inspection before readiness',
                               'Bao durable cold backup readback is checked; semantic fresh-stack restore remains unproved']}
     stage = 'tls-front'
     try:
@@ -202,6 +202,17 @@ raise SystemExit(r.returncode)
         if warm.returncode:
             raise RuntimeError('candidate-qualifier-smoke-refused')
         if c['scenario'] == 'fresh':
+            stage='native-browser-trust'
+            run(['mkdir','-p','/root/.pki/nssdb'])
+            run(['certutil','-N','--empty-password','-d','sql:/root/.pki/nssdb'],False)
+            run(['certutil','-A','-d','sql:/root/.pki/nssdb','-n','delivery-fixture','-t','C,,','-i',str(cert)])
+            stage='browser-desktop-mobile'
+            browserout=out/'ui';browserout.mkdir(exist_ok=True)
+            run(['node',str(source/'scripts/delivery-browser-proof.cjs'),origin,str(browserout)])
+            proof=json.loads((browserout/'browser-proof.json').read_text())
+            if proof.get('desktop') is not True or proof.get('mobile') is not True or proof.get('authenticatedSyntheticUser') is not True:raise RuntimeError('browser-proof-incomplete')
+            result['checks']['browserDesktopMobile']=True
+            result['evidence']['browserProof']=sha(browserout/'browser-proof.json')
             result['checks'].update(boot=True, migrationLedger=True, oidc=True)
             stage = 'fresh-ui'
             ui = run(['docker', 'exec', c['app'], 'node', '-e',

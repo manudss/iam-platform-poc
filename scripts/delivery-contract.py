@@ -9,7 +9,7 @@ from pathlib import Path
 JOBS = ('build', 'delivery_regressions', 'delivery_fresh', 'delivery_upgrade')
 SCENARIOS = ('fresh', 'upgrade')
 CHECKS = {
-    'fresh': {'boot', 'migrationLedger', 'oidc', 'uiDocument', 'cleanup'},
+    'fresh': {'boot', 'migrationLedger', 'oidc', 'uiDocument', 'browserDesktopMobile', 'cleanup'},
     'upgrade': {'realUpdater', 'realQueue', 'guardedQueueRefusal', 'preservation', 'migrationLedger',
                 'oidc', 'backupReadback', 'realReceipt', 'gate', 'cleanup'},
 }

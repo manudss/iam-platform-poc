@@ -13,7 +13,8 @@ No production account, volume, host or provider secret is used.
 - `delivery_regressions`: fail-closed aggregator mutations and all candidate
   Python deployment-control unit tests. These tests alone prove no real delivery.
 - `delivery_fresh`: real image boot, helper confinement, real synthetic services,
-  actual qualifier auth/ledger check and UI document check.
+  actual qualifier auth/ledger check, UI document check, and authenticated
+  desktop/mobile Chromium screenshots through natively trusted TLS.
 - `delivery_upgrade`: a persistent fictional dataset from immutable image 310,
   candidate ordered queue and unmodified update.sh, preservation qualification,
   plus refusal tests with resume-required format2/3 state and a fixture pause,
@@ -44,7 +45,7 @@ currently does not support format3; refusal is recorded, not called a successful
 production-state replay.
 Synthetic Bao runs with the real durable server configuration. Cold backup
 readback of Dolt, PG, Bao and recovery bundle is checked. Semantic restore
-rehearsal on a fresh stack is NOT yet covered. UI HTML is not a visual desktop/mobile review. Neither limitation is
+rehearsal on a fresh stack is NOT yet covered. Browser screenshots must be inspected as pixels before readiness. Neither limitation is
 a production qualification, availability guarantee, or rollback guarantee.
 
 Root-owned fixture paths use a private mount namespace rather than chmod of
