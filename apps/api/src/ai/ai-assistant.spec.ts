@@ -12,6 +12,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { PassThrough } from 'node:stream';
+import 'reflect-metadata';
+import { screensFor } from '../auth/screens.js';
+import { AiController } from './ai.controller.js';
+import { McpSessionsController, McpUpstreamsController } from '../mcp/mcp.controller.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 process.env.IAM_AI_KEY_SECRET ??= 'test-only-secret-0123456789abcdef';
 process.env.IAM_AI_LOCAL_ENDPOINTS = '127.0.0.1:*,localhost:*,ollama:11434'; // fake model servers on random ports (the default list is exact host:port)
@@ -208,5 +212,20 @@ describe('endpoint and transport rules', () => {
       assert.equal(res.status, 200); assert.deepEqual(await res.json(), { ok: true });
       await assert.rejects(p.pinnedFetch([{ address: '127.0.0.1', family: 4 }])(`https://wrong-name.example.org:${port}/x`, { method: 'POST', headers: {}, body: '{}', signal: AbortSignal.timeout(5000) }), /altname|certificate|hostname/i);
     } finally { agent.options.ca = prev; }
+  });
+});
+
+describe('rights: the chat uses the existing MCP screen right and guard', () => {
+  it('the ai routes map to the same screen right as the MCP administration routes, for every method', () => {
+    for (const m of ['GET', 'POST', 'DELETE']) {
+      assert.deepEqual(screensFor(m, 'ai/models'), ['mcp']);
+      assert.deepEqual(screensFor(m, 'ai/conversations/cv-aaaaaaaaaaaa/chat'), screensFor(m, 'mcp-sessions'));
+    }
+  });
+  it('the controller carries exactly the guards of the MCP session and upstream controllers', () => {
+    const g = (c: object) => (Reflect.getMetadata('__guards__', c) as { name: string }[]).map((x) => x.name);
+    assert.deepEqual(g(AiController), ['AuthGuard', 'AdminGuard']);
+    assert.deepEqual(g(AiController), g(McpSessionsController));
+    assert.deepEqual(g(AiController), g(McpUpstreamsController));
   });
 });

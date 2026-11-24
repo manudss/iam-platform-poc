@@ -161,7 +161,7 @@ class AiAssistantScreen extends HTMLElement {
     const busy = this.busy();
     const err = chat.error ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(String(chat.error.message ?? chat.error).slice(0, 300))}</p>` : '';
     return `<div class="card" id="ai-chatcard"><h3>${this.esc(this._cur.title)}</h3>
-        <p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session and cannot merge, approve or apply: a human publishes.</p>
+        <p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.</p>
         <div class="thread" id="ai-thread" aria-live="polite">${chat.messages.map((m) => this.renderMsg(m)).join('') || '<p class="hint">Ask a question about the platform, for example: who has the accountant role?</p>'}${busy ? '<p class="hint">Working...</p>' : ''}</div>
         ${err}
         <textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
@@ -179,7 +179,7 @@ class AiAssistantScreen extends HTMLElement {
       <td>${m.builtin ? '' : `<button class="secondary" data-test="${this.esc(m.id)}">Test</button><button class="secondary" data-toggle="${this.esc(m.id)}">${m.enabled ? 'Disable' : 'Enable'}</button><button class="secondary" data-delmodel="${this.esc(m.id)}">${this._del === m.id ? 'Confirm delete' : 'Delete'}</button>`}</td></tr>`).join('');
     const presets = PRESETS.map((x) => `<option value="${x.id}" ${x.id === this._preset ? 'selected' : ''}>${this.esc(x.label)}</option>`).join('');
     this.innerHTML = `<style>${css}</style>
-    <p class="lead">AI assistant. Chat with a model that can use the platform tools. It works on its own branch and can only prepare changes: it acts with your MCP session rights, and publishing stays human.</p>
+    <p class="lead">AI assistant. Chat with a model that can use the platform tools. It works on its own branch and can only prepare changes: it acts with your MCP session rights. Platform changes go to its own working branch and a human publishes; tools relayed from external servers act on those servers under the MCP rights, the branch does not isolate them.</p>
     ${this._note ? `<p role="status" class="msg ok" id="ai-note">${this.esc(this._note)}</p>` : ''}${this._problem ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(this._problem)}</p>` : ''}
     <div class="layout"><div>
       <section class="card"><h3>New conversation</h3>

@@ -13,7 +13,7 @@ A chat in the console (Extensions > AI assistant) with a model that can use the 
 
 ## Rights
 
-No new rights layer, no extra confirmation step. The chat routes use the same guard as the MCP administration screens: the screen right `mcp` (the `ai` screen maps to it) on an enabled plugin. A conversation is an ordinary MCP session of the signed-in administrator (own branch cut from main, 8 hours). What a tool may do is decided by the existing MCP gateway: Cedar per call, branch confinement, the tools' own validations (for example `confirmDestructive` and `confirm`, which are tool parameters of the MCP contract) and the activity trace. A refusal comes back as the tool result and the chat shows it as is. No tool can merge or apply: a human publishes.
+No new rights layer, no extra confirmation step. The chat routes use the same guard as the MCP administration screens: the screen right `mcp` (the `ai` screen maps to it) on an enabled plugin. A conversation is an ordinary MCP session of the signed-in administrator (own branch cut from main, 8 hours). What a tool may do is decided by the existing MCP gateway: Cedar per call, branch confinement, the tools' own validations (for example `confirmDestructive` and `confirm`, which are tool parameters of the MCP contract) and the activity trace. A refusal comes back as the tool result and the chat shows it as is. No platform tool can merge or apply: a human publishes. Effects of relayed external MCP tools (named `server__tool`, configured in the MCP upstreams) happen on those external servers under the MCP grants: the branch does not isolate them.
 
 ## Models
 
@@ -32,7 +32,7 @@ No new rights layer, no extra confirmation step. The chat routes use the same gu
 
 ## Safety
 
-- Everything the assistant changes is on its own branch; publishing stays human.
+- Platform configuration changes go to the assistant's own branch and publishing stays human. Relayed external tools are the exception: their effects are outside the branch and follow the MCP rights and grants.
 - Tool output is data: cut, fenced as untrusted, and it cannot add tools, skip approval or raise a limit. The confinement does not depend on the model obeying a prompt.
 - The client sends only its last message; history lives on the server. Only a text user message is accepted; an assistant or tool message sent by a client is refused.
 - Model endpoints: https only for remote hosts, every DNS answer must be public, and the connection is pinned to the checked address (TLS still validates the host name), redirects refused. This reduces SSRF, it does not replace egress filtering: restrict outbound traffic and set `IAM_AI_ALLOWED_HOSTS`.
