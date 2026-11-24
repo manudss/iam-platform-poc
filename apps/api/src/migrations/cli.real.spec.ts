@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, readlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -27,6 +27,7 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
   const env={...process.env,HOME:home,IAM_DEMO_HOME:home,IAM_MIGRATION_SOURCE_ROOT:root,IAM_MIGRATION_BOOT_ID:'first',DOLT_BIN:bin};
   const dolt=(args:string[],input?:string)=>{const r=spawnSync(bin!,args,{cwd:join(home,'dolt'),env,input,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout;};
   const run=(args:string[],extra={})=>spawnSync(process.execPath,[cli,...args],{cwd:root,env:{...env,...extra},encoding:'utf8'});
+  let primaryFailure: unknown;
   try{
    dolt(['config','--global','--add','user.name','migration-test']);dolt(['config','--global','--add','user.email','migration@example.invalid']);
    assert.notEqual(run(['prepare','empty'],{IAM_DEMO_SEED_MODE:'never'}).status,0);
@@ -54,6 +55,30 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
    dolt(['--use-db=iam/personal/kept','sql','-q',"UPDATE roles SET label='changed' WHERE id='custom-role'"]);
    assert.notEqual(run(['adopt-existing-v1',plan,'--confirm-reviewed-backup-and-existing-v1']).status,0);
    if(priorHome===undefined)delete process.env.HOME;else process.env.HOME=priorHome;
-  } finally { if(old===undefined)delete process.env.DOLT_BIN;else process.env.DOLT_BIN=old;rmSync(home,{recursive:true,force:true,maxRetries:10,retryDelay:300}); }
+  } catch(e) { primaryFailure=e;throw e; }
+  finally {
+   if(old===undefined)delete process.env.DOLT_BIN;else process.env.DOLT_BIN=old;
+   try { rmSync(home,{recursive:true,force:true,maxRetries:10,retryDelay:300}); }
+   catch(cleanupFailure) {
+    console.error('migration fixture cleanup failed', {home, primaryFailure, cleanupFailure});
+    // Names and owning process IDs only. Never dump environments or command lines.
+    try {
+     const names:string[]=[],pending=[''];
+     while(pending.length&&names.length<100){const rel=pending.shift()!;for(const entry of readdirSync(join(home,rel),{withFileTypes:true})){const name=join(rel,entry.name);names.push(name);if(entry.isDirectory())pending.push(name);if(names.length>=100)break;}}
+     console.error('migration fixture residual names',names);
+    } catch {}
+    try {
+     const attached: {pid:string;refs:string[]}[]=[];
+     for(const pid of readdirSync('/proc').filter(n=>/^\d+$/.test(n)).slice(0,4096)) {
+      const refs:string[]=[];
+      try { if(((p:string)=>p===home||p.startsWith(home+'/'))(readlinkSync(`/proc/${pid}/cwd`)))refs.push('cwd'); } catch {}
+      try { for(const fd of readdirSync(`/proc/${pid}/fd`).slice(0,100)) { try { if(((p:string)=>p===home||p.startsWith(home+'/'))(readlinkSync(`/proc/${pid}/fd/${fd}`)))refs.push('fd:'+fd); } catch {} } } catch {}
+      if(refs.length)attached.push({pid,refs});if(attached.length>=30)break;
+     }
+     console.error('migration fixture attached processes',attached);
+    } catch {}
+    if(primaryFailure===undefined)throw cleanupFailure;
+   }
+  }
  });
 });
