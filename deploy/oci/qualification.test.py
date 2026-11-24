@@ -1,4 +1,5 @@
-import importlib.util,tempfile,unittest,copy,json
+import importlib.util,tempfile,unittest,copy,json,subprocess
+from unittest.mock import patch
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('qual',Path(__file__).with_name('qualification.py'));q=importlib.util.module_from_spec(spec);spec.loader.exec_module(q)
 def baseline():return {'dolt':[{'branch':'personal/kept','root':'root'}],'bao':{'all/plugin':'hash'},'credentials':{'credentials.json':'hash'},'postgres':{'rows':{'public.business':{'row1':1},'public.audit':{'row1':1},'public.activations':{'held':1}},'schema':{'columns':[]},'sequenceDefinitions':[],'sequences':{'public.audit_id':{'last_value':1,'is_called':True}}}}
@@ -90,7 +91,7 @@ class HeldSmoke(unittest.TestCase):
  def test_actual_smoke_refuses_missing_capture_or_workflow_drift(self):
   import subprocess,os
   source=Path(__file__).with_name('qualification-container.mjs').read_text()
-  prefix="""import{createHash,randomBytes}from'node:crypto';const hash=x=>createHash('sha256').update(x).digest('hex');let captures=0;async function workflowHashes(){captures++;return {workflow:process.env.CASE==='drift'&&captures>1?'changed':'retained'};}
+  prefix="""let diagnosticStage='init';import{createHash,randomBytes}from'node:crypto';const hash=x=>createHash('sha256').update(x).digest('hex');let captures=0;async function workflowHashes(){captures++;return {workflow:process.env.CASE==='drift'&&captures>1?'changed':'retained'};}
   const p={requireAutomationHold:true,auth:{username:'fictional',password:'fictional'},origins:['https://fixture.invalid'],issuer:'https://fixture.invalid/core',tenant:'acme-demo'};
   const readFileSync=path=>path.endsWith('api.log')?(process.env.CASE==='missing'?'no captured hold':'[startup] automation hold: {\"held\":true}') : JSON.stringify(path.includes('manifest')?{versions:[{id:'0001',checksum:'same'}]}:{format:1,entries:[{id:'0001',checksum:'same'}]});const existsSync=()=>true;
   const claims=Buffer.from(JSON.stringify({iss:p.issuer,aud:'demo-web'})).toString('base64url');let state='';globalThis.fetch=async(url,opts={})=>{if(String(url).includes('/authorize?')){const u=new URL(url);state=u.searchParams.get('state');if(u.searchParams.get('redirect_uri').includes('example.invalid'))return new Response('unknown client');return new Response('<input name=\"username\"><input name=\"chain\" value=\"password-only\">');}if(String(url).endsWith('/authorize/login'))return new Response('',{status:302,headers:{location:p.origins[0]+'/callback?code=fixture&state='+state}});return new Response('{}',{status:200,headers:{'content-type':'application/json'}});};
@@ -99,9 +100,35 @@ class HeldSmoke(unittest.TestCase):
   """
   body=source[source.index('async function smoke()'):source.index('\ntry{',source.index('async function smoke()'))]
   with tempfile.TemporaryDirectory() as d:
-   file=Path(d)/'smoke.mjs';file.write_text(prefix+body+"\ntry{await smoke();}catch(e){console.error(e.message);process.exitCode=1;}")
+   file=Path(d)/'smoke.mjs';file.write_text(prefix+body+"\ntry{await smoke();}catch(e){console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);process.exitCode=1;}")
    for case in ['ok','missing','drift']:
     r=subprocess.run(['node',str(file)],capture_output=True,text=True,env={**os.environ,'IAM_AUTOMATION_HOLD':'1','CASE':case})
     self.assertEqual(r.returncode==0,case=='ok',(case,r.stderr))
+    if case!='ok':self.assertEqual(r.stderr.strip(),'QUALIFICATION_DIAG_V1:'+('smoke-hold' if case=='missing' else 'smoke-workflows-after'))
+
+class Diagnostic(unittest.TestCase):
+ def test_allowlist_only(self):
+  for stderr,want in [('secret-body\nQUALIFICATION_DIAG_V1:smoke-oidc-login\n','smoke-oidc-login'),('QUALIFICATION_DIAG_V1:secret-password\n',None),('QUALIFICATION_DIAG_V1:smoke-oidc-login/secret\n',None),('secret\n',None)]:
+   q.stage('smoke')
+   with patch.object(q.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'secret-out',stderr)):
+    with self.assertRaisesRegex(ValueError,'command failed') as error:q.cmd(['docker','exec','smoke'])
+   self.assertEqual(q.CHILD_STAGE,want);self.assertNotIn('secret',str(error.exception))
+ def test_nonchild_stderr_never_parsed(self):
+  q.stage('postgres')
+  with patch.object(q.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','QUALIFICATION_DIAG_V1:smoke-oidc-login\n')):
+   with self.assertRaises(ValueError):q.cmd(['psql'])
+  self.assertIsNone(q.CHILD_STAGE)
+ def test_top_level_does_not_leak_exception(self):
+  with tempfile.TemporaryDirectory() as d:
+   policy=Path(d)/'p';policy.write_text('secret-invalid-json')
+   import sys
+   args=[sys.executable,str(Path(__file__).with_name('qualification.py')),'--phase','after','--policy',str(policy)]
+   for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:args+=['--'+name,'secret']
+   r=subprocess.run(args,capture_output=True,text=True)
+   self.assertNotEqual(r.returncode,0);self.assertIn('QUALIFICATION_DIAG_V1:policy-load',r.stderr);self.assertNotIn('secret',r.stderr);self.assertNotIn('Traceback',r.stderr)
+ def test_js_child_stages_static(self):
+  source=Path(__file__).with_name('qualification-container.mjs').read_text()
+  import re
+  self.assertLessEqual(set(re.findall("diagnosticStage='([^']+)'",source)),q.CHILD_STAGES)
 
 if __name__=='__main__':unittest.main()

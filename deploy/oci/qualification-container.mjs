@@ -4,6 +4,7 @@ import {execFileSync} from 'node:child_process';
 import {readFileSync,cpSync,mkdtempSync,existsSync} from 'node:fs';
 import {createHash,randomBytes} from 'node:crypto';
 const hash=x=>createHash('sha256').update(x).digest('hex');
+let diagnosticStage='init';
 const [mode]=process.argv.slice(1);let raw='';for await(const chunk of process.stdin){raw+=chunk;if(raw.length>262144)throw Error('input bound');}const p=JSON.parse(raw);
 const json=async(url,options={})=>{
  const r=await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(15000)});
@@ -45,35 +46,47 @@ async function workflowHashes(){
 }
 async function smoke(){
  const local='http://127.0.0.1:8080';
+ diagnosticStage='smoke-hold';
  if(p.requireAutomationHold===true){const log=readFileSync('/data/api.log','utf8');const match=/automation hold: (\{[^\n]+\})/.exec(log);if(!match||JSON.parse(match[1]).held!==true||process.env.IAM_AUTOMATION_HOLD!=='1')throw Error('captured automation hold absent');if(!(await fetch('http://127.0.0.1:3000/health')).ok)throw Error('API health failed');}
+ diagnosticStage='smoke-health';
  if(!(await fetch(local+'/healthz')).ok)throw Error('edge health failed');
+ diagnosticStage='smoke-workflows-before';
  const workflowBefore=p.requireAutomationHold===true?await workflowHashes():null;
+ diagnosticStage='smoke-auth-input';
  const credentials=p.auth;
  if(typeof credentials.username!=='string'||typeof credentials.password!=='string')throw Error('auth input missing');
  let journal;
  for(const origin of p.origins){
   const verifier=randomBytes(32).toString('base64url'),challenge=createHash('sha256').update(verifier).digest('base64url'),state=randomBytes(16).toString('hex');
   const params=new URLSearchParams({client_id:'demo-web',redirect_uri:origin+'/callback',response_type:'code',state,code_challenge:challenge,code_challenge_method:'S256',chain:'password-only'});
+  diagnosticStage='smoke-oidc-form';
   const page=await fetch(local+'/core/authorize?'+params,{redirect:'manual'}),html=await page.text();
   if(page.status!==200||!html.includes('name="username"'))throw Error('expected origin/form refused');
   const fields={};for(const m of html.matchAll(/<input\b[^>]*>/gi)){const tag=m[0],name=tag.match(/\bname="([^"]+)"/i)?.[1],value=tag.match(/\bvalue="([^"]*)"/i)?.[1]??'';if(name&&!['username','password'].includes(name))fields[name]=value.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");}
   fields.username=credentials.username;fields.password=credentials.password;
+  diagnosticStage='smoke-oidc-login';
   const logged=await fetch(local+'/core/authorize/login',{method:'POST',redirect:'manual',headers:{'content-type':'application/x-www-form-urlencoded',cookie:page.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ')},body:new URLSearchParams(fields)});
   if(logged.status!==302)throw Error('real OIDC login failed');
   const location=new URL(logged.headers.get('location')??'');if(location.origin!==origin||location.pathname!=='/callback'||location.searchParams.get('state')!==state||!location.searchParams.get('code'))throw Error('OIDC redirect/state failed');
+  diagnosticStage='smoke-oidc-token';
   const issued=await json(local+'/core/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:location.searchParams.get('code'),code_verifier:verifier,redirect_uri:origin+'/callback',client_id:'demo-web'})});
   if(typeof issued.id_token!=='string')throw Error('token absent');
   const claims=JSON.parse(Buffer.from(issued.id_token.split('.')[1],'base64url').toString());
   if(claims.iss!==p.issuer||!(claims.aud==='demo-web'||Array.isArray(claims.aud)&&claims.aud.includes('demo-web')))throw Error('issuer/audience mismatch');
+  diagnosticStage='smoke-oidc-session';
   const session=await fetch(local+'/core/session/extend',{method:'POST',headers:{authorization:'Bearer '+issued.id_token}});if(![200,409].includes(session.status))throw Error('session token verification failed');
+  diagnosticStage='smoke-activations';
   const rows=await json(local+'/api/tenants/'+encodeURIComponent(p.tenant)+'/activations',{headers:{authorization:'Bearer '+issued.id_token}});
   if(!Array.isArray(rows))throw Error('journal unknown');let seq=0;
   for(const row of rows){if(row.tenant!==p.tenant||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit||!['pending','recorded','applied','failed'].includes(row.state))throw Error('journal schema invalid');seq=row.seq;}
   journal={count:rows.length,checksum:hash(JSON.stringify(rows))};
  }
+ diagnosticStage='smoke-negative-redirect';
  const negative=await fetch(local+'/core/authorize?'+new URLSearchParams({client_id:'demo-web',redirect_uri:'https://example.invalid/callback',response_type:'code',state:'negative',code_challenge:'A'.repeat(43),code_challenge_method:'S256'}));
  if(!/unknown client/i.test(await negative.text()))throw Error('negative redirect check failed');
+ diagnosticStage='smoke-workflows-after';
  if(workflowBefore&&JSON.stringify(await workflowHashes())!==JSON.stringify(workflowBefore))throw Error('workflow state changed during held smoke');
+ diagnosticStage='smoke-ledger';
  if(p.reviewedLegacyRollback===true&&!existsSync('/data/migrations/journal.json')&&!existsSync('/app/migration-source/data/migrations/manifest.json'))return {journal,ledger:'legacy-rollback-no-migration-ledger'};
  const ledger=JSON.parse(readFileSync('/data/migrations/journal.json','utf8'));
  if(ledger.format!==1||ledger.pending||!Array.isArray(ledger.entries)||!ledger.entries.length)throw Error('migration ledger incomplete');
@@ -82,7 +95,7 @@ async function smoke(){
  return {journal,held:p.requireAutomationHold===true,workflowPreserved:workflowBefore!==null,ledger:ledger.entries.map(e=>({id:e.id,checksum:e.checksum}))};
 }
 try{
- if(mode==='capture')console.log(JSON.stringify({dolt:dolt(),bao:await bao()}));
+ if(mode==='capture'){diagnosticStage='capture-dolt';const d=dolt();diagnosticStage='capture-bao';const b=await bao();console.log(JSON.stringify({dolt:d,bao:b}));}
  else if(mode==='held-state-check'){
   const log=readFileSync('/data/api.log','utf8');const captured=/automation hold: (\{[^\n]+\})/.exec(log);
   if(process.env.IAM_AUTOMATION_HOLD!=='1'||!captured||JSON.parse(captured[1]).held!==true)throw Error('captured hold required');
@@ -91,4 +104,4 @@ try{
  }
  else if(mode==='smoke')console.log(JSON.stringify(await smoke()));
  else throw Error('invalid mode');
-}catch{console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}
+}catch{console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}
