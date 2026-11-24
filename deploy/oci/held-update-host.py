@@ -2,7 +2,7 @@
 """Host adapter for ordered-queue held-update-reviewed. Loaded only through a hash-bound,
 root-protected path. Never lifts the update pause or the automation hold and never opens a gate
 by itself: the final opening is done by reviewed-ui-held.py from the queue."""
-import hashlib,json,os,re,stat,subprocess
+import hashlib,json,os,re,stat,subprocess,time
 from pathlib import Path
 import importlib.util
 
@@ -68,8 +68,8 @@ def gate_record(p):
 
 class Host:
  """env: updater env file. updater: path of the installed update.sh. receipt_dir: protected root dir."""
- def __init__(self,env_file,updater,receipt_dir,lock_file=None,run=subprocess.run,updater_sha256=None,inspect=None,step_configs=None):
-  self.env_file=env_file;self.updater=updater;self.receipt_dir=Path(receipt_dir);self.run=run;self.updater_sha256=updater_sha256;self.inspect=inspect or self._docker_inspect;self.ops_record=None;self.step_gates=[];self.step_configs=step_configs;self.installed_configs=[]
+ def __init__(self,env_file,updater,receipt_dir,lock_file=None,run=subprocess.run,updater_sha256=None,inspect=None,step_configs=None,popen=subprocess.Popen):
+  self.env_file=env_file;self.updater=updater;self.receipt_dir=Path(receipt_dir);self.run=run;self.updater_sha256=updater_sha256;self.inspect=inspect or self._docker_inspect;self.ops_record=None;self.step_gates=[];self.step_configs=step_configs;self.installed_configs=[];self.on_spawn=None;self.popen=popen
   self.env=env_settings(env_file)
   self.front=Path(self.env.get('LYAM_FRONT_BARRIER_FILE','/var/lib/lyam-front-gate/MAINTENANCE'))
   self.ops=Path(self.env.get('LYAM_OPS_BARRIER_FILE',str(self.front.parent/'OPS-MAINTENANCE')))
@@ -170,6 +170,26 @@ class Host:
    raise
   if hashlib.sha256(dst.read_bytes()).hexdigest()!=st['sha256']:raise ValueError('installed step config differs after replace')
   rec={'step':index,'sha256':st['sha256'],'installed_to':str(dst),'image':ref};self.installed_configs.append(rec);return rec
+ @staticmethod
+ def measure_child(child,lock_fd):
+  """Measured, not assumed: identity of the updater child, whether it is still running right now, and whether its fd 8 is the lock file
+  (same device/inode as the caller's lock fd). Unreadable evidence is None (unknown), never True."""
+  pid=child.pid;ident=None;state='unknown'
+  try:
+   stat=Path('/proc/%d/stat'%pid).read_text();rest=stat[stat.rindex(')')+2:].split()
+   ident={'pid':pid,'starttime':rest[19],'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
+   state='exited-before-measure' if (child.poll() is not None or rest[0] in ('Z','X')) else 'alive'
+  except (OSError,ValueError,IndexError):
+   state='exited-before-measure' if child.poll() is not None else 'unknown'
+  fd8=None;end=time.monotonic()+2.0   # the shell may not have done its 8>&N redirect yet: wait briefly, then report unknown
+  while True:
+   try:
+    a=os.stat('/proc/%d/fd/8'%pid);b=os.fstat(lock_fd);fd8=(a.st_dev,a.st_ino)==(b.st_dev,b.st_ino);break
+   except OSError:
+    fd8=None
+    if child.poll() is not None or time.monotonic()>end:break
+    time.sleep(.02)
+  return {'identity':ident,'state':state,'fd8_is_lock':fd8}
  def closed_step(self,entry,adopt,index,lock_fd,chain_len=None):
   """adopt: (previous_fields, previous_receipt_path) or None."""
   image='ghcr.io/manudss/iam-platform-poc@'+entry['digest']
@@ -182,8 +202,16 @@ class Host:
   if not isinstance(lock_fd,int) or lock_fd<3:raise ValueError('explicit caller lock fd (>=3) required')
   # The shell dup()s the caller's lock fd onto 8 (same open file description) before exec'ing the updater;
   # subprocess closes every fd not in pass_fds AFTER preexec_fn, so dup2-in-preexec cannot be used.
-  r=self.run(['sh','-c','exec "$@" 8>&%d'%lock_fd,'held-step']+args,check=False,pass_fds=[lock_fd])
-  if r.returncode!=10:raise RuntimeError('closed step did not return CLOSED_QUALIFIED (rc %s); no retry, no rollback'%r.returncode)
+  child=self.popen(['sh','-c','exec "$@" 8>&%d'%lock_fd,'held-step']+args,pass_fds=[lock_fd])
+  callback_error=None
+  try:
+   if self.on_spawn is not None:
+    try:self.on_spawn(index,self.measure_child(child,lock_fd))
+    except BaseException as e:callback_error=e   # the real updater is never killed arbitrarily: it is waited for, then the callback error surfaces
+  finally:
+   rc=child.wait()
+  if callback_error is not None:raise callback_error
+  if rc!=10:raise RuntimeError('closed step did not return CLOSED_QUALIFIED (rc %s); no retry, no rollback'%rc)
   fields=parse_receipt(receipt,image)
   if self.step_configs is not None and fields.get('config_sha256')!=self.step_configs['steps'][index]['sha256']:raise ValueError('receipt config_sha256 differs from the reviewed step config actually installed')
   for p in [receipt,fields['evidence_index'],fields['launch_proof']]:PROTECT(p);fsync_path(p)

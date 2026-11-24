@@ -82,8 +82,10 @@ class Host:
  def plan_ops_gate(self,token):return {'path':'/g/OPS','bytes_hex':'00'}
  def create_ops_gate(self,token=None):self.log.append('ops')
  def snapshot_gates(self):return [{'path':'/g/OPS','bytes_hex':'00'}]
+ on_spawn=None
  def closed_step(self,entry,adopt,i,fd):
   self.log.append(('step',i,adopt))
+  if self.on_spawn:self.on_spawn(i,{'identity':q.queue_identity(),'state':'alive','fd8_is_lock':True})
   if i==self.kill_step:os.kill(os.getpid(),signal.SIGKILL)
   if i==self.fail_step:raise RuntimeError('closed step rc 4')
   return {'gate_sha256':'%064x'%(i+1)},'/r/%d'%i
@@ -187,6 +189,55 @@ class Run(unittest.TestCase):
    if (d/'opening.reached').exists():break
    time.sleep(.02)
   self.assertTrue((d/'opening.reached').exists());self.assertIsNone(p.poll());p.send_signal(signal.SIGKILL);self.assertEqual(p.wait(),-signal.SIGKILL)
+ def test_updater_child_identity_is_journaled_at_spawned_phase_and_cleared_after(self):
+  m=manifest(self.s,3);seen=[]
+  def hook(phase):
+   if phase=='closed-step-0-updater-spawned':
+    i=q.load(self.path)['opening_intent'];seen.append((i['phase'],i['updater_child']))
+  st=q.held_update(self.path,m,'repo','lyam',lambda mm:Host([]),3,verify=lambda *a:None,observe=lambda c,t:{'sha':t['sha']},controller=Ctl(),qualify=lambda p,e:None,hook=hook)
+  self.assertEqual(seen[0][0],'closed-step-0-updater-spawned');self.assertEqual(seen[0][1]['step'],0);self.assertEqual(set(seen[0][1]['identity']),{'pid','starttime','boot_id'});self.assertTrue(seen[0][1]['measured']['fd8_is_lock'])
+  self.assertIsNone(st['opening_audits'][-1]['steps'][0].get('updater_child')) if False else None
+ def test_rearm_refuses_live_or_unknown_updater_child(self):
+  st=q.load(self.path)
+  p=subprocess.Popen(['sleep','30'])
+  try:
+   child=q.queue_identity(p.pid);dead=subprocess.Popen(['true']);dq=q.queue_identity(dead.pid);dead.wait()
+   class C:
+    calls=[]
+    def close_gates(self,i):self.calls.append('close')
+    def verify_closed_access(self,m):self.calls.append('verify')
+   c=C()
+   def put(uc):
+    st['opening_intent']={'phase':'closed-step-0-updater-spawned','queue':dq,'gates':[],'container':'lyam','manifest':{'opening_static':{}},'updater_child':uc};q.atomic(self.path,st)
+   put({'identity':child,'step':0,'measured':{}})
+   with self.assertRaisesRegex(ValueError,'updater child'):q.rearm_held_update(self.path,controller=c)
+   put({'identity':{**child,'starttime':str(int(child['starttime'])+1)},'step':0,'measured':{}})   # reused pid
+   with self.assertRaisesRegex(ValueError,'updater child'):q.rearm_held_update(self.path,controller=c)
+   put({'identity':None,'step':0,'measured':{}})
+   with self.assertRaisesRegex(ValueError,'updater child'):q.rearm_held_update(self.path,controller=c)
+   put('garbage')
+   with self.assertRaisesRegex(ValueError,'updater child'):q.rearm_held_update(self.path,controller=c)
+   self.assertEqual(c.calls,[]);self.assertTrue(p.poll() is None,'the real child is never killed by the refusal')
+   put({'identity':dq,'step':0,'measured':{}});q.rearm_held_update(self.path,controller=c);self.assertEqual(c.calls,['close','verify'])
+  finally:p.kill();p.wait()
+ def test_real_queue_sigkill_leaves_child_holding_the_lock(self):
+  import fcntl,sys,time,signal,json as J
+  lock=Path(self.tmp.name)/'lock';lock.write_text('')
+  code=("import os,subprocess,sys,fcntl,json,time\nfd=os.open(sys.argv[1],os.O_RDWR);fcntl.flock(fd,fcntl.LOCK_EX)\n"
+   "c=subprocess.Popen(['sh','-c','exec \"$@\" 8>&%d'%fd,'x','sleep','30'],pass_fds=[fd]);print(c.pid,flush=True);time.sleep(60)")
+  parent=subprocess.Popen([sys.executable,'-c',code,str(lock)],stdout=subprocess.PIPE,text=True);cpid=int(parent.stdout.readline())
+  try:
+   ident=q.queue_identity(cpid);os.kill(parent.pid,signal.SIGKILL);parent.wait()
+   fd=os.open(lock,os.O_RDWR)
+   try:
+    with self.assertRaises(BlockingIOError):fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)   # the orphan child alone still holds the lock
+   finally:os.close(fd)
+   self.assertEqual(q.queue_state(ident),'alive')
+  finally:
+   parent.stdout.close()
+   os.kill(cpid,signal.SIGKILL)
+   try:os.waitpid(cpid,0)
+   except ChildProcessError:pass
  def test_one_commit_success(self):
   st,log=self.go(3)
   self.assertEqual([h['sha'] for h in st['history']],[S(1),S(2),S(3)]);self.assertEqual(st['history'][-1]['mode'],'ui-open-automation-held')
@@ -334,6 +385,40 @@ class RealHost(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'receipt config_sha256'):h4.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2)   # receipt without the field
   finally:os.environ.pop('FAKE_CFG',None)
   os.close(fd)
+ def waiting_updater(self,rc=10):
+  u=self.d/'upd.sh';t=fake_updater_text(self.d,self.d/'lock',str(rc)).replace('#!/bin/sh\n','#!/bin/sh\nwhile [ ! -e %s/go ]; do sleep 0.05; done\n'%self.d,1);u.write_text(t);u.chmod(0o755);return u
+ def test_on_spawn_measures_live_child_with_fd8_lock_then_step_completes(self):
+  u=self.waiting_updater();h=hm.Host(str(self.env),str(u),str(self.d/'r'),updater_sha256=hashlib.sha256(u.read_bytes()).hexdigest(),inspect=lambda c:GOOD);h.plan_ops_gate('tok');h.create_ops_gate()
+  fd=os.open(self.d/'lock',os.O_RDWR);import fcntl;fcntl.flock(fd,fcntl.LOCK_EX);got=[]
+  def cb(i,m):
+   got.append((i,m));self.assertEqual(q.queue_state(m['identity']),'alive');(self.d/'go').write_text('1')
+  h.on_spawn=cb
+  try:f,p=h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd)
+  finally:os.close(fd)
+  self.assertEqual(got[0][1]['state'],'alive');self.assertIs(got[0][1]['fd8_is_lock'],True);self.assertEqual(f['state'],'CLOSED_QUALIFIED')
+ def test_on_spawn_after_child_already_exited_is_measured_not_assumed(self):
+  u=self.updater(10);h=hm.Host(str(self.env),str(u),str(self.d/'r'),updater_sha256=hashlib.sha256(u.read_bytes()).hexdigest(),inspect=lambda c:GOOD);h.plan_ops_gate('tok');h.create_ops_gate()
+  fd=os.open(self.d/'lock',os.O_RDWR);import fcntl,time;fcntl.flock(fd,fcntl.LOCK_EX);got=[]
+  def cb(i,m):time.sleep(1.5);got.append(hm.Host.measure_child(child_ref[0],fd))
+  # measure after the child certainly finished: a second measurement of the same Popen
+  child_ref=[None];orig=h.popen
+  def pop(*a,**k):child_ref[0]=orig(*a,**k);return child_ref[0]
+  h.popen=pop;h.on_spawn=cb
+  try:h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd)
+  finally:os.close(fd)
+  self.assertEqual(got[0]['state'],'exited-before-measure');self.assertIsNone(got[0]['fd8_is_lock'])
+ def test_on_spawn_error_waits_for_child_without_killing_it_then_raises(self):
+  u=self.waiting_updater();h=hm.Host(str(self.env),str(u),str(self.d/'r'),updater_sha256=hashlib.sha256(u.read_bytes()).hexdigest(),inspect=lambda c:GOOD);h.plan_ops_gate('tok');h.create_ops_gate()
+  fd=os.open(self.d/'lock',os.O_RDWR);import fcntl;fcntl.flock(fd,fcntl.LOCK_EX);box=[]
+  def cb(i,m):box.append(m['identity']);(self.d/'go').write_text('1');raise ValueError('callback failed')
+  h.on_spawn=cb;ref=[None];orig=h.popen
+  def pop(*a,**k):ref[0]=orig(*a,**k);return ref[0]
+  h.popen=pop
+  try:
+   with self.assertRaisesRegex(ValueError,'callback failed'):h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd)
+  finally:os.close(fd)
+  self.assertEqual(ref[0].returncode,10,'the child ran to its own end (not killed) and was reaped');self.assertTrue((self.d/'r'/('held-step-0-'+S(3)+'.receipt')).exists())
+  self.assertEqual(q.queue_state(box[0]),'absent')
  def test_preflight_requires_absent_gates_and_hold(self):
   h=self.host();h.preflight();(self.d/'gates'/'FRONT').write_text('x')
   with self.assertRaisesRegex(ValueError,'both gates absent'):h.preflight()

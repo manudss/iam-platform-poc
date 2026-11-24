@@ -303,7 +303,7 @@ def bound_module(spec,filename,name):
     module_spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
     return module
 
-HOOK_PHASES=re.compile(r'closed-step-\d{1,3}-(running|qualified)|ops-gate-created|opening')
+HOOK_PHASES=re.compile(r'closed-step-\d{1,3}-(running|qualified|updater-spawned)|ops-gate-created|opening')
 HOOK_PROTECT=lambda st:not(st.st_uid or st.st_gid or st.st_mode&0o022)   # isolated runner dir must be root-owned, not group/world writable; tests may replace
 PRODUCTION_STATE='/opt/lyam/deploy-queue/state.json'
 def phase_hook_from(manifest,state_path):
@@ -365,6 +365,11 @@ def held_update(path,manifest,repository,container,make_host,lock_fd,verify=veri
     planned=host.plan_ops_gate('lyam-held-update-ops:%d:%s'%(os.getpid(),at))  # closure plan exists from the very first intent
     intent={'queue':queue_identity(),'phase':'held-update-prepared','at':at,'manifest':copy.deepcopy(manifest),'gates':[planned],'container':container,'target':copy.deepcopy(chain[-1]),'steps':[],'original_fingerprint':fingerprint(state)}
     state['opening_intent']=intent;state['format']=3;atomic(path,state)
+    def spawned(i,measure):
+        """Called by the host right after the updater child exists and before waiting for it: durable identity plus the measured state."""
+        intent['updater_child']={'identity':measure.get('identity'),'step':i,'measured':{'state':measure.get('state'),'fd8_is_lock':measure.get('fd8_is_lock')}}
+        persist('closed-step-%d-updater-spawned'%i)
+    if hasattr(host,'on_spawn'):host.on_spawn=spawned
     def persist(phase):
         intent['phase']=phase;intent['gates']=host.snapshot_gates();atomic(path,state)
         if hook:hook(phase)   # after durable persistence; inert unless the reviewed manifest enables it in an isolated context
@@ -377,7 +382,7 @@ def held_update(path,manifest,repository,container,make_host,lock_fd,verify=veri
             fields,receipt_path=(host.closed_step(entry,adopt,i,lock_fd,len(chain)) if getattr(host,'step_configs',None) is not None else host.closed_step(entry,adopt,i,lock_fd))
             obs=observe(container,entry)
             intent['steps'].append({'sha':entry['sha'],'parent':entry['parent'],'digest':entry['digest'],'receipt':fields,'receipt_path':receipt_path,'observed_running':obs,'config':(host.installed_configs[-1] if getattr(host,'step_configs',None) is not None else None)})
-            adopt=(fields,receipt_path);persist('closed-step-%d-qualified'%i)
+            adopt=(fields,receipt_path);intent['updater_child']=None;persist('closed-step-%d-qualified'%i)
         persist('opening')
         last=intent['steps'][-1]
         final=host.opening_manifest(manifest,last['receipt'],last['receipt_path'],intent['steps'][0]['receipt'])
@@ -445,6 +450,8 @@ def rearm_held_update(path,controller=None,state_of=queue_state):
     state=load(path);intent=state.get('opening_intent')
     if not intent or not str(intent.get('phase','')).startswith(HELD_PHASES):raise ValueError('no interrupted held-update intent')
     if state_of(intent.get('queue'))!='absent':raise ValueError('queue identity alive or not certainly absent; no rearm')
+    uc=intent.get('updater_child')
+    if uc is not None and state_of((uc or {}).get('identity') if isinstance(uc,dict) else None)!='absent':raise ValueError('updater child alive or not certainly absent; no rearm')
     c=controller or opening_controller(intent['manifest'])
     view=intent.get('closing_view') or {'opening':intent['manifest']['opening_static']}
     again=load(path)

@@ -179,7 +179,9 @@ def decision(folder,spec,state):
  if not phase.startswith(HELD):return 'identity-unknown-report-only'
  if not (folder/'queue-identity.json').exists():return 'child-unknown-report-only'
  w=state_of(read(folder/'worker-identity.json'));q=state_of(read(folder/'queue-identity.json'));qs=state_of(i.get('queue'))
- if 'unknown' in (w,q,qs):return 'identity-unknown-report-only'
+ uc=i.get('updater_child');ucs='absent' if uc is None else state_of(uc.get('identity') if isinstance(uc,dict) else None)
+ if 'unknown' in (w,q,qs,ucs):return 'identity-unknown-report-only'
+ if ucs=='alive' and q!='alive' and qs!='alive':return 'orphan-updater-alive-observe'   # a live updater child holds the lock: never rearm, never kill
  if q=='alive' or qs=='alive':return 'observe-live-queue' if w=='alive' else 'orphan-queue-alive-observe'
  if w=='alive' and not (folder/'worker-result.json').exists():return 'observe-live-queue'
  return 'interrupted-rearm-permitted'
@@ -219,7 +221,7 @@ def watchdog(folder,spec,recover=recovery,poll=5):
    except Exception:
     atomic(folder/'watchdog-result.json',{'action':'identity-unknown-report-only','wall':time.time(),'report_only':True,'needs_operator':True});return
    rec=recover(folder,spec);atomic(folder/'watchdog-result.json',{'action':action,'wall':time.time(),'recovery':rec,'needs_operator':True});return
-  if action not in ['observe-live-queue','pre-go-await','await-intent','orphan-queue-alive-observe','state-unreadable']:
+  if action not in ['observe-live-queue','pre-go-await','await-intent','orphan-queue-alive-observe','orphan-updater-alive-observe','state-unreadable']:
    atomic(folder/'watchdog-result.json',{'action':action,'wall':time.time(),'report_only':action.endswith('report-only') or action=='completed-audit-mismatch-report-only','needs_operator':action not in ('completed','recovery-done')});return
   time.sleep(poll)
 

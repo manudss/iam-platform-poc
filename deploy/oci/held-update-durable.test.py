@@ -150,6 +150,24 @@ class D(unittest.TestCase):
     if drift:self.assertEqual(rec,[]);self.assertEqual(res['action'],'identity-unknown-report-only');self.assertTrue(res['report_only'])
     else:self.assertEqual(rec,[1]);self.assertEqual(res['action'],'interrupted-rearm-permitted');self.assertEqual(len(calls),2)
   finally:du.REQUIRE_UNITS,du.await_units,du.verify_units,du.decision=saved
+ def test_orphan_updater_child_alive_is_observed_never_rearmed(self):
+  f=self.f;sp=self.spec;(f/'STARTED').write_text('{"engagement_id":"eng-00000001"}')
+  me=du.identity(os.getpid());me={k:me[k] for k in('pid','starttime','boot_id')}
+  ch=subprocess.Popen(['sleep','30']);ci=du.identity(ch.pid);ci={k:ci[k] for k in('pid','starttime','boot_id')}
+  dp=subprocess.Popen(['true']);dd=du.identity(dp.pid);dp.wait();dead={k:dd[k] for k in('pid','starttime','boot_id')} if dd else None
+  (f/'worker-identity.json').write_text(json.dumps(me));(f/'queue-identity.json').write_text(json.dumps(me))
+  try:
+   if dead is None:self.skipTest('no dead identity')
+   (f/'worker-identity.json').write_text(json.dumps({**dead}));(f/'queue-identity.json').write_text(json.dumps(dead))
+   st=lambda uc:{'opening_intent':{'phase':'closed-step-0-updater-spawned','queue':dead,'updater_child':uc}}
+   self.assertEqual(du.decision(f,sp,st({'identity':ci,'step':0})),'orphan-updater-alive-observe')
+   self.assertEqual(du.decision(f,sp,st({'identity':{**ci,'starttime':str(int(ci['starttime'])+1)},'step':0})),'identity-unknown-report-only')
+   self.assertEqual(du.decision(f,sp,st('garbage')),'identity-unknown-report-only')
+   self.assertEqual(du.decision(f,sp,st(None)),'interrupted-rearm-permitted')
+   ch.kill();ch.wait()
+   self.assertEqual(du.decision(f,sp,st({'identity':ci,'step':0})),'interrupted-rearm-permitted')
+  finally:
+   ch.kill();ch.wait()
  def test_launcher_commands_are_exact_and_independent(self):
   c=du.launcher_commands('/f','eng-00000001','/usr/bin/python3.12','/x/held-update-durable.py')
   self.assertEqual([x[1] for x in c],['--unit=lyam-durable-held-eng-00000001-watchdog.service','--unit=lyam-durable-held-eng-00000001-worker.service'])

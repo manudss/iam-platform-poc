@@ -5,7 +5,7 @@ launcher, Docker, Caddy/TLS front, ordered-queue CLI, held-update-host.py, revie
 worker/watchdog processes, SIGKILL. NOT real here: systemd units (the same worker/watchdog code runs as plain processes with
 REQUIRE_UNITS=False, set only inside this harness), distinct PRODUCT migrations (four fixture versions prove chain mechanics).
 Evidence is bounded: statuses, phases, hashes, exit codes. No env, secrets or raw logs leave."""
-import hashlib, json, os, shutil, signal, subprocess, sys, threading, time, urllib.request, urllib.error
+import fcntl, hashlib, json, os, shutil, signal, subprocess, sys, threading, time, urllib.request, urllib.error
 from pathlib import Path
 
 def jread(p): return json.loads(Path(p).read_text())
@@ -207,6 +207,50 @@ def run(x):
                 qi = jread(folder / 'queue-identity.json')
                 marker=jread(folder/'hooks'/(kill_phase+'.reached'))
                 if marker.get('pid')!=qi['pid'] or marker.get('phase')!=kill_phase or marker.get('engagement_id')!=engagement or not marker.get('nonce'):raise RuntimeError('phase-marker-identity-mismatch')
+                if kill_mode=='orphan':
+                    uc=st['opening_intent'].get('updater_child') or {};ident=uc.get('identity') or {}
+                    du=load_module(du_path,'orphan_measure')
+                    if du.state_of(ident)!='alive' or uc.get('measured',{}).get('fd8_is_lock') is not True:raise RuntimeError('orphan-child-not-measured-live-locked')
+                    def require_live_locked():
+                        if du.state_of(ident)!='alive':raise RuntimeError('orphan-child-ended-before-kill')
+                        with lock.open('a') as fd:
+                            try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                            except BlockingIOError:return
+                        raise RuntimeError('orphan-lock-not-held')
+                    require_live_locked()
+                    # Fixture-only SIGSTOP makes this injection deterministic. It is not natural-crash timing evidence.
+                    os.kill(ident['pid'],signal.SIGSTOP)
+                    try:
+                        require_live_locked()
+                        os.kill(qi['pid'],signal.SIGKILL);killed=ph;time.sleep(.3)
+                        before=state_path.read_bytes()
+                        require_live_locked()
+                        with lock.open('a') as lf:
+                            try:fcntl.flock(lf,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                            except BlockingIOError:pass
+                            else:raise RuntimeError('orphan-lock-not-held')
+                        cmd=[py,str(bindir/'ordered-queue.py'),'rearm-held-update','--state',str(state_path),'--pause-file',str(pause),'--update-lock',str(lock)]
+                        refused=runp(cmd,False)
+                        if refused.returncode==0 or state_path.read_bytes()!=before:raise RuntimeError('orphan-rearm-not-refused-unchanged')
+                        end=time.monotonic()+15;observed=False
+                        while time.monotonic()<end:
+                            events=folder/'watchdog-events.jsonl'
+                            if events.is_file() and any(jread_line.get('action')=='orphan-updater-alive-observe' for jread_line in [json.loads(line) for line in events.read_text().splitlines()]):observed=True;break
+                            time.sleep(.2)
+                        require_live_locked()
+                        if not observed or (folder/'rearm-attempt.json').exists():raise RuntimeError('orphan-watchdog-did-not-observe-only')
+                        (folder/'STOP_WATCHDOG').write_text('fixture end orphan observation\n')
+                        wd.wait(timeout=10)
+                        rec={'childAliveMeasured':True,'fd8LockIdentity':True,'lockContentionMeasured':True,'rearmExit':refused.returncode,'stateUnchanged':True,'watchdogObserveOnly':True,'injection':'real-updater-SIGSTOP-then-queue-SIGKILL'}
+                        (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2));report['scenarios'][name]=rec
+                    finally:
+                        if du.state_of(ident)=='alive':os.kill(ident['pid'],signal.SIGCONT)
+                    wk.wait(timeout=120)
+                    end=time.monotonic()+1000
+                    while du.state_of(ident)=='alive' and time.monotonic()<end:time.sleep(.2)
+                    if du.state_of(ident)!='absent':raise RuntimeError('orphan-child-not-finished')
+                    sampler.stop.set();sampler.join(5)
+                    return
                 (os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL); killed = ph
             time.sleep(0.1)
         for p in (wk, wd):
@@ -250,6 +294,6 @@ def run(x):
     supervise('three-kill-closed-step-0-running', 3, 'closed-step-0-running')
     supervise('three-kill-closed-step-1-qualified', 3, 'closed-step-1-qualified')
     supervise('three-kill-opening', 3, 'opening')
-    supervise('one-kill-queue-only-closed-step-0-running', 1, 'closed-step-0-running', 'queue')
+    supervise('one-orphan-updater', 1, 'closed-step-0-updater-spawned', 'orphan')
     if not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
     result['checks']['heldUpdateChain'] = True

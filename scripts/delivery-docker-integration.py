@@ -425,6 +425,12 @@ raise SystemExit(r.returncode)
                           'held-fixture-invalid', 'held-deploy-not-refused', 'held-resume-not-refused',
                           'held-status-not-refused', 'held-queue-mutated', 'unknown-format-not-refused'}:
             result['reason'] = str(error)
+        # Scenario errors are fixed literals authored in this source tree, never raw subprocess text.
+        if c['scenario']=='held-update':
+            import ast
+            tree=ast.parse((source/'scripts/held-update-scenario.py').read_text())
+            allowed={n.exc.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Raise) and isinstance(n.exc,ast.Call) and n.exc.args and isinstance(n.exc.args[0],ast.Constant) and isinstance(n.exc.args[0].value,str)}
+            if str(error) in allowed:result['heldScenarioReason']=str(error)
         raise
     finally:
         stopped = run(['docker', 'rm', '-f', caddy], False)
