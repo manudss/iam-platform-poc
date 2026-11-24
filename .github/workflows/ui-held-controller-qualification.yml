@@ -16,11 +16,11 @@ jobs:
           fetch-depth: 0
       - name: Assemble immutable reviewed host controls and qualifier, not a new product image
         env:
-          UI_CONTROLS_REF: c7264d5c156d5a8ee4ad8e58951e24faa464eb27
+          UI_CONTROLS_REF: 87a38fd0e080d2c9ba866f29e32ca53bca18de27
         run: |
           git fetch origin fix/reviewed-ui-held-after-fence fix/qualification-static-diagnostics fix/closed-backup-readback
-          git show c7264d5c156d5a8ee4ad8e58951e24faa464eb27:deploy/oci/ordered-queue.py > deploy/oci/ordered-queue.py
-          git show c7264d5c156d5a8ee4ad8e58951e24faa464eb27:deploy/oci/reviewed-ui-held.py > deploy/oci/reviewed-ui-held.py
+          git show 87a38fd0e080d2c9ba866f29e32ca53bca18de27:deploy/oci/ordered-queue.py > deploy/oci/ordered-queue.py
+          git show 87a38fd0e080d2c9ba866f29e32ca53bca18de27:deploy/oci/reviewed-ui-held.py > deploy/oci/reviewed-ui-held.py
           git show 2dd7d112e99f3d3b2506d770ac1e14874e169026:deploy/oci/qualification.py > deploy/oci/qualification.py
           git show 2dd7d112e99f3d3b2506d770ac1e14874e169026:deploy/oci/qualification-container.mjs > deploy/oci/qualification-container.mjs
           git show 3a51746127893885392b552185ff5306b806e9aa:deploy/oci/update.sh > deploy/oci/update.sh
@@ -31,7 +31,7 @@ jobs:
           git show 07dbc9ba49c4a1a2b02fa53bb04eb50a5f68e441:deploy/oci/closed-recovery-call.py > deploy/oci/closed-recovery-call.py
           python3 - <<'PYHASH'
           import hashlib,pathlib
-          expected={'ordered-queue.py': 'fd99588bc2570e676ac31c9f49c578fab50c2163c31b88c7c9adef7464235ea1', 'reviewed-ui-held.py': '9585a236b8a1f2097841f16140daed044ef27ee19c5ef55b2b49c4c4276dd441', 'qualification.py': 'b7d5a4c3f10b20aa263bdb9cf4fe2077588b3e25f52fb9969d86940685945a90', 'qualification-container.mjs': 'b5fbe294eba1f2d77545fdeac27600b32bfa8cf371f209e025587bfdc962de27', 'update.sh': '239cb278d9549f3e4eeda23fd8b575e40755e0a674327b35696112436078c887', 'closed-recovery-helper.py': '53331b2c6cebc24c95fe25621ae5ec5f9421cf7f4eba075e7b9d584bfcf50ca0', 'closed-preflight.sh': 'e8653def79e375b0e9ebb587d5ff7ddf35c37ea3b5daa23167bbf5c5ef536d91', 'closed-launcher.sh': '5018ef5fdc3efe6758107ce7e664e317f400ec2141268f27c12034d9259a8401', 'closed-recovery-integrity.py': '87f3807890763d4945c857f2ef016a101b1df930289b6fe25e9595364b2ea95d', 'closed-recovery-call.py': 'ad9778bf1f141bfec0c74a0ba49a3c819d999d9470b8c97b5c21048b73c0ee17'}
+          expected={'ordered-queue.py': 'fd99588bc2570e676ac31c9f49c578fab50c2163c31b88c7c9adef7464235ea1', 'reviewed-ui-held.py': '8056d0fb93e573fff760622af45655481675da4bf618907864572bf90892c1f6', 'qualification.py': 'b7d5a4c3f10b20aa263bdb9cf4fe2077588b3e25f52fb9969d86940685945a90', 'qualification-container.mjs': 'b5fbe294eba1f2d77545fdeac27600b32bfa8cf371f209e025587bfdc962de27', 'update.sh': '239cb278d9549f3e4eeda23fd8b575e40755e0a674327b35696112436078c887', 'closed-recovery-helper.py': '53331b2c6cebc24c95fe25621ae5ec5f9421cf7f4eba075e7b9d584bfcf50ca0', 'closed-preflight.sh': 'e8653def79e375b0e9ebb587d5ff7ddf35c37ea3b5daa23167bbf5c5ef536d91', 'closed-launcher.sh': '5018ef5fdc3efe6758107ce7e664e317f400ec2141268f27c12034d9259a8401', 'closed-recovery-integrity.py': '87f3807890763d4945c857f2ef016a101b1df930289b6fe25e9595364b2ea95d', 'closed-recovery-call.py': 'ad9778bf1f141bfec0c74a0ba49a3c819d999d9470b8c97b5c21048b73c0ee17'}
           for name,want in expected.items():
               assert hashlib.sha256((pathlib.Path('deploy/oci')/name).read_bytes()).hexdigest()==want,name
           PYHASH

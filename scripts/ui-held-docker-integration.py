@@ -121,7 +121,7 @@ def main():
  try:
   for name in ['ordered-queue.py','reviewed-ui-held.py','closed-recovery-integrity.py','closed-recovery-call.py','update.sh','qualification.py','qualification-container.mjs']:
    shutil.copyfile(src/'deploy/oci'/name,binroot/name);(binroot/name).chmod(0o700)
-  expected={'ordered-queue.py': 'fd99588bc2570e676ac31c9f49c578fab50c2163c31b88c7c9adef7464235ea1', 'reviewed-ui-held.py': '9585a236b8a1f2097841f16140daed044ef27ee19c5ef55b2b49c4c4276dd441', 'qualification.py': 'b7d5a4c3f10b20aa263bdb9cf4fe2077588b3e25f52fb9969d86940685945a90', 'qualification-container.mjs': 'b5fbe294eba1f2d77545fdeac27600b32bfa8cf371f209e025587bfdc962de27', 'update.sh': '239cb278d9549f3e4eeda23fd8b575e40755e0a674327b35696112436078c887', 'closed-recovery-helper.py': '53331b2c6cebc24c95fe25621ae5ec5f9421cf7f4eba075e7b9d584bfcf50ca0', 'closed-preflight.sh': 'e8653def79e375b0e9ebb587d5ff7ddf35c37ea3b5daa23167bbf5c5ef536d91', 'closed-launcher.sh': '5018ef5fdc3efe6758107ce7e664e317f400ec2141268f27c12034d9259a8401', 'closed-recovery-integrity.py': '87f3807890763d4945c857f2ef016a101b1df930289b6fe25e9595364b2ea95d', 'closed-recovery-call.py': 'ad9778bf1f141bfec0c74a0ba49a3c819d999d9470b8c97b5c21048b73c0ee17'}
+  expected={'ordered-queue.py': 'fd99588bc2570e676ac31c9f49c578fab50c2163c31b88c7c9adef7464235ea1', 'reviewed-ui-held.py': '8056d0fb93e573fff760622af45655481675da4bf618907864572bf90892c1f6', 'qualification.py': 'b7d5a4c3f10b20aa263bdb9cf4fe2077588b3e25f52fb9969d86940685945a90', 'qualification-container.mjs': 'b5fbe294eba1f2d77545fdeac27600b32bfa8cf371f209e025587bfdc962de27', 'update.sh': '239cb278d9549f3e4eeda23fd8b575e40755e0a674327b35696112436078c887', 'closed-recovery-helper.py': '53331b2c6cebc24c95fe25621ae5ec5f9421cf7f4eba075e7b9d584bfcf50ca0', 'closed-preflight.sh': 'e8653def79e375b0e9ebb587d5ff7ddf35c37ea3b5daa23167bbf5c5ef536d91', 'closed-launcher.sh': '5018ef5fdc3efe6758107ce7e664e317f400ec2141268f27c12034d9259a8401', 'closed-recovery-integrity.py': '87f3807890763d4945c857f2ef016a101b1df930289b6fe25e9595364b2ea95d', 'closed-recovery-call.py': 'ad9778bf1f141bfec0c74a0ba49a3c819d999d9470b8c97b5c21048b73c0ee17'}
   for name in ['ordered-queue.py','reviewed-ui-held.py','qualification.py','qualification-container.mjs','update.sh','closed-recovery-integrity.py','closed-recovery-call.py']:
    if digest(binroot/name)!=expected[name]:raise RuntimeError('immutable controller source hash mismatch')
   # This assembly's source refs are separately pinned in the workflow and artifact.
@@ -213,7 +213,7 @@ def main():
     if st.st_uid!=0 or st.st_gid!=0 or st.st_mode&0o022 or item.is_symlink():ancestry.append({'role':role,'depth':depth,'uid':st.st_uid,'gid':st.st_gid,'mode':oct(st.st_mode&0o777),'symlink':item.is_symlink()})
   result['integrityUnprotectedRoles']=ancestry
   integrity=module(binroot/'closed-recovery-integrity.py','integrity').verify(str(env))
-  receipt=root/'receipt';fields={**integrity,'state':'CLOSED_QUALIFIED','held':'true','public_status':'503','image':c['image'],'launch_proof':c['proof'],'launch_proof_sha256':digest(c['proof']),'gate_sha256':digest(gate),'ops_sha256':digest(ops)};receipt.write_text(''.join(k+'='+v+'\n' for k,v in fields.items()));receipt.chmod(0o600)
+  receipt=root/'receipt';fields={**integrity,'state':'CLOSED_QUALIFIED','held':'true','public_status':'503','image':c['image'],'launch_proof':c['proof'],'launch_proof_sha256':digest(c['proof']),'gate_sha256':digest(gate),'ops_sha256':digest(ops)};receipt.write_text(''.join(k+'='+v+'\n' for k,v in integrity.items())+''.join(k+'='+v+'\n' for k,v in fields.items() if k not in integrity or k in {'launcher_sha256','preflight_sha256','implementation_sha256'}));receipt.chmod(0o600)
   opening={k:spec(p) for k,p in {'env':env,'closed_receipt':receipt,'integrity':binroot/'closed-recovery-integrity.py','launch_proof':Path(c['proof']),'policy':pol,'qualifier':binroot/'qualification.py','before':evidence/'before.json','after':after,'smoke':smoke}.items()}
   # Real queue provenance: source main target07dbc and its real first-parent base.
   targetsha='07dbc9ba49c4a1a2b02fa53bb04eb50a5f68e441';base=command(['git','-C',str(src),'rev-parse',targetsha+'^1']).stdout.strip();target={'sha':targetsha,'digest':c['image'].split('@')[1]}
@@ -333,6 +333,9 @@ def main():
   for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
   result['finalManualFixtureClosure']=True
   probe_after('after-browser-active')
+  stage='diagnostic-probe-closeout'
+  checkpoint()
+  if any(item['exitCode']!=0 for item in result.get('isolatedQualifierProbes',{}).values()):raise RuntimeError('active qualifier diagnostic probe failed')
   result['passed']=True;result['controllerSHA256']=digest(binroot/'reviewed-ui-held.py');result['qualifierSHA256']=digest(binroot/'qualification.py');result['qualifierContainerSHA256']=digest(binroot/'qualification-container.mjs')
   if result['controllerSHA256']!=expected['reviewed-ui-held.py'] or result['qualifierSHA256']!=expected['qualification.py'] or result['qualifierContainerSHA256']!=expected['qualification-container.mjs']:raise RuntimeError('result source hash mismatch')
  except Exception as error:
