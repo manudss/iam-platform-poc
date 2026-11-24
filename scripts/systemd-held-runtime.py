@@ -167,7 +167,13 @@ def cleanup(units,known,du,folder=None):
    old=known.get(unit) or {}
    binding=bindings.get('watchdog') if bindings.get('engagementID')==old.get('engagement') else None
    if watchdog_cleanup_noop(unit,old,before.get(unit,{}),preproof.get(unit,{}),proof.get(unit,{}),result,final[unit],binding):result['stopOutcome']='already-unloaded-verified'
-   else:errors.append('stop-refused');result['stopOutcome']='refused'
+   else:
+    token=old.get('fixtureReset')
+    spec=__import__('importlib.util',fromlist=['util']).spec_from_file_location('record_loss',Path(__file__).with_name('systemd-held-record-loss.py'));rl=__import__('importlib.util',fromlist=['util']).module_from_spec(spec);spec.loader.exec_module(rl)
+    binding=bindings.get('worker') if bindings.get('engagementID')==old.get('engagement') else None
+    # Explicit caller capability exists only after this scenario actually reset its bound worker.
+    if rl.cleanup_reset_noop(unit,old,before.get(unit,{}),preproof.get(unit,{}),proof.get(unit,{}),result,final[unit],binding,token,folder):result['stopOutcome']='already-unloaded-after-verified-test-reset'
+    else:errors.append('stop-refused');result['stopOutcome']='refused'
   elif result.get('returnCode')==0:result['stopOutcome']='stopped'
  if folder is not None:
   try:
@@ -181,5 +187,5 @@ def cleanup(units,known,du,folder=None):
 
 def stop(handles):
  units=[h.unit for h in handles.values()]
- known={h.unit:{'identity':h.identity,'cgroup':h.cgroup,'role':h.role,'engagement':h.engagement} for h in handles.values()}
+ known={h.unit:{'identity':h.identity,'cgroup':h.cgroup,'role':h.role,'engagement':h.engagement,'fixtureReset':getattr(h,'fixture_reset',None)} for h in handles.values()}
  cleanup(units,known,next(iter(handles.values())).du,Path(next(iter(handles.values())).folder))

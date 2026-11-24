@@ -266,7 +266,7 @@ def run(x):
                         report.setdefault('workerKillEffects',{})[name]={'queueState':du.state_of(qi),'watchdogState':du.state_of(wd.identity)}
                     else:(os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL)
                     killed = ph
-                if killed and kill_mode in ('lasttick-drift','orphan-cgroup') and injection is None:
+                if killed and kill_mode in ('record-loss','orphan-cgroup') and injection is None:
                     events=folder/'watchdog-events.jsonl'
                     if events.exists() and any(json.loads(line).get('action')=='interrupted-rearm-permitted' for line in events.read_text().splitlines()):
                         adv=load_module(source/'scripts/systemd-held-adversarial.py','systemd_adversarial')
@@ -313,8 +313,8 @@ def run(x):
                 if killed is None: raise RuntimeError('kill-phase-never-reached')
                 if first200 is not None and (opening_seen is None or first200 < opening_seen): raise RuntimeError('200-before-opening-after-kill')
                 if st['history'][-1]['sha'] != manifest['expected_delivered']['sha'] or st['recovery_fence'] != manifest['expected_delivered']['sha']: raise RuntimeError('cursor-advanced-after-interruption')
-                if kill_mode in ('lasttick-drift','orphan-cgroup'):
-                    if not injection or wres['action']!='identity-unknown-report-only' or not wres.get('report_only'):raise RuntimeError('injection-refusal-not-measured')
+                if kill_mode in ('record-loss','orphan-cgroup'):
+                    if not injection or wres['action']!='identity-unknown-report-only' or wres.get('report_only') is not True or wres.get('needs_operator') is not True:raise RuntimeError('injection-refusal-not-measured')
                     try: urllib.request.build_opener(urllib.request.ProxyHandler({})).open(origin+'/healthz',timeout=10)
                     except urllib.error.HTTPError as e:
                         if e.code!=503:raise RuntimeError('injection-origin-not-503')
@@ -339,7 +339,7 @@ def run(x):
             try:
                 if handles is not None:runtime.stop(handles)
             finally:
-                for src in ['adversarial-before-cleanup.json','adversarial-cleanup.json']:
+                for src in ['adversarial-before-cleanup.json','adversarial-cleanup.json','record-loss-before-reset.json','record-loss-reset-proof.json']:
                     if (folder/src).exists():shutil.copyfile(folder/src,ev/('scenario-'+name+'-'+src))
                 cp=folder/'systemd-cleanup.json'
                 if cp.exists():shutil.copyfile(cp,ev/('systemd-cleanup-'+name+'.json'))
@@ -355,7 +355,7 @@ def run(x):
         supervise('three-kill-closed-step-1-qualified',3,'closed-step-1-qualified')
         supervise('three-kill-opening',3,'opening')
     supervise('three-clean',3)
-    supervise('one-lasttick-drift',1,'closed-step-0-running','lasttick-drift')
+    supervise('one-lasttick-record-loss',1,'closed-step-0-running','record-loss')
     supervise('one-orphan-cgroup',1,'closed-step-0-running','orphan-cgroup')
     if selection=='full' and not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
     result['checks']['realSystemdPartialCapability']=True

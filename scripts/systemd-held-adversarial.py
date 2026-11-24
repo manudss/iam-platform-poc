@@ -17,9 +17,14 @@ def origin_status(origin):
  try:return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(origin+'/healthz',timeout=3).status
  except urllib.error.HTTPError as e:return e.code
 
+def load_record_loss():
+ import importlib.util
+ spec=importlib.util.spec_from_file_location('record_loss',Path(__file__).with_name('systemd-held-record-loss.py'));rl=importlib.util.module_from_spec(spec);spec.loader.exec_module(rl)
+ return rl
+
 def inject(folder,handles,du,mode,state_path,origin):
  folder=Path(folder);bindings=json.loads((folder/'unit-bindings.json').read_text());wd=handles['watchdog'];wk=handles['worker'];child=None;child_ident=None;created=[];changed=False;stopped=False;setterSucceeded=False
- if mode not in ('lasttick-drift','orphan-cgroup'):raise RuntimeError('unknown-systemd-injection')
+ if mode not in ('record-loss','orphan-cgroup'):raise RuntimeError('unknown-systemd-injection')
  if not re.fullmatch(r'[A-Za-z0-9._-]{8,64}',wk.engagement) or bindings.get('engagementID')!=wk.engagement or wk.unit!='lyam-durable-held-'+wk.engagement+'-worker.service' or wk.cgroup!='/system.slice/'+wk.unit:raise RuntimeError('injection-worker-bound-path-required')
  if wd.unit!='lyam-durable-held-'+wk.engagement+'-watchdog.service' or wd.cgroup!='/system.slice/'+wd.unit:raise RuntimeError('injection-watchdog-bound-path-required')
  def no_attempt():
@@ -45,14 +50,9 @@ def inject(folder,handles,du,mode,state_path,origin):
   runtime=__import__('importlib.util',fromlist=['util']);spec=runtime.spec_from_file_location('independent_runtime',Path(__file__).with_name('systemd-held-runtime.py'));rt=runtime.module_from_spec(spec);spec.loader.exec_module(rt)
   if rt.independent_cgroup_state(wk.cgroup) not in ('empty','gone'):raise RuntimeError('injection-original-cgroup-not-empty')
   state=Path(state_path).read_bytes();evidence={'mode':mode,'watchdogStoppedExact':True,'workerAlreadyFailedExact':True,'firstTickBeforeInjection':True}
-  if mode=='lasttick-drift':
-   if p['RuntimeMaxUSec']!='infinity':raise RuntimeError('injection-original-contract-drift')
-   changed=True
-   du_out=subprocess.run(['systemctl','set-property','--runtime',wk.unit,'RuntimeMaxSec=60s'],capture_output=True,text=True,timeout=30)
-   if du_out.returncode or du_out.stdout or du_out.stderr:raise RuntimeError('injection-property-set-refused')
-   setterSucceeded=True;after=du.unit_properties(wk.unit)
-   if after['RuntimeMaxUSec'] not in ('1min','60s') or {k:v for k,v in after.items() if k!='RuntimeMaxUSec'}!={k:v for k,v in p.items() if k!='RuntimeMaxUSec'}:raise RuntimeError('injection-property-change-not-measured')
-   evidence['runtimeMaxBefore']='infinity';evidence['runtimeMaxAfter']=after['RuntimeMaxUSec'];evidence['invocationUnchanged']=True
+  if mode=='record-loss':
+   proof=load_record_loss().reset_worker(folder,wk,wd,du,bindings,p,rt,atomic_proof,state)
+   evidence.update({'resetCommandSucceeded':True,'managerRecordLostMeasured':True,'originalPIDAbsent':True,'originalCgroupGone':True,'injection':'reset-failed-exact-retained-worker'})
   else:
    cg=wk.cgroup
    if bindings['engagementID']!=wk.engagement or wk.unit!='lyam-durable-held-'+wk.engagement+'-worker.service' or cg!='/system.slice/'+wk.unit:raise RuntimeError('injection-cgroup-not-bound')
@@ -73,7 +73,8 @@ def inject(folder,handles,du,mode,state_path,origin):
   while not (folder/'watchdog-result.json').exists() and time.monotonic()<end:time.sleep(.05)
   if not (folder/'watchdog-result.json').exists():raise RuntimeError('injection-report-timeout')
   result=json.loads((folder/'watchdog-result.json').read_text())
-  if result.get('action')!='identity-unknown-report-only' or result.get('report_only') is not True or result.get('needs_operator') is not True:raise RuntimeError('injection-not-report-only')
+  expected_action='identity-unknown-report-only'  # frozen after first persisted tick, next check is the pre-rearm check
+  if result.get('action')!=expected_action or result.get('report_only') is not True or result.get('needs_operator') is not True:raise RuntimeError('injection-not-report-only')
   if (folder/'rearm-attempt.json').exists() or Path(state_path).read_bytes()!=state:raise RuntimeError('injection-rearm-or-state-mutation')
   if child_ident and du.state_of(child_ident)!='alive':raise RuntimeError('injection-child-not-live-through-refusal')
   if origin_status(origin)!=503:raise RuntimeError('injection-active-origin-not-503')
@@ -102,12 +103,5 @@ def cleanup_injection(folder,wd,wk,du,exact_watchdog,stopped,child,child_ident,c
    if (path/'cgroup.procs').read_text().strip() or 'populated 1' in (path/'cgroup.events').read_text().splitlines():raise RuntimeError('cgroup-not-empty')
    path.rmdir()
   except Exception:errors.append('cgroup-cleanup-unproved')
- if changed:
-  try:
-   now=du.unit_properties(wk.unit)
-   if {k:v for k,v in now.items() if k!='RuntimeMaxUSec'}!={k:v for k,v in p.items() if k!='RuntimeMaxUSec'} or du.state_of(wk.identity)!='absent':raise RuntimeError('restore-identity-unknown')
-   r=subprocess.run(['systemctl','set-property','--runtime',wk.unit,'RuntimeMaxSec=infinity'],capture_output=True,text=True,timeout=30)
-   if r.returncode or r.stdout or r.stderr or du.unit_properties(wk.unit)!=p:raise RuntimeError('property-restore-refused')
-  except Exception:errors.append('property-restore-unproved')
  atomic_proof(folder/'adversarial-cleanup.json',{'passed':not errors,'errors':sorted(set(errors)),'childWasCreated':child is not None,'createdCgroupCount':len(created),'runtimeSetterAttempted':changed,'runtimeSetterSucceeded':setterSucceeded})
  if errors:raise RuntimeError('injection-cleanup-incomplete')

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('adv',Path(__file__).with_name('systemd-held-adversarial.py'));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 class Injection(unittest.TestCase):
- def run_case(self,mode='lasttick-drift',drift=None):
+ def run_case(self,mode='record-loss',drift=None):
   with tempfile.TemporaryDirectory() as tmp:
    folder=Path(tmp);state=folder/'state';state.write_text('queue bytes')
    wid={'pid':123,'boot_id':'boot','starttime':100};kid={'pid':124,'boot_id':'boot','starttime':101};engagement='fixture-12345678'
@@ -18,16 +18,16 @@ class Injection(unittest.TestCase):
    def props(unit):
     if unit==wd.unit:return {'InvocationID':'wi' if drift!='watchdog-inv' else 'replacement','MainPID':'123','ControlGroup':wd.cgroup}
     return {'InvocationID':'ki','MainPID':'0','ActiveState':'failed','SubState':'failed','ControlGroup':'','ExecMainPID':'124','RuntimeMaxUSec':runtime[0]}
-   def cmd(args,**kwargs):
-    calls.append(args)
-    if args[-1]=='RuntimeMaxSec=60s':
-     if drift=='setter':return SimpleNamespace(returncode=1,stdout='',stderr='refused')
-     runtime[0]='infinity' if drift=='unchanged' else '1min'
-    else:runtime[0]='infinity'
-    return SimpleNamespace(returncode=0,stdout='',stderr='')
+   def reset(*args):
+    calls.append('reset')
+    if drift=='setter':raise RuntimeError('reset-refused')
+    wk.fixture_reset={'proof':'in-memory'}
+    return {'resetRC':0}
    def sig(pid,which):
+    if which==signal.SIGSTOP and drift=='stop-refused':raise PermissionError('refused')
+    if which==signal.SIGCONT and drift=='continue-refused':raise PermissionError('refused')
     if which==signal.SIGCONT:
-     (folder/'watchdog-result.json').write_text(json.dumps({'action':'identity-unknown-report-only','report_only':True,'needs_operator':True}))
+     (folder/'watchdog-result.json').write_text(json.dumps({'action':'terminal-gc-observed-report-only' if drift=='wrong-category' else 'identity-unknown-report-only','report_only':True,'needs_operator':True}))
      if drift=='state':state.write_text('changed')
      if drift=='attempt':(folder/'rearm-attempt.json').write_text('unsafe')
    realread=Path.read_text
@@ -35,20 +35,20 @@ class Injection(unittest.TestCase):
     if str(p)=='/proc/123/stat':return '123 (watchdog) T rest'
     return realread(p,*args,**kwargs)
    du=SimpleNamespace(state_of=lambda i:'alive' if i==wid else 'absent',unit_properties=props)
-   with patch.object(a.os,'kill',side_effect=sig),patch.object(a.subprocess,'run',side_effect=cmd),patch.object(Path,'read_text',rd),patch.object(a,'origin_status',return_value=503):
+   with patch.object(a.os,'kill',side_effect=sig),patch.object(a,'load_record_loss',return_value=SimpleNamespace(reset_worker=reset)),patch.object(Path,'read_text',rd),patch.object(a,'origin_status',return_value=503):
     if drift:
-     with self.assertRaises(RuntimeError):a.inject(folder,{'watchdog':wd,'worker':wk},du,mode,state,'https://fixture.invalid')
+     with self.assertRaises((RuntimeError,PermissionError)):a.inject(folder,{'watchdog':wd,'worker':wk},du,mode,state,'https://fixture.invalid')
     else:
-     evidence=a.inject(folder,{'watchdog':wd,'worker':wk},du,mode,state,'https://fixture.invalid');self.assertTrue(evidence['watchdogReportOnly']);self.assertTrue((folder/'adversarial-before-cleanup.json').exists());self.assertTrue(json.loads((folder/'adversarial-cleanup.json').read_text())['passed']);self.assertEqual(runtime[0],'infinity')
+     evidence=a.inject(folder,{'watchdog':wd,'worker':wk},du,mode,state,'https://fixture.invalid');self.assertTrue(evidence['watchdogReportOnly']);self.assertTrue((folder/'adversarial-before-cleanup.json').exists());self.assertTrue(json.loads((folder/'adversarial-cleanup.json').read_text())['passed']);self.assertTrue(wk.fixture_reset)
    return calls
- def test_runtime_positive_and_restore(self):self.assertEqual(len(self.run_case()),2)
+ def test_recordloss_positive(self):self.assertEqual(len(self.run_case()),1)
  def test_runtime_fail_closed(self):
-  for drift in ['first-tick','late','watchdog-inv','setter','unchanged','state','attempt']:
+  for drift in ['first-tick','late','watchdog-inv','setter','state','attempt','wrong-category','stop-refused','continue-refused']:
    with self.subTest(drift=drift):self.run_case(drift=drift)
  def test_cgroup_refuses_unbound_path_before_mkdir(self):self.assertEqual(self.run_case(mode='orphan-cgroup',drift='cgroup-path'),[])
 class CleanupFailures(unittest.TestCase):
  def test_independent_cleanup_even_after_each_failure(self):
-  for fail in ['continue','identity','wait','rmdir','restore','replacement']:
+  for fail in ['continue','identity','wait','rmdir']:
    with self.subTest(fail=fail),tempfile.TemporaryDirectory() as tmp:
     folder=Path(tmp);a.atomic_proof(folder/'adversarial-before-cleanup.json',{'originStatusDuringInjection':503})
     wd=SimpleNamespace(pid=123);wk=SimpleNamespace(unit='fixture-worker',identity={'pid':124});ident={'pid':125};actions=[];dead=[False];p={'InvocationID':'original','MainPID':'0','RuntimeMaxUSec':'infinity'}
@@ -74,7 +74,6 @@ class CleanupFailures(unittest.TestCase):
     with patch.object(a.os,'kill',side_effect=kill),patch.object(a.subprocess,'run',side_effect=cmd),self.assertRaises(RuntimeError):a.cleanup_injection(folder,wd,wk,du,exact,True,SimpleNamespace(wait=wait,pid=125),None if fail=='identity' else ident,[CG(),CG()],True,True,p)
     self.assertEqual(actions.count('rmdir'),2)
     if fail!='identity':self.assertIn('wait',actions)
-    if fail=='replacement':self.assertNotIn('restore',actions)
-    else:self.assertIn('restore',actions)
+    self.assertNotIn('restore',actions)
     self.assertTrue((folder/'adversarial-before-cleanup.json').exists());self.assertFalse(json.loads((folder/'adversarial-cleanup.json').read_text())['passed'])
 if __name__=='__main__':unittest.main()
