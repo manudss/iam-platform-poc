@@ -194,11 +194,17 @@ value=json.loads(Path(sys.argv[1]).read_text())
 r=subprocess.run(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',sys.argv[2],'bao','operator','unseal',value['unseal_keys_b64'][0]],capture_output=True)
 raise SystemExit(r.returncode)
 ''')
+        # Reviewed companion evidence must live under protected installed ancestry, not the runner-owned checkout.
+        companion_evidence=owned/'companion-evidence';companion_evidence.mkdir(mode=0o700)
+        for name in ['bao.hcl','bao-policy.hcl']:
+            src=source/'deploy/oci/companions'/name;dst=companion_evidence/name
+            shutil.copyfile(src,dst);dst.chmod(0o600)
+            if sha(src)!=sha(dst):raise RuntimeError('companion-evidence-copy-mismatch')
         settings.update({'LYAM_BACKUP_BAO_DIR':str(root/'bao-storage'),
                          'LYAM_BACKUP_BAO_CONTAINER':c['bao'],
                          'LYAM_BACKUP_BAO_KEYS_DIR':str(root/'bao-keys'),
-                         'LYAM_BAO_CONFIG_FILE':str(source/'deploy/oci/companions/bao.hcl'),
-                         'LYAM_BAO_POLICY_FILE':str(source/'deploy/oci/companions/bao-policy.hcl'),
+                         'LYAM_BAO_CONFIG_FILE':str(companion_evidence/'bao.hcl'),
+                         'LYAM_BAO_POLICY_FILE':str(companion_evidence/'bao-policy.hcl'),
                          'LYAM_BAO_UNSEAL_CMD':'python3 '+str(unseal)+' '+str(root/'bao-keys/init.json')+' '+c['bao']})
         # Include actual companion definitions, not invented empty placeholder files.
         (root / 'companions.env').write_text('PG_PASSWORD=synthetic-ci-only\n')
