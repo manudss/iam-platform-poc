@@ -145,7 +145,9 @@ def main():
    time.sleep(2)
   else:raise RuntimeError('held app health timeout')
   stage='qualification-after';command([str(binroot/'qualification.py'),'--phase','after',*qualargs])
+  stage='collect-after-evidence'
   after=next(evidence.glob('after-*'));smoke=next(evidence.glob('smoke-*'))
+  stage='integrity-binding'
   integrity=module(binroot/'closed-recovery-integrity.py','integrity').verify(str(env))
   receipt=root/'receipt';fields={**integrity,'state':'CLOSED_QUALIFIED','held':'true','public_status':'503','image':c['image'],'launch_proof':c['proof'],'launch_proof_sha256':digest(c['proof']),'gate_sha256':digest(gate),'ops_sha256':digest(ops)};receipt.write_text(''.join(k+'='+v+'\n' for k,v in fields.items()));receipt.chmod(0o600)
   opening={k:spec(p) for k,p in {'env':env,'closed_receipt':receipt,'integrity':binroot/'closed-recovery-integrity.py','launch_proof':Path(c['proof']),'policy':pol,'qualifier':binroot/'qualification.py','before':evidence/'before.json','after':after,'smoke':smoke}.items()}
@@ -211,6 +213,8 @@ def main():
   if result['controllerSHA256']!=expected['reviewed-ui-held.py'] or result['qualifierSHA256']!=expected['qualification.py'] or result['qualifierContainerSHA256']!=expected['qualification-container.mjs']:raise RuntimeError('result source hash mismatch')
  except Exception as error:
   result['stage']=stage;result['errorType']=type(error).__name__
+  reasons={'malformed/duplicate environment':'INTEGRITY_ENV_FORMAT','absolute regular non-symlink required':'INTEGRITY_REGULAR_FILE','root-owned protected code ancestry required':'INTEGRITY_ANCESTRY','private configuration required':'INTEGRITY_PRIVATE_MODE','controller hash differs from review':'INTEGRITY_CONTROLLER_HASH','qualification hash differs from review':'INTEGRITY_QUALIFIER_HASH','qualification entrypoint not reviewed':'INTEGRITY_ENTRYPOINT','qualification source and default policy must both be reviewed':'INTEGRITY_POLICY_INVENTORY','helper hash differs from review':'INTEGRITY_WRAPPER_HASH','implementation hash differs from review':'INTEGRITY_IMPLEMENTATION_HASH'}
+  if stage=='integrity-binding':result['fixedReason']=reasons.get(str(error),'UNCLASSIFIED_INTEGRITY_FAILURE')
   # Never publish exception strings, subprocess output, env, tokens, data or raw receipts.
   raise RuntimeError('isolated held UI integration failed at fixed stage') from None
  finally:
