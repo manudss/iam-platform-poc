@@ -48,7 +48,24 @@ jobs:
           CLOSED_IMAGE: ghcr.io/manudss/iam-platform-poc@sha256:310f5b0e20e75a0dbfc5874ae8a45cbe30a44647c3cb5d3e52e9f597d8ab06cc
           NODE_PATH: /tmp/ui-held-pw/node_modules
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,NODE_PATH python3 scripts/closed-helper-docker-fixture.py --image "$CLOSED_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --ui-held-extension scripts/ui-held-docker-integration.py --out /tmp/ui-held-proof
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,NODE_PATH unshare --mount --propagation private python3 scripts/ui-held-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "$CLOSED_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --ui-held-extension scripts/ui-held-docker-integration.py --out /tmp/ui-held-proof
+      - name: Verify shared opt metadata after namespace exits
+        if: always()
+        run: |
+          sudo python3 - <<'PYCHECK'
+          import json, pathlib, stat
+          out=pathlib.Path('/tmp/ui-held-proof')
+          before=json.loads((out/'private-mount-isolation.json').read_text())
+          value=pathlib.Path('/opt').stat()
+          after={'uid':value.st_uid,'gid':value.st_gid,'mode':oct(stat.S_IMODE(value.st_mode))}
+          record={'originalBefore':before['originalBefore'],'originalAfterFixture':after,'unchanged':after==before['originalBefore']}
+          (out/'shared-opt-after-fixture.json').write_text(json.dumps(record,indent=2))
+          assert record['unchanged'],'shared opt metadata changed'
+          # Only empty alias directories created by this wrapper, no unmount or recursive removal.
+          for alias in pathlib.Path('/root').glob('ui-held-original-opt-*'):
+              if alias.is_dir() and not alias.is_symlink() and not alias.is_mount():
+                  alias.rmdir()
+          PYCHECK
       - uses: actions/upload-artifact@v4
         if: always()
         with:
