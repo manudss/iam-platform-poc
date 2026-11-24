@@ -54,6 +54,15 @@ def load(path):
         out[key]=e
     return out
 
+def status_counts(rows):
+    # Fixed 20 cells: target/other x unstaged/staged x new/modified/deleted/renamed/other.
+    counts=[0]*20
+    for row in rows:
+        kind=['new table','modified','deleted','renamed'].index(row['status']) if row['status'] in ['new table','modified','deleted','renamed'] else 4
+        index=(0 if row['table']==NEW else 1)*10+int(row['staged'])*5+kind
+        counts[index]=min(1000000,counts[index]+1)
+    return counts
+
 def verify(before_path,after_path,changes):
     need(changes=='dolt','change-categories')    # compare() must have reported Dolt and NOTHING else (bao, credentials, postgres preserved)
     b,a=load(before_path),load(after_path)
@@ -65,6 +74,8 @@ def verify(before_path,after_path,changes):
     need(x['head']==y['head'],'target-head-changed')                 # nothing is committed: the new table lives in the working set only
     need(x['root']!=y['root'],'no-target-change')
     need(x['schemaObjects']==y['schemaObjects'],'schema-objects-changed')
+    if sorted(y['status'],key=json.dumps)!=sorted(x['status']+[NEW_STATUS],key=json.dumps):
+        print('DOLT_STATUS_DIAG_V1 '+json.dumps({'before':status_counts(x['status']),'after':status_counts(y['status'])},separators=(',',':')),file=sys.stderr)
     need(sorted(y['status'],key=json.dumps)==sorted(x['status']+[NEW_STATUS],key=json.dumps),'working-status-changed')   # Dolt's status diff vs HEAD is exactly one new unstaged table
     old={t['name']:t for t in x['tables']};new={t['name']:t for t in y['tables']}
     need(NEW not in old,'table-already-present')                      # an idempotent rerun produces no dolt change, never reaches this verifier

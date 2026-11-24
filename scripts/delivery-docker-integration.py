@@ -124,6 +124,11 @@ def queue_failure_diagnostic(stderr, state):
         except (ValueError,TypeError):pass
     refused=re.findall(r'^TRANSFORM_DIAG_V1 ([a-z][a-z-]{0,63})$',stderr,re.M)
     if refused:result['transformationRefusal']=refused[-1]
+    for raw in re.findall(r'^DOLT_STATUS_DIAG_V1 (\{[^\n]{1,400}\})$',stderr,re.M)[-1:]:
+        try:
+            v=json.loads(raw)
+            if set(v)=={'before','after'} and all(isinstance(v[k],list) and len(v[k])==20 and all(type(n) is int and 0<=n<=1000000 for n in v[k]) for k in v):result['doltStatusCounts']=v
+        except (ValueError,TypeError):pass
     return result
 
 

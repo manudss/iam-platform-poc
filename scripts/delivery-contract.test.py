@@ -141,6 +141,10 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
         self.assertEqual(m.queue_failure_diagnostic('TRANSFORM_DIAG_V1 schema-objects-changed',{})['transformationRefusal'],'schema-objects-changed')
         self.assertNotIn('transformationRefusal',m.queue_failure_diagnostic('TRANSFORM_DIAG_V1 private value /path',{}))
+        d={'before':[0]*20,'after':[0]*20};d['after'][0]=1
+        self.assertEqual(m.queue_failure_diagnostic('DOLT_STATUS_DIAG_V1 '+json.dumps(d),{})['doltStatusCounts'],d)
+        for bad in [{'before':[0]*19,'after':[0]*20},{'before':['secret']*20,'after':[0]*20},{'before':[True]*20,'after':[0]*20},{'before':[-1]*20,'after':[0]*20}]:
+            self.assertNotIn('doltStatusCounts',m.queue_failure_diagnostic('DOLT_STATUS_DIAG_V1 '+json.dumps(bad),{}))
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

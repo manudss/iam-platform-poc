@@ -24,6 +24,11 @@ def cmd(args, input=None):
         allowed={'evidence-missing','evidence-malformed','evidence-duplicate','change-categories','branch-set-changed','target-branch-absent','other-database-or-branch-changed','target-head-changed','no-target-change','schema-objects-changed','working-status-changed','table-already-present','table-set-changed','existing-table-changed','new-table-not-empty','new-table-columns','new-table-keys','new-table-column-attributes','new-table-collation','new-table-primary-key','new-table-indexes','ddl-not-calibrated','new-table-ddl','usage','unreadable-evidence'}
         for code in codes[-1:]:
             if code in allowed:print('TRANSFORM_DIAG_V1 '+code,file=sys.stderr)
+        for raw in re.findall(r'^DOLT_STATUS_DIAG_V1 (\{[^\n]{1,400}\})$',r.stderr,re.M)[-1:]:
+            try:
+                v=json.loads(raw)
+                if set(v)=={'before','after'} and all(isinstance(v[k],list) and len(v[k])==20 and all(type(n) is int and 0<=n<=1000000 for n in v[k]) for k in v):print('DOLT_STATUS_DIAG_V1 '+json.dumps(v,separators=(',',':')),file=sys.stderr)
+            except (ValueError,TypeError):pass
         raise ValueError('command failed, private diagnostic inspection required')
     return r.stdout.strip()
 def digest(data):return hashlib.sha256(data).hexdigest()

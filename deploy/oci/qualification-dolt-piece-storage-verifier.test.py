@@ -21,6 +21,11 @@ def good_after():
         if (e['database'],e['branch'])==('iam_meta','main'):e['tables']=sorted(e['tables']+[copy.deepcopy(PIECE)],key=lambda t:t['name']);e['root']='root-after';e['status']=e['status']+[dict(v.NEW_STATUS)]
     return a
 class V(unittest.TestCase):
+    def test_status_diagnostic_fixed_cells_no_names(self):
+        rows=[{'table':'workflow_piece_state','staged':False,'status':'new table'},{'table':'private_name','staged':True,'status':'modified'}]
+        counts=v.status_counts(rows)
+        self.assertEqual(len(counts),20);self.assertEqual(counts[0],1);self.assertEqual(counts[16],1);self.assertEqual(sum(counts),2)
+
     def run_v(self,before,after,changes='dolt'):
         with tempfile.TemporaryDirectory() as d:
             b=Path(d)/'b.json';a=Path(d)/'a.json';b.write_text(json.dumps(before));a.write_text(json.dumps(after))
