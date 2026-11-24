@@ -17,6 +17,14 @@ class Controller(unittest.TestCase):
   for value in ['IAM_AUTOMATION_HOLD=0\n','IAM_AUTOMATION_HOLD=1\nIAM_AUTOMATION_HOLD=1\n']:
    m={'opening':{'env':self.file('env',value)}}
    with patch.object(u,'protected',side_effect=Path),self.assertRaises(ValueError):u.settings(m)
+ def test_gate_defaults_match_updater_and_explicit_paths_retained(self):
+  m={'opening':{'env':self.file('env','IAM_AUTOMATION_HOLD=1\n')}}
+  with patch.object(u,'protected',side_effect=Path):env=u.settings(m)
+  self.assertEqual(env['LYAM_FRONT_BARRIER_FILE'],'/var/lib/lyam-front-gate/MAINTENANCE')
+  self.assertEqual(env['LYAM_OPS_BARRIER_FILE'],'/var/lib/lyam-front-gate/OPS-MAINTENANCE')
+  m['opening']['env']=self.file('env','IAM_AUTOMATION_HOLD=1\nLYAM_FRONT_BARRIER_FILE=/fixture/gate\nLYAM_OPS_BARRIER_FILE=/fixture/ops\n')
+  with patch.object(u,'protected',side_effect=Path):env=u.settings(m)
+  self.assertEqual(env['LYAM_FRONT_BARRIER_FILE'],'/fixture/gate');self.assertEqual(env['LYAM_OPS_BARRIER_FILE'],'/fixture/ops')
  def test_wrong_closed_receipt_image_or_open_claim_refused(self):
   for value in ['state=CLOSED_QUALIFIED\nheld=true\npublic_status=503\nimage=wrong','state=DELIVERED\nheld=true\npublic_status=200\nimage=wrong']:
    m={'opening':{'env':self.file('env','IAM_AUTOMATION_HOLD=1\n'),'closed_receipt':self.file('receipt',value)}}
@@ -143,6 +151,10 @@ class VerifyBindings(unittest.TestCase):
  def test_hold_api_absent_refused_exact_reason(self):
   self.api_fail=True
   with self.assertRaisesRegex(ValueError,'held API proof absent'):self.verify()
+ def test_incoherent_explicit_gate_path_refused_by_receipt_binding(self):
+  self.env['LYAM_FRONT_BARRIER_FILE']=self.ops
+  self.paths[self.opening['env']['path']].write_text(''.join(k+'='+v+'\n' for k,v in self.env.items()))
+  with self.assertRaisesRegex(ValueError,'gate ownership changed'):self.verify()
  def test_gate_hash_changed_refused_exact_reason(self):
   self.paths[self.gate].write_text('foreign')
   with self.assertRaisesRegex(ValueError,'gate ownership changed'):self.verify()
