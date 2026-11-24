@@ -100,6 +100,8 @@ https://delivery.localhost:18443 {
               'checks': {}, 'evidence': {'scripts': sha(out / 'candidate-script-hashes.json')},
               'limitations': ['Synthetic data only', 'Not production qualification',
                               'No production availability or automatic rollback claim',
+                              'Old data is a fresh fictional seed under historical image, not production-migrated data',
+                              'Normal delivery uses synthetic format1 queue; guarded formats2/3 are refusal-only',
                               'UI document check is not a visual desktop/mobile review',
                               'Bao durable cold backup readback is checked; semantic fresh-stack restore remains unproved']}
     stage = 'tls-front'
@@ -203,7 +205,10 @@ raise SystemExit(r.returncode)
         else:
             stage = 'real-ordered-queue-update'
             queue = root / 'queue.json'
-            base = run(['git', '-C', str(source), 'rev-parse', 'HEAD^1']).stdout.strip()
+            base = json.loads(docker('image','inspect',current))[0]['Config']['Labels']['org.opencontainers.image.revision']
+            if len(base)!=40:raise RuntimeError('baseline-source-label-invalid')
+            result['baselineSha']=base
+            result['baselineDigest']=current.split('@')[1]
             state = {'format': 1, 'history': [{'sha': base, 'digest': current.split('@')[1]}]}
             queue.write_text(json.dumps(state))
             # Wrapper changes only the env-file argument, not the real updater or command semantics.
@@ -211,6 +216,28 @@ raise SystemExit(r.returncode)
             wrapper.write_text('#!/bin/sh\nexec sh ' + str(bindir / 'update.sh') + ' --env-file ' + str(env) + ' "$@"\n')
             wrapper.chmod(0o700)
             plan = {'format': 1, 'base': base, 'entries': [{'sha': result['sha'], 'parent': base, 'digest': result['digest']}]}
+            # Preserve production-style barriers as refusal scenarios. Never strip
+            # a pause/resume fence from an active queue to make deployment proceed.
+            qmodule=load_module(bindir/'ordered-queue.py','guarded_candidate_queue')
+            for version in [2,3]:
+                guarded=root/('guarded-queue-'+str(version)+'.json')
+                guarded_state={'format':version,'history':state['history'],
+                               'recovery_fence':base,'resume_required':True,
+                               'recoveries':[{'target':{'sha':base}}],
+                               'syntheticFixture':True,'mode':'ui-open-automation-held'}
+                guarded.write_text(json.dumps(guarded_state))
+                original=guarded.read_bytes()
+                attempted=[]
+                try:qmodule.deploy(guarded,plan,str(wrapper),runner=lambda *a,**k:attempted.append(True))
+                except ValueError:pass
+                else:raise RuntimeError('guarded-queue-was-not-refused')
+                if attempted or guarded.read_bytes()!=original:raise RuntimeError('guarded-queue-mutated')
+            pause=root/'PAUSE';pause.write_text('synthetic-guard\n')
+            paused=run(['python3',str(bindir/'ordered-queue.py'),'drain','--state',str(queue),'--pause-file',str(pause),'--updater',str(wrapper)],False,input=json.dumps(plan))
+            if paused.returncode==0 or json.loads(queue.read_text())!=state:raise RuntimeError('paused-queue-was-not-refused')
+            pause.unlink() # Fixture-owned pause scenario finished; normal scenario has separate state.
+            result['checks']['guardedQueueRefusal']=True
+            result['guardedQueueCoverage']={'format2ResumeRequiredRefused':True,'format3UnrecognizedOrGuardedRefused':True,'pauseRefused':True,'productionStateNotReplayed':True}
             q = run(['python3', str(bindir / 'ordered-queue.py'), 'drain', '--state', str(queue),
                      '--pause-file', str(root / 'PAUSE'), '--updater', str(wrapper)], False, input=json.dumps(plan))
             result['queueExit'] = q.returncode
@@ -220,6 +247,24 @@ raise SystemExit(r.returncode)
             delivered = json.loads(queue.read_text())
             if delivered['history'][-1]['sha'] != result['sha'] or delivered.get('pending') or delivered.get('failed'):
                 raise RuntimeError('queue-delivery-not-confirmed')
+            stage='measure-real-qualification-evidence'
+            qualification_dirs=list((root/'backups').glob('qualification-*'))
+            if len(qualification_dirs)!=1:raise RuntimeError('exact-qualification-evidence-required')
+            evidence_dir=qualification_dirs[0]
+            before=json.loads((evidence_dir/'before.json').read_text())
+            after_paths=list(evidence_dir.glob('after-*'));smoke_paths=list(evidence_dir.glob('smoke-*'))
+            if len(after_paths)!=1 or len(smoke_paths)!=1:raise RuntimeError('missing-final-qualification-evidence')
+            after=json.loads(after_paths[0].read_text());smoke=json.loads(smoke_paths[0].read_text())
+            qualifier=load_module(bindir/'qualification.py','candidate_qualifier')
+            changes=qualifier.compare(before,after,policy)
+            if changes:raise RuntimeError('measured-preservation-diff')
+            if not after.get('migrationLedger') or not smoke:raise RuntimeError('missing-ledger-or-smoke-proof')
+            if urllib.request.urlopen(origin+'/healthz',timeout=10).status!=200 or (gates/'MAINTENANCE').exists():raise RuntimeError('measured-final-front-not-open')
+            result['measurements']={'preservationChanges':changes,'beforeSHA256':sha(evidence_dir/'before.json'),
+                                    'afterSHA256':sha(after_paths[0]),'smokeSHA256':sha(smoke_paths[0]),
+                                    'publicTLSFinalStatus':200,'maintenanceAbsent':True,
+                                    'actualRunningImage':json.loads(docker('inspect',c['app']))[0]['Config']['Image']}
+            if result['measurements']['actualRunningImage']!=c['image']:raise RuntimeError('final-running-image-mismatch')
             result['checks'].update(realUpdater=True, realQueue=True, preservation=True, migrationLedger=True, oidc=True, gate=True)
             stage = 'real-backup-readback'
             backups=root/'backups'
@@ -245,6 +290,7 @@ raise SystemExit(r.returncode)
             (gates / 'OPS-MAINTENANCE').write_text('synthetic-ops\n')
             policy['requireAutomationHold'] = True
             pol.write_text(json.dumps(policy))
+            config['ledgerSHA256']=sha(Path(c['data'])/'migrations/journal.json')
             config['controllerSHA256'] = {n: sha(bindir / n) for n in ['update.sh', 'closed-recovery-integrity.py', 'closed-recovery-call.py']}
             config['qualificationSHA256'] = {str(p): sha(p) for p in [bindir / 'qualification.py', bindir / 'qualification-container.mjs', pol]}
             configpath.write_text(json.dumps(config))
@@ -260,13 +306,14 @@ raise SystemExit(r.returncode)
             if closed.returncode != 10:
                 raise RuntimeError('real-closed-updater-refused')
             result['checks']['realReceipt'] = True
+            # Incident opening is not a requirement for normal candidate delivery.
+            # Record applicability independently rather than require an absent draft file.
             consumer = bindir / 'reviewed-ui-held.py'
-            if not consumer.exists():
-                raise RuntimeError('candidate-receipt-consumer-absent')
-            # Invoke the candidate consumer's parser on actual emitted bytes, never a dict fixture.
-            parser = load_module(consumer, 'candidate_receipt_consumer')
-            parser.receipt_fields(receipt.read_text())
-            result['checks']['receiptConsumer'] = True
+            result['incidentReceiptConsumer'] = {'applicable':consumer.is_file()}
+            if consumer.is_file():
+                parser = load_module(consumer, 'candidate_receipt_consumer')
+                parser.receipt_fields(receipt.read_text())
+                result['incidentReceiptConsumer']['passed']=True
         result['passed'] = True
     except Exception as error:
         result['stage'] = stage

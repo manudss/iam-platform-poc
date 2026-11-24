@@ -59,7 +59,7 @@ jobs:
       - name: Check out the exact ref being built
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.sha }}
+          ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.sha || github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.sha }}
           fetch-depth: 0 # the build number counts the commits reachable from the built ref
 
       - name: Resolve the commit SHA and image tags
@@ -161,19 +161,23 @@ jobs:
 
   delivery_regressions:
     name: Delivery contract regressions
+    permissions: {contents: read}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          ref: ${{ inputs.sha || github.sha }}
       - name: Fail-closed verdict and candidate deployment-control regressions
         run: |
           python3 scripts/delivery-contract.test.py
           find deploy/oci -maxdepth 1 -name '*.test.py' -print0 | sort -z | xargs -0 -n 1 python3
+          node --test deploy/oci/*.test.mjs
 
   delivery_fresh:
     name: Delivery fresh exact candidate
+    permissions: {contents: read, packages: read}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -183,6 +187,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          persist-credentials: false
           ref: ${{ needs.build.outputs.sha }}
           fetch-depth: 0
       - name: Real candidate image and synthetic services
@@ -198,6 +203,7 @@ jobs:
 
   delivery_upgrade:
     name: Delivery upgrade real updater and queue
+    permissions: {contents: read, packages: read}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -208,6 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          persist-credentials: false
           ref: ${{ needs.build.outputs.sha }}
           fetch-depth: 0
       - name: Real persistent old dataset through candidate update.sh and ordered queue
@@ -223,6 +230,7 @@ jobs:
 
   delivery_contract:
     name: Delivery contract
+    permissions: {contents: read}
     if: always()
     needs: [build, delivery_regressions, delivery_fresh, delivery_upgrade]
     runs-on: ubuntu-24.04
@@ -230,7 +238,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: delivery-*

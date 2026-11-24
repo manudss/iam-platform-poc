@@ -1,6 +1,10 @@
 import copy
 import importlib.util
 import unittest
+import tempfile
+import subprocess
+import json
+import hashlib
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location('contract', Path(__file__).with_name('delivery-contract.py'))
@@ -61,6 +65,21 @@ class DeliveryVerdict(unittest.TestCase):
             receipts = copy.deepcopy(self.receipts)
             receipts[1][field] = {}
             self.assertFalse(c.aggregate(self.jobs, receipts, self.sha, self.digest)['passed'])
+
+
+    def test_uploaded_bytes_are_rehashed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            for receipt in self.receipts:
+                folder=root/receipt['scenario'];folder.mkdir()
+                item=folder/'proof.json';item.write_text('real proof')
+                receipt['evidence']={item.name:hashlib.sha256(item.read_bytes()).hexdigest()}
+                (folder/'delivery-receipt.json').write_text(json.dumps(receipt))
+            needs=root/'needs.json';needs.write_text(json.dumps(self.jobs))
+            args=['python3',str(Path(__file__).with_name('delivery-contract.py')),'--needs',str(needs),'--receipts',str(root),'--sha',self.sha,'--digest',self.digest,'--out',str(root/'verdict.json')]
+            self.assertEqual(subprocess.run(args,capture_output=True).returncode,0)
+            (root/'upgrade/proof.json').write_text('changed bytes')
+            self.assertNotEqual(subprocess.run(args,capture_output=True).returncode,0)
 
     def test_truthy_is_not_true(self):
         self.receipts[1]['passed'] = 'true'

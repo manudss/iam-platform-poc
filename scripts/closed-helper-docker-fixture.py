@@ -102,8 +102,12 @@ def main():
    dest=root/('closed-'+mode);dest.write_text(text);dest.chmod(0o700);wrappers[mode]=dest
   d('pull',a.image)
   if a.baseline_image:d('pull',a.baseline_image)
+  if a.delivery_scenario:
+   candidate=json.loads(d('image','inspect',a.image))[0]
+   if candidate.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=os.environ.get('DELIVERY_SHA'):raise ValueError('candidate image source label mismatch')
   # Real disposable companions, no provider integrations, no public ports or persistent secrets.
   netargs=['network','create']
+  if a.delivery_scenario:netargs+=['--internal']
   if a.ipv6_mode=='active':netargs+=['--ipv6','--subnet','fd42:6c79:'+format(os.getpid()%65535,'x')+'::/64']
   d(*netargs,network);created_network=True
   containers.append(pg);d('run','-d','--name',pg,'--network',network,'-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',a.pg_image)
@@ -225,7 +229,11 @@ def main():
    clean=all(cleanup.values()) and record.get('frontCleanup') is True
    record['checks']['cleanup']=clean
    record['passed']=record.get('passed') is True and clean
-   if intermediate.exists():record['evidence']['actualRun']=sha(intermediate.read_bytes())
+   if intermediate.exists():
+    record['privateEvidenceHashes']=record.pop('evidence',{})
+    public=out/'execution-evidence.json'
+    public.write_text(json.dumps({k:v for k,v in record.items() if k not in ['evidence']},sort_keys=True,indent=2))
+    record['evidence']={public.name:sha(public.read_bytes()),'candidate-script-hashes.json':sha((out/'candidate-script-hashes.json').read_bytes())}
    (out/'delivery-receipt.json').write_text(json.dumps(record,indent=2))
    if not clean:raise RuntimeError('delivery fixture cleanup incomplete')
   shutil.rmtree(root)
