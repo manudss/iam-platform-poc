@@ -4,14 +4,14 @@ import { createConnection, Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 
-export type ModelKind = 'openai-compatible' | 'anthropic';
+export type ModelKind = 'openai-compatible' | 'anthropic' | 'google';
 export interface AiModel {
   id: string; name: string; kind: ModelKind; model: string; baseUrl: string; local: boolean; builtin: boolean; enabled: boolean;
   maxTokens: number; hasKey: boolean; createdAt: string; lastStatus: string; lastCheck: string | null;
 }
 export interface Conversation { id: string; tenant: string; owner: string; modelId: string; sessionId: string; title: string; autoApproveWrites: boolean; createdAt: string; updatedAt: string }
-/** The internal message shape of the ai-assistant plugin (see providers.mjs). */
-export interface ChatMessage { role: 'user' | 'assistant' | 'tool'; content: string; toolCalls?: { id: string; name: string; args: Record<string, unknown>; badArgs?: boolean }[]; toolCallId?: string; name?: string; usage?: unknown }
+/** A stored chat message is an AI SDK UIMessage (parts: text, tool calls with their state and approval). */
+export interface StoredMessage { id: string; role: 'user' | 'assistant'; parts: Record<string, unknown>[]; metadata?: unknown }
 
 interface ProvidersModule {
   validateModelInput: (b: unknown) => { name: string; kind: ModelKind; model: string; baseUrl: string; local: boolean; apiKey: string | null; maxTokens: number; enabled: boolean };
@@ -20,8 +20,8 @@ interface ProvidersModule {
   MODEL_ID: RegExp; LOCAL_MODEL_ID: string;
 }
 export const providers = loadPluginModule('ai-assistant', 'providers.mjs') as ProvidersModule & {
-  callModel: (a: { model: { kind: ModelKind; baseUrl: string; model: string; maxTokens: number }; apiKey: string | null; system: string; messages: ChatMessage[]; tools: { name: string; description?: string; inputSchema?: unknown }[]; fetchImpl?: typeof fetch; timeoutMs?: number }) => Promise<{ text: string; toolCalls: ChatMessage['toolCalls']; usage: unknown }>;
-  ModelCallError: new (m: string, s?: number) => Error;
+  createLanguageModel: (a: { model: { kind: ModelKind; baseUrl: string; model: string }; apiKey: string | null; fetch?: typeof fetch }) => unknown;
+  ModelCallError: new (m: string, s?: number) => Error; redactMessage: (e: unknown, key: string | null) => string;
 };
 
 type Row = Record<string, unknown>;
@@ -62,7 +62,7 @@ export class AiStoreService {
             enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at DATETIME(3) NOT NULL, created_by VARCHAR(64) NOT NULL,
             last_status VARCHAR(120) NOT NULL DEFAULT 'never-checked', last_check DATETIME(3) NULL, UNIQUE KEY uq_ai_model_name (tenant, name))`);
           await m.query(`CREATE TABLE IF NOT EXISTS ai_conversations (
-            id VARCHAR(40) PRIMARY KEY, tenant VARCHAR(32) NOT NULL, owner_sub VARCHAR(64) NOT NULL, model_id VARCHAR(40) NOT NULL, session_id VARCHAR(40) NOT NULL,
+            id VARCHAR(40) PRIMARY KEY, tenant VARCHAR(32) NOT NULL, owner_sub VARCHAR(64) NOT NULL, model_id VARCHAR(40) NOT NULL, session_id VARCHAR(40) NOT NULL, mcp_secret_enc TEXT NOT NULL,
             title VARCHAR(120) NOT NULL, auto_approve_writes BOOLEAN NOT NULL DEFAULT FALSE, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL)`);
           await m.query(`CREATE TABLE IF NOT EXISTS ai_messages (
             id BIGINT AUTO_INCREMENT PRIMARY KEY, conversation_id VARCHAR(40) NOT NULL, at DATETIME(3) NOT NULL DEFAULT NOW(3), payload LONGTEXT NOT NULL, KEY ix_ai_msg_conv (conversation_id, id))`);
@@ -139,10 +139,10 @@ export class AiStoreService {
   private shapeConv(r: Row): Conversation {
     return { id: String(r.id), tenant: String(r.tenant), owner: String(r.owner_sub), modelId: String(r.model_id), sessionId: String(r.session_id), title: String(r.title), autoApproveWrites: !!r.auto_approve_writes, createdAt: String(r.created_at), updatedAt: String(r.updated_at) };
   }
-  async createConversation(tenant: string, owner: string, modelId: string, sessionId: string, title: string, autoApproveWrites: boolean): Promise<Conversation> {
+  async createConversation(tenant: string, owner: string, modelId: string, sessionId: string, mcpSecret: string, title: string, autoApproveWrites: boolean): Promise<Conversation> {
     const id = `cv-${randomBytes(6).toString('hex')}`, now = new Date().toISOString().slice(0, 23);
     const m = await this.meta();
-    try { await m.query('INSERT INTO ai_conversations (id, tenant, owner_sub, model_id, session_id, title, auto_approve_writes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)', [id, tenant, owner.slice(0, 64), modelId, sessionId, title.slice(0, 120), autoApproveWrites ? 1 : 0, now, now]); } finally { await m.end(); }
+    try { await m.query('INSERT INTO ai_conversations (id, tenant, owner_sub, model_id, session_id, mcp_secret_enc, title, auto_approve_writes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id, tenant, owner.slice(0, 64), modelId, sessionId, providers.sealKey(mcpSecret), title.slice(0, 120), autoApproveWrites ? 1 : 0, now, now]); } finally { await m.end(); }
     return (await this.getConversation(tenant, owner, id))!;
   }
   async listConversations(tenant: string, owner: string): Promise<Conversation[]> {
@@ -159,16 +159,24 @@ export class AiStoreService {
     const m = await this.meta();
     try { await m.query('DELETE FROM ai_messages WHERE conversation_id = ?', [id]); await m.query('DELETE FROM ai_conversations WHERE id = ?', [id]); } finally { await m.end(); }
   }
-  async messages(id: string): Promise<ChatMessage[]> {
+  /** The conversation's MCP session token, sealed at rest; only the chat route opens it. */
+  async mcpSecret(id: string): Promise<string> {
     const m = await this.meta();
-    try { const [r] = await m.query('SELECT payload FROM ai_messages WHERE conversation_id = ? ORDER BY id ASC LIMIT 500', [id]); return (r as Row[]).map((x) => JSON.parse(String(x.payload)) as ChatMessage); } finally { await m.end(); }
+    try { const [r] = await m.query('SELECT mcp_secret_enc FROM ai_conversations WHERE id = ?', [id]); const row = (r as Row[])[0]; if (!row) throw new NotFoundException('conversation not found'); return providers.openKey(String(row.mcp_secret_enc)); } finally { await m.end(); }
   }
-  async append(id: string, msgs: ChatMessage[]): Promise<void> {
-    if (!msgs.length) return;
+  async messages(id: string): Promise<StoredMessage[]> {
+    const m = await this.meta();
+    try { const [r] = await m.query('SELECT payload FROM ai_messages WHERE conversation_id = ? ORDER BY id ASC LIMIT 500', [id]); return (r as Row[]).map((x) => JSON.parse(String(x.payload)) as StoredMessage); } finally { await m.end(); }
+  }
+  /** The server owns the history: the whole list is rewritten from what the SDK produced (never from the client). */
+  async replaceMessages(id: string, msgs: StoredMessage[]): Promise<void> {
     const m = await this.meta();
     try {
+      await m.beginTransaction();
+      await m.query('DELETE FROM ai_messages WHERE conversation_id = ?', [id]);
       for (const x of msgs) await m.query('INSERT INTO ai_messages (conversation_id, payload) VALUES (?,?)', [id, JSON.stringify(x)]);
       await m.query('UPDATE ai_conversations SET updated_at = ? WHERE id = ?', [new Date().toISOString().slice(0, 23), id]);
-    } finally { await m.end(); }
+      await m.commit();
+    } catch (e) { await m.rollback(); throw e; } finally { await m.end(); }
   }
 }

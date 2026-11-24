@@ -4,6 +4,11 @@
   "private": true,
   "description": "AI assistant - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
   "dependencies": {
-    "@nestjs/common": "^12.3.2"
+    "@nestjs/common": "^12.3.2",
+    "ai": "^7.0.181",
+    "@ai-sdk/mcp": "^2.0.104",
+    "@ai-sdk/openai-compatible": "^3.0.94",
+    "@ai-sdk/anthropic": "^4.0.107",
+    "@ai-sdk/google": "^4.0.125"
   }
 }

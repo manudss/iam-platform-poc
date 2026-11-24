@@ -2,9 +2,8 @@
  * ai-assistant plugin: model providers. Pure helpers, no storage. The core adapter (apps/api/src/ai) stores the
  * registered models and calls these.
  *
- * Messages use ONE internal shape (OpenAI-like) whatever the provider:
- *   { role: 'user' | 'assistant' | 'tool', content: string, toolCalls?: [{ id, name, args }], toolCallId?: string, name?: string }
- * and every provider call returns { text, toolCalls: [{ id, name, args, badArgs? }], stop, usage }.
+ * Model calls go through the AI SDK (`ai`, @ai-sdk/openai-compatible, @ai-sdk/anthropic, @ai-sdk/google); the only network
+ * path is `guardedFetch` below, which the SDK providers receive as their `fetch`.
  *
  * Security posture, enforced here server-side:
  *  - only an administrator registers a model endpoint; the assistant (and the model) can never choose a URL;
@@ -19,11 +18,12 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import https from 'node:https';
+import { Readable } from 'node:stream';
 
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
 
-export const MODEL_KINDS = ['openai-compatible', 'anthropic'];
+export const MODEL_KINDS = ['openai-compatible', 'anthropic', 'google'];
 export const MODEL_ID = /^md-[0-9a-f]{12}$/;
 export const LOCAL_MODEL_ID = 'local';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
@@ -119,22 +119,25 @@ export async function assertPublicResolution(hostname, resolve = (h) => lookup(h
 }
 
 /**
- * POST over https to the ALREADY CHECKED addresses: the socket connects to the address that passed the check (not to a second DNS
- * answer), TLS still validates the certificate for the host name. No redirect is followed. Returns a minimal Response.
+ * Request over https to the ALREADY CHECKED addresses: the socket connects to the address that passed the check (not to a second
+ * DNS answer), TLS still validates the certificate for the host name. No redirect is followed. The body streams (model replies are
+ * streamed to the console); a response larger than MAX_RESPONSE_BYTES is cut with an error.
  */
+const MAX_RESPONSE_BYTES = 8_000_000;
 export function pinnedFetch(answers) {
-  return (url, init) => new Promise((resolve, reject) => {
+  return (url, init = {}) => new Promise((resolve, reject) => {
     const u = new URL(url);
     const pick = answers[0];
     const req = https.request({
-      protocol: 'https:', hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: init.method, headers: init.headers, servername: u.hostname,
+      protocol: 'https:', hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: init.method ?? 'GET', headers: init.headers, servername: u.hostname,
       lookup: (_h, opts, cb) => (opts?.all ? cb(null, [{ address: pick.address, family: pick.family ?? isIP(pick.address) }]) : cb(null, pick.address, pick.family ?? isIP(pick.address))),
       signal: init.signal,
     }, (r) => {
-      const chunks = []; let size = 0;
-      r.on('data', (c) => { size += c.length; if (size > 4_000_000) { req.destroy(new Error('response too large')); return; } chunks.push(c); });
-      r.on('end', () => resolve(new Response([204, 205, 304].includes(r.statusCode) ? null : Buffer.concat(chunks), { status: r.statusCode, headers: Object.fromEntries(Object.entries(r.headers).filter(([, v]) => typeof v === 'string')) })));
-      r.on('error', reject);
+      if (r.statusCode >= 300 && r.statusCode < 400) { r.resume(); reject(new Error('redirects are refused')); return; }
+      let size = 0;
+      r.on('data', (c) => { size += c.length; if (size > MAX_RESPONSE_BYTES) r.destroy(new Error('response too large')); });
+      const headers = Object.fromEntries(Object.entries(r.headers).filter(([, v]) => typeof v === 'string'));
+      resolve(new Response([204, 205, 304].includes(r.statusCode) ? null : Readable.toWeb(r), { status: r.statusCode, headers }));
     });
     req.on('error', reject);
     req.end(init.body);
@@ -143,80 +146,37 @@ export function pinnedFetch(answers) {
 
 export const redact = (msg, key) => (key ? String(msg).split(key).join('[redacted]') : String(msg));
 
+export const redactMessage = (e, key) => redact(String(e?.message ?? e), key);
+
 export class ModelCallError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
 
-const parseArgs = (raw) => {
-  if (raw && typeof raw === 'object') return { args: raw };
-  if (typeof raw !== 'string' || raw.trim() === '') return { args: {} };
-  try { const v = JSON.parse(raw); return v && typeof v === 'object' && !Array.isArray(v) ? { args: v } : { args: {}, badArgs: true }; } catch { return { args: {}, badArgs: true }; }
-};
-
-function openaiBody(model, system, messages, tools) {
-  const out = [{ role: 'system', content: system }];
-  for (const m of messages) {
-    if (m.role === 'tool') out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
-    else if (m.role === 'assistant' && m.toolCalls?.length) out.push({ role: 'assistant', content: m.content || null, tool_calls: m.toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.args ?? {}) } })) });
-    else out.push({ role: m.role, content: m.content });
-  }
-  const body = { model: model.model, messages: out, max_tokens: model.maxTokens, stream: false };
-  if (tools.length) { body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: (t.description ?? '').slice(0, 1000), parameters: t.inputSchema ?? { type: 'object', properties: {} } } })); body.tool_choice = 'auto'; }
-  return body;
-}
-function parseOpenai(j) {
-  const msg = j?.choices?.[0]?.message;
-  if (!msg) throw new ModelCallError('the model endpoint returned no message', 502);
-  const toolCalls = (msg.tool_calls ?? []).filter((t) => t?.function?.name).map((t, i) => ({ id: String(t.id ?? `call_${i}`).slice(0, 64), name: String(t.function.name), ...parseArgs(t.function.arguments) }));
-  return { text: typeof msg.content === 'string' ? msg.content : '', toolCalls, stop: j.choices[0].finish_reason ?? '', usage: { input: j.usage?.prompt_tokens ?? null, output: j.usage?.completion_tokens ?? null } };
-}
-
-function anthropicBody(model, system, messages, tools) {
-  const out = [];
-  for (const m of messages) {
-    if (m.role === 'tool') {
-      const block = { type: 'tool_result', tool_use_id: m.toolCallId, content: m.content };
-      const last = out[out.length - 1];
-      if (last?.role === 'user' && Array.isArray(last.content) && last.content.every((b) => b.type === 'tool_result')) last.content.push(block); else out.push({ role: 'user', content: [block] });
-    } else if (m.role === 'assistant') {
-      const content = [];
-      if (m.content) content.push({ type: 'text', text: m.content });
-      for (const t of m.toolCalls ?? []) content.push({ type: 'tool_use', id: t.id, name: t.name, input: t.args ?? {} });
-      out.push({ role: 'assistant', content: content.length ? content : [{ type: 'text', text: '(no text)' }] });
-    } else out.push({ role: 'user', content: m.content });
-  }
-  const body = { model: model.model, system, messages: out, max_tokens: model.maxTokens };
-  if (tools.length) body.tools = tools.map((t) => ({ name: t.name, description: (t.description ?? '').slice(0, 1000), input_schema: t.inputSchema ?? { type: 'object', properties: {} } }));
-  return body;
-}
-function parseAnthropic(j) {
-  if (!Array.isArray(j?.content)) throw new ModelCallError('the model endpoint returned no content', 502);
-  const text = j.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-  const toolCalls = j.content.filter((b) => b.type === 'tool_use' && b.name).map((b, i) => ({ id: String(b.id ?? `call_${i}`).slice(0, 64), name: String(b.name), ...parseArgs(b.input) }));
-  return { text, toolCalls, stop: j.stop_reason ?? '', usage: { input: j.usage?.input_tokens ?? null, output: j.usage?.output_tokens ?? null } };
-}
-
 /**
- * One model turn. `model`: { kind, baseUrl, model, maxTokens }. `apiKey`: string | null (opened by the adapter).
- * `fetchImpl` is injectable for the tests. Errors never carry the key.
+ * The fetch every model call goes through (handed to the AI SDK provider): operator-listed local endpoints use plain fetch
+ * (redirects refused); anything else must resolve ONLY to public addresses and connects to the checked address.
  */
-export async function callModel({ model, apiKey, system, messages, tools, fetchImpl, timeoutMs = 90_000, resolveImpl }) {
-  const anthropic = model.kind === 'anthropic';
-  const url = anthropic ? `${model.baseUrl}/v1/messages` : `${model.baseUrl}/chat/completions`;
-  const headers = { 'content-type': 'application/json' };
-  if (anthropic) { headers['anthropic-version'] = '2023-06-01'; if (apiKey) headers['x-api-key'] = apiKey; } else if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-  const body = anthropic ? anthropicBody(model, system, messages, tools) : openaiBody(model, system, messages, tools);
-  const target = new URL(url);
-  if (!isLocalEndpoint(target)) {
-    const answers = await assertPublicResolution(target.hostname.toLowerCase(), resolveImpl);
-    fetchImpl ??= pinnedFetch(answers); // connect to the checked address, not to a second DNS answer
+export function guardedFetch({ resolveImpl, localFetch = fetch } = {}) {
+  return async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (isLocalEndpoint(url)) return localFetch(url, { ...init, redirect: 'error' });
+    if (url.protocol !== 'https:') throw new ModelCallError('a remote model endpoint requires https', 400);
+    const answers = await assertPublicResolution(url.hostname.toLowerCase(), resolveImpl);
+    const headers = Object.fromEntries(new Headers(init.headers ?? {}));
+    return pinnedFetch(answers)(url, { ...init, headers });
+  };
+}
+
+/** The AI SDK language model for a stored model. `fetch` is the guarded one (or a test double). */
+export function createLanguageModel({ model, apiKey, fetch: f = guardedFetch() }) {
+  if (model.kind === 'anthropic') {
+    const { createAnthropic } = require('@ai-sdk/anthropic');
+    return createAnthropic({ apiKey: apiKey ?? undefined, baseURL: /\/v1$/.test(model.baseUrl) ? model.baseUrl : `${model.baseUrl}/v1`, fetch: f })(model.model);
   }
-  fetchImpl ??= fetch;
-  let res;
-  try { res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), redirect: 'error' }); } catch (e) { throw new ModelCallError(redact(`the model endpoint is unreachable: ${e.message}`, apiKey), 502); }
-  const text = await res.text();
-  if (!res.ok) throw new ModelCallError(redact(`the model endpoint answered ${res.status}: ${text.slice(0, 300)}`, apiKey), res.status === 401 || res.status === 403 ? 502 : 502);
-  let j;
-  try { j = JSON.parse(text); } catch { throw new ModelCallError('the model endpoint did not return JSON', 502); }
-  return anthropic ? parseAnthropic(j) : parseOpenai(j);
+  if (model.kind === 'google') {
+    const { createGoogleGenerativeAI } = require('@ai-sdk/google');
+    return createGoogleGenerativeAI({ apiKey: apiKey ?? undefined, baseURL: model.baseUrl, fetch: f })(model.model);
+  }
+  const { createOpenAICompatible } = require('@ai-sdk/openai-compatible');
+  return createOpenAICompatible({ name: 'lyam-model', apiKey: apiKey ?? undefined, baseURL: model.baseUrl, fetch: f }).chatModel(model.model);
 }
