@@ -24,6 +24,14 @@ def failure_details(stderr):
  if code:result['commandFailure']={'category':code[1],'returnCode':int(code[2]),'reason':code[3]}
  return result
 
+def docker_setup_failure(args,p):
+ # Fixed categories only. Never publish the Docker response, command arguments, URLs or names.
+ if len(args)<2 or args[:2]!=['docker','run']:return None
+ text=p.stderr.lower()
+ groups=[('DISK_FULL',('no space left on device',)),('RATE_LIMIT',('toomanyrequests','pull rate limit')),('PULL_ACCESS_DENIED',('pull access denied','requested access to the resource is denied','unauthorized: authentication required')),('NAME_CONFLICT',('is already in use by container',)),('DAEMON_UNAVAILABLE',('cannot connect to the docker daemon','error during connect:')),('NETWORK',('network is unreachable','i/o timeout','tls handshake timeout','temporary failure in name resolution','no such host'))]
+ reason=next((code for code,needles in groups if any(n in text for n in needles)),'UNCLASSIFIED')
+ return {'category':'DOCKER_RUN_SETUP','reason':reason,'returnCode':p.returncode,'stdoutPresent':bool(p.stdout),'stderrPresent':bool(p.stderr)}
+
 def a_delivery_command(args):
  return len(args)>1 and args[0]=='python3' and pathlib.Path(args[1]).name=='delivery-docker-integration.py'
 
@@ -31,6 +39,8 @@ def call(args,check=True):
  p=subprocess.run(args,text=True,capture_output=True,timeout=1200 if a_delivery_command(args) else 300)
  if check and p.returncode:
   COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,**failure_details(p.stderr))
+  setup=docker_setup_failure(args,p)
+  if setup is not None:COMMAND_DIAGNOSTIC['dockerSetupFailure']=setup
   raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
  return p
 
