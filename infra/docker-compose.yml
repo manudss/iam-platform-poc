@@ -33,6 +33,12 @@ services:
       POSTGRES_SEEDS: temporal-pg
     ports: ["127.0.0.1:7233:7233"]
 
+  ollama:               # optional local model for the AI assistant: docker compose --profile ai up -d ollama
+    profiles: ["ai"]
+    image: ollama/ollama:latest
+    ports: ["127.0.0.1:11434:11434"]
+    volumes: ["ollama-models:/root/.ollama"]
+
   nats:
     image: nats:latest
     command: ["-c", "/etc/nats/nats-local.conf", "--addr", "0.0.0.0"] # container interface; published host port stays loopback
@@ -45,4 +51,4 @@ services:
     ports: ["127.0.0.1:8200:8200"]
     cap_add: [IPC_LOCK]
 
-volumes: { dolt-data: {}, runtime-pg: {}, temporal-pg: {}, nats-js: {} }
+volumes: { ollama-models: {}, dolt-data: {}, runtime-pg: {}, temporal-pg: {}, nats-js: {} }

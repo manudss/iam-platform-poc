@@ -16,5 +16,25 @@
   },
   "security": {
     "signed": true
-  }
+  },
+  "screens": [
+    {
+      "id": "chat",
+      "title": "AI assistant",
+      "area": "admin",
+      "render": "component",
+      "component": "screens/chat.mjs"
+    }
+  ],
+  "menu": [
+    {
+      "id": "ai-assistant",
+      "title": "AI assistant",
+      "area": "admin",
+      "group": "Extensions",
+      "icon": "\u2726",
+      "order": 20,
+      "path": "/screens/ai-assistant/chat"
+    }
+  ]
 }
