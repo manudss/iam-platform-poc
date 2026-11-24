@@ -153,3 +153,9 @@ in the fingerprint, so legacy fingerprints require review. This is an intentiona
 product limitation: no automatic reactivation/unlock is provided. Operators must
 reconcile provider channels, cursors and pending deliveries before deliberate
 recovery. A review tombstone does not prove the remote channel has stopped.
+
+The pinned Sheets0.19.5 createFileNotification requests a Drive watch expiration
+six days from creation. This is the requested native lifetime, not proof of the
+provider's actual expiry or successful removal. A review tombstone does not stop
+a remote channel: later callbacks are refused, not delivered into workflows.
+Operators must reconcile the actual provider channel and expiry before recovery.
