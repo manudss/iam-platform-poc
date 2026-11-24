@@ -74,7 +74,7 @@ def main():
  p=argparse.ArgumentParser()
  for arg in ['image','helper','preflight','launcher','out']:p.add_argument('--'+arg,required=True)
  p.add_argument('--delivery-extension')
- p.add_argument('--delivery-scenario', choices=['fresh','upgrade'])
+ p.add_argument('--delivery-scenario', choices=['fresh','upgrade','held-update'])
  p.add_argument('--baseline-image')
  p.add_argument('--pg-image',default='postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
  p.add_argument('--bao-image',default='openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315')
@@ -197,7 +197,7 @@ def main():
   def ipv6shape(x):return {'interfaces':x['interfaces'],'addresses':sorted(x['addresses'].splitlines()),'routes':sorted(' '.join(l.split()[:5]+l.split()[-1:]) for l in x['routes'].splitlines())}
   if ipv6shape(postipv6)!=ipv6shape(launch['ipv6State']):raise ValueError('IPv6 state changed after AppModule')
   if a.delivery_extension:
-   context={'scenario':'fresh','root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(proofpath),'image':a.image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}
+   context={'scenario':a.delivery_scenario,'root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(proofpath),'image':a.image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}
    context_path=root/'delivery-context.json';context_path.write_text(json.dumps(context));context_path.chmod(0o600)
    call(['python3',a.delivery_extension,str(context_path)])
    return

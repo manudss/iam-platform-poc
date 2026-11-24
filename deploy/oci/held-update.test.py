@@ -54,7 +54,9 @@ echo "$@" >> %s/args
 flock -n 8 || exit 24
 while [ $# -gt 0 ]; do case "$1" in --closed-receipt) r="$2";; --image) img="$2";; esac; shift; done
 ev=%s/ev-$$; mkdir -p $ev; for x in before after smoke; do echo "{\\"$x\\":1}" > $ev/$x.json; done
+echo '{"bk":1}' > $ev/bk.json
 for x in before after smoke; do printf '%%s %%s %%s\\n' $x $(sha256sum $ev/$x.json | cut -d' ' -f1) $ev/$x.json; done > $r.evidence
+printf 'backup-readback %%s %%s\\n' $(sha256sum $ev/bk.json | cut -d' ' -f1) $ev/bk.json >> $r.evidence
 echo '{}' > $r.launch
 [ -e %s/gates/FRONT ] || echo front-token > %s/gates/FRONT
 printf 'state=CLOSED_QUALIFIED\\nheld=true\\npublic_status=503\\nimage=%%s\\ngate_sha256=%%s\\nops_sha256=%%s\\nevidence_index=%%s\\nevidence_index_sha256=%%s\\nlaunch_proof=%%s\\nlaunch_proof_sha256=%%s\\n' "$img" $(sha256sum %s/gates/FRONT 2>/dev/null | cut -d' ' -f1) $(sha256sum %s/gates/OPS | cut -d' ' -f1) $r.evidence $(sha256sum $r.evidence | cut -d' ' -f1) $r.launch $(sha256sum $r.launch | cut -d' ' -f1) > $r
@@ -241,13 +243,16 @@ class RealHost(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'lacks'):hm.parse_receipt(p,'ghcr.io/manudss/iam-platform-poc@'+D(3))
  def test_opening_manifest_uses_exact_index_and_detects_tampering(self):
   files={}
-  for r in ['before','after','smoke']:
+  for r in ['before','after','smoke','backup-readback']:
    p=self.d/(r+'.json');p.write_text('{"%s":1}'%r);files[r]=p
   idx=self.d/'idx';idx.write_text(''.join('%s %s %s\n'%(r,hashlib.sha256(p.read_bytes()).hexdigest(),p) for r,p in files.items()))
   lp=self.d/'launch';lp.write_text('{}');rc=self.d/'rcpt';rc.write_text('x')
   fields={'evidence_index':str(idx),'evidence_index_sha256':hashlib.sha256(idx.read_bytes()).hexdigest(),'launch_proof':str(lp),'launch_proof_sha256':hashlib.sha256(lp.read_bytes()).hexdigest()}
   m={'opening_static':{'env':1,'integrity':2,'policy':3,'qualifier':4}}
   o=self.host().opening_manifest(m,fields,str(rc))['opening'];self.assertEqual(o['before']['path'],str(files['before']));self.assertEqual(set(o),{'env','integrity','policy','qualifier','closed_receipt','launch_proof','before','after','smoke'})
+  idx2=self.d/'idx2';idx2.write_text(''.join('%s %s %s\n'%(r,hashlib.sha256(p.read_bytes()).hexdigest(),p) for r,p in files.items() if r!='backup-readback'))
+  f2={**fields,'evidence_index':str(idx2),'evidence_index_sha256':hashlib.sha256(idx2.read_bytes()).hexdigest()}
+  with self.assertRaisesRegex(ValueError,'incomplete'):self.host().opening_manifest(m,f2,str(rc))
   files['after'].write_text('tampered')
   with self.assertRaisesRegex(ValueError,'changed since index'):self.host().opening_manifest(m,fields,str(rc))
   files['after'].write_text('{"after":1}');idx.write_text(idx.read_text()+'before aa bb\n')

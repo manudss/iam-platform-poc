@@ -725,10 +725,20 @@ if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
   if [ "$CLOSED_RECOVERY" = 1 ]; then
     EVIDENCE_INDEX="$CLOSED_RECEIPT.evidence"
     ( umask 077; set -C
+      [ -f "$CLOSED_BACKUP_PROOF" ] || exit 1
       for role in before after smoke; do
         set -- "$QUALIFICATION_EVIDENCE"/$role*; [ "$#" = 1 ] && [ -f "$1" ] || exit 1
-        printf '%s %s %s\n' "$role" "$(sha256sum "$1" | cut -d' ' -f1)" "$1"
-      done > "$EVIDENCE_INDEX" ) || fail 4 "cannot write exact qualification evidence index"
+      done
+      {
+        for role in before after smoke; do
+          set -- "$QUALIFICATION_EVIDENCE"/$role*
+          printf '%s %s %s\n' "$role" "$(sha256sum "$1" | cut -d' ' -f1)" "$1"
+        done
+        # Recovery inputs bound to the same index: readable backup proof, and the Bao config/policy when configured.
+        printf '%s %s %s\n' backup-readback "$(sha256sum "$CLOSED_BACKUP_PROOF" | cut -d' ' -f1)" "$CLOSED_BACKUP_PROOF"
+        [ -z "$BAO_CONFIG_FILE" ] || printf '%s %s %s\n' bao-config "$(sha256sum "$BAO_CONFIG_FILE" | cut -d' ' -f1)" "$BAO_CONFIG_FILE"
+        [ -z "$BAO_POLICY_FILE" ] || printf '%s %s %s\n' bao-policy "$(sha256sum "$BAO_POLICY_FILE" | cut -d' ' -f1)" "$BAO_POLICY_FILE"
+      } > "$EVIDENCE_INDEX" ) || fail 4 "cannot write exact qualification evidence index"
     ( umask 077; set -C; printf '%s\n' "$INTEGRITY_PROOF" 'state=CLOSED_QUALIFIED' "image=$IMAGE" "backup_readback_proof=$CLOSED_BACKUP_PROOF" "backup_readback_sha256=$(sha256sum "$CLOSED_BACKUP_PROOF" | cut -d' ' -f1)" 'held=true' 'public_status=503' "ops_sha256=$OPS_BARRIER_HASH" "gate_sha256=$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" "launcher_sha256=$LAUNCHER_HASH" "preflight_sha256=$PREFLIGHT_HASH" "implementation_sha256=$IMPLEMENTATION_HASH" "launch_proof=$CLOSED_LAUNCH_PROOF" "launch_proof_sha256=$CLOSED_LAUNCH_HASH" "qualification_evidence=$QUALIFICATION_EVIDENCE" "evidence_index=$EVIDENCE_INDEX" "evidence_index_sha256=$(sha256sum "$EVIDENCE_INDEX" | cut -d' ' -f1)" "ipv6_disabled_proved=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["ipv6DisabledProved"]).lower())' "$CLOSED_LAUNCH_PROOF")" "ipv6_state_sha256=$(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1]))["ipv6State"],sort_keys=True).encode()).hexdigest())' "$CLOSED_LAUNCH_PROOF")" > "$CLOSED_RECEIPT" ) || fail 4 "cannot write fresh closed receipt"
     log "closed-qualified: $CONTAINER runs $IMAGE under hold, backup $DATA_BACKUP; no public opening"
     exit 10

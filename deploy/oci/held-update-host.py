@@ -159,9 +159,9 @@ class Host:
   rows={}
   for line in raw.decode().splitlines():
    role,digest,p=line.split(' ',2)
-   if role in rows or role not in {'before','after','smoke'} or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('invalid evidence index')
+   if role in rows or role not in {'before','after','smoke','backup-readback','bao-config','bao-policy'} or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('invalid evidence index')
    rows[role]={'path':p,'sha256':digest}
-  if set(rows)!={'before','after','smoke'}:raise ValueError('evidence index incomplete')
+  if not {'before','after','smoke','backup-readback'}<=set(rows):raise ValueError('evidence index incomplete')
   for spec in rows.values():
    ev=PROTECT(spec['path'])
    if ev.stat().st_size>64*1024*1024 or hashlib.sha256(ev.read_bytes()).hexdigest()!=spec['sha256']:raise ValueError('evidence file changed since index')

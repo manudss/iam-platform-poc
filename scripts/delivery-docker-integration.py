@@ -227,9 +227,10 @@ raise SystemExit(r.returncode)
         env.write_text(''.join(k + '=' + v + '\n' for k, v in settings.items()))
         # Reconfigure the running fresh image, or start the actual old image on its original volume.
         stage='restart-baseline-with-companions'
-        docker('rm', '-f', c['app'])
-        current = c.get('baselineImage') or c['image']
-        docker('run', '-d', '--name', c['app'], '--network', c['network'], '--restart', 'no',
+        if c['scenario'] != 'held-update':   # held-update keeps the closed-helper-launched baseline (the real UIHELD-equivalent runtime)
+          docker('rm', '-f', c['app'])
+          current = c.get('baselineImage') or c['image']
+        if c['scenario'] != 'held-update': docker('run', '-d', '--name', c['app'], '--network', c['network'], '--restart', 'no',
                '-p', '127.0.0.1:18089:8080', '-v', c['data'] + ':/data', '--env-file', str(env),
                '-e', 'IAM_DEMO_SEED_MODE=never', current)
         stage='baseline-edge-health'
@@ -261,7 +262,13 @@ raise SystemExit(r.returncode)
 
         if warm.returncode:
             raise RuntimeError('candidate-qualifier-smoke-refused')
-        if c['scenario'] == 'fresh':
+        if c['scenario'] == 'held-update':
+            stage = 'held-update-chain'
+            held = load_module(source / 'scripts/held-update-scenario.py', 'held_update_scenario')
+            held.run({'c': c, 'root': root, 'out': out, 'bindir': bindir, 'gates': gates, 'origin': origin, 'env': env, 'source': source,
+                      'result': result, 'run': run, 'docker': docker, 'load_module': load_module, 'health': health,
+                      'pol': pol, 'policy': policy, 'configpath': Path(c['config']), 'config': json.loads(Path(c['config']).read_text())})
+        elif c['scenario'] == 'fresh':
             stage='native-browser-trust'
             run(['mkdir','-p','/root/.pki/nssdb'])
             run(['certutil','-N','--empty-password','-d','sql:/root/.pki/nssdb'],False)
@@ -403,7 +410,7 @@ raise SystemExit(r.returncode)
         # Only our fixed errors, not external stderr, paths, tokens, or environment.
         result['errorType'] = type(error).__name__
         result['commandFailure']=COMMAND_FAILURE
-        if str(error) in {'candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
+        if str(error) in {'prequalification-updater-refused','prequalification-receipt-mismatch','prequalification-index-mismatch','prequalification-index-incomplete','prequalification-evidence-mismatch','prequalification-preservation-changed','tampered-qualification-accepted','missing-qualification-accepted','supervision-not-ready','supervision-process-did-not-exit','clean-run-contract-failed','history-modes-wrong','kill-phase-never-reached','200-before-opening-after-kill','cursor-advanced-after-interruption','unexpected-watchdog-category','origin-not-503-after-rearm','four distinct fixture images required','baseline image must be fixture image 0','candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
                           'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused',
                           'held-fixture-invalid', 'held-deploy-not-refused', 'held-resume-not-refused',
                           'held-status-not-refused', 'held-queue-mutated', 'unknown-format-not-refused'}:
