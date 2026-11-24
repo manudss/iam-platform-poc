@@ -24,7 +24,9 @@ An admin chat that drives the IAM through the same MCP tool surface as external 
 4. Limits: 8 steps and 12 tool calls per turn; one running turn per conversation; conversations are owner-scoped; admin only.
 5. Redirects refused, timeouts, errors redacted (keys never echoed).
 
-Tests, all in CI: `apps/api/src/ai/ai-assistant.spec.ts` (URL rules, providers on fake HTTP, agent loop, injection, limits), `ai.e2e.spec.ts` (real Dolt and core: confirmation, branch confinement, poisoned tool output), `ai-screen.spec.ts` (headless Chrome, light/dark, desktop/mobile via `scripts/ai-assistant-screen-check.mjs`). The injection test exists before the plugin can be enabled.
+Tests, all in CI: `apps/api/src/ai/ai-assistant.spec.ts` (URL rules, providers on fake HTTP, agent loop, injection, limits), `ai.e2e.spec.ts` (real Dolt and core: confirmation, branch confinement, poisoned tool output), `ai-screen.spec.ts` (headless Chrome, light/dark, desktop/mobile via `scripts/ai-assistant-screen-check.mjs`). `scripts/ai-local-model-smoke.mjs` (workflow `ai-local-model`, not a required check) starts Ollama with `qwen2.5:3b` on a CI runner and checks that a real model calls a read tool, is paused on a write tool, and that a denial leaves it unexecuted.
+
+The injection test exists before the plugin can be enabled.
 
 ## Limits
 

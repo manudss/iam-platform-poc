@@ -1,0 +1,33 @@
+name: ai-local-model
+# Real local model proof for the AI assistant (not a required check): Ollama + a small tool-calling model.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['plugins/ai-assistant/**', 'scripts/ai-local-model-smoke.mjs', '.github/workflows/ai-local-model.yml']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > /tmp/ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/version && break; sleep 2; done
+      - name: Pull the model
+        run: ollama pull qwen2.5:3b
+      - name: Plugin dependencies and signature
+        run: |
+          (cd apps/api && npm ci)
+          node scripts/plugin-deps.mjs
+          node scripts/plugin-dev-setup.mjs
+      - name: Real model through the real agent loop
+        run: IAM_AI_LOCAL_URL=http://127.0.0.1:11434/v1 IAM_AI_LOCAL_MODEL=qwen2.5:3b node scripts/ai-local-model-smoke.mjs
+      - name: Ollama log
+        if: ${{ !cancelled() }}
+        run: tail -n 40 /tmp/ollama.log || true
