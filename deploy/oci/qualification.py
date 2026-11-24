@@ -10,7 +10,7 @@ from pathlib import Path
 STAGE='init'
 CHILD_STAGE=None
 DIAGNOSTIC_RE=re.compile(r'^QUALIFICATION_DIAG_V1:([a-z][a-z0-9-]{0,47})$',re.M)
-CHILD_STAGES={'capture-dolt','capture-bao','smoke-hold','smoke-health','smoke-workflows-before','smoke-auth-input','smoke-oidc-form','smoke-oidc-login','smoke-oidc-token','smoke-oidc-session','smoke-activations','smoke-negative-redirect','smoke-workflows-after','smoke-ledger','init'}
+CHILD_STAGES={'capture-dolt','capture-bao','smoke-hold','smoke-health','smoke-workflows-before','smoke-auth-input','smoke-oidc-form','smoke-oidc-login','smoke-oidc-token','smoke-oidc-session','smoke-activations','smoke-activations-parse','smoke-activations-validation','smoke-negative-redirect','smoke-workflows-after','smoke-ledger','init'}
 def stage(value):
     global STAGE,CHILD_STAGE
     STAGE=value;CHILD_STAGE=None
