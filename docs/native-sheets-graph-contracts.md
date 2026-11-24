@@ -21,8 +21,10 @@ Native config (plus host connectionId/executionMode/realConfirmed):
 
 Native result is an ARRAY of `{row,values}`. With useHeaderNames false, values
 keys are letters. With true, upstream maps to header names. Matching is native
-substring matching (case-sensitive when matchCase true), not an exact unique
-selection. A graph must apply its own exact comparisons and count policy.
+case-insensitive substring matching when matchCase=false. Despite its name,
+matchCase=true performs an exact case-sensitive equality comparison in installed
+0.19.5. Neither mode proves an exact unique selection when numberOfRows caps
+the returned matches. A graph must apply its own exact comparisons and count policy.
 startingRow defaults to1 and can include the header row, so set2 explicitly for
 data beginning at row2. Fixture tests cover the installed action, not a rewrite.
 
@@ -112,3 +114,25 @@ reusable workflow verdict. Historical real headers supplied by the coordinator
 are A nom, B prenom, C departement, D role, E process, F cree, G badge-fait,
 H email, I ticket. These are leads to revalidate live, never permission to write
 I=OK. Earlier generic I=OK input above is illustrative only, not a demo update.
+
+## Empty cells, absence and complete-read limits
+Installed get-many-rows pads each returned row to at least header width, using
+empty strings for omitted trailing cells. Header mapping can overwrite duplicate
+header names, so verify unique intended headers before using mapped fields.
+Fields beyond known headers or absent event properties can still be missing.
+Generic json-values now offers exists and an explicit missing=default policy
+with defaultJson (for example JSON empty string). Default policy remains error.
+Defaults apply to missing paths only, not null, false, zero or present empty text.
+Unsafe prototype paths always fail, including with exists/default.
+
+get-many-rows has no number-of-rows limit or pagination in the installed action.
+With first_row_headers=true it reads A2:ZZZ through the sheet values API; otherwise
+it reads the tab range. It separately reads headers and may reread for mapping,
+so this is not a consistent snapshot under concurrent edits. Columns beyond ZZZ
+are excluded by the explicit ranged form. Trailing all-empty rows need not appear.
+No complete=true flag or total row count is returned. A successful small-fixture
+response with both duplicate rows proves only that fixture, not provider-wide
+completeness, permissions, response limits or future sheet edits. For assisted
+demo selection, stop edits, validate expected headers/data extent, read the whole
+known data range and exact-filter all candidates. Never infer uniqueness from a
+Find Rows result capped at1 (or any cap that could hide another candidate).
