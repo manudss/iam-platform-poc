@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-JOBS = ('build', 'delivery_regressions', 'delivery_fresh', 'delivery_upgrade')
+JOBS = ('build', 'baseline_build', 'delivery_regressions', 'delivery_fresh', 'delivery_upgrade')
 SCENARIOS = ('fresh', 'upgrade')
 CHECKS = {
     'fresh': {'boot', 'migrationLedger', 'oidc', 'uiDocument', 'browserDesktopMobile', 'cleanup'},

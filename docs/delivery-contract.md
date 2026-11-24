@@ -10,6 +10,7 @@ Both scenarios
 consume that same digest, with the scripts checked out at its exact source SHA.
 No production account, volume, host or provider secret is used.
 
+- `baseline_build`: builds the exact current first-parent source once for the old-data scenario.
 - `delivery_regressions`: fail-closed aggregator mutations and all candidate
   Python deployment-control unit tests. These tests alone prove no real delivery.
 - `delivery_fresh`: real image boot, helper confinement, real synthetic services,
@@ -20,7 +21,7 @@ No production account, volume, host or provider secret is used.
   plus refusal tests with resume-required format2/3 state and a fixture pause,
   then a real closed updater receipt. The incident-specific opening consumer
   is tested separately when present, not required when absent from main.
-- `delivery_contract`: always runs, requires the exact set of successful jobs,
+- `delivery_contract`: always runs, requires the exact set of five successful prerequisite jobs,
   exactly two scenario receipts, exact source/digest identity, complete checks,
   evidence hashes and successful cleanup. Missing, skipped, cancelled or failed
   jobs and missing receipts fail. No continue-on-error or branch/path exceptions.
@@ -34,11 +35,14 @@ not applicable and never substituted from another branch. Draft fixes are never 
 The first run may expose harness problems; a red result is not automatically
 proof of a product problem. Reports must distinguish these cases.
 
-The fixed image 310 is the initial old-data baseline only, never the candidate.
-Its actual source SHA is read from the historical image revision label, never
-from HEAD^1 of a PR. It must be reviewed and advanced deliberately as deployment
-support changes. This is a new fictional seed retained across the test update,
-not a production dataset or a reproduction of its complete migration history.
+The baseline is built in the same run from the candidate merge commit's exact
+first parent. The baseline_build job returns its SHA and immutable pushed
+digest. Upgrade verifies the image revision label equals that built SHA and
+the actual candidate first parent. No preexisting moving tag or successful
+main workflow is required, avoiding a missing-image cycle after main advances.
+A local Git regression advances main and proves the new baseline is accepted
+while the old one is refused. This is still new fictional seed data retained
+across the update, not production data or its complete migration history.
 Normal delivery uses an explicitly synthetic format1 queue. Production-style
 resume-required formats2/3 and pause are refusal scenarios only. The candidate
 currently does not support format3; refusal is recorded, not called a successful

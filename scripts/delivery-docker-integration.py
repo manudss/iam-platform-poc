@@ -224,9 +224,8 @@ raise SystemExit(r.returncode)
             stage = 'real-ordered-queue-update'
             queue = root / 'queue.json'
             base = json.loads(docker('image','inspect',current))[0]['Config']['Labels']['org.opencontainers.image.revision']
-            if len(base)!=40:raise RuntimeError('baseline-source-label-invalid')
-            candidate_parent=run(['git','-C',str(source),'rev-parse','HEAD^1']).stdout.strip()
-            if candidate_parent!=base:raise RuntimeError('historical-baseline-is-not-candidate-first-parent-review-baseline')
+            baseline_contract=load_module(source/'scripts/delivery-baseline.py','baseline_identity')
+            baseline_contract.verify_baseline(source,base,os.environ.get('DELIVERY_BASELINE_SHA'))
             result['baselineSha']=base
             result['baselineDigest']=current.split('@')[1]
             state = {'format': 1, 'history': [{'sha': base, 'digest': current.split('@')[1]}]}
