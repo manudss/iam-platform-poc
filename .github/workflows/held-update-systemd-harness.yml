@@ -1,0 +1,71 @@
+name: Held-update real systemd contract
+# Manual, disposable GitHub-hosted runner only. Synthetic data, no production, no deploy, no secrets beyond GITHUB_TOKEN for GHCR.
+# base_digest: exact digest of an already built candidate app image (for example the Candidate delivery build output).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'scripts/systemd-held-*'
+      - '.github/workflows/held-update-systemd-harness.yml'
+  workflow_dispatch:
+    inputs:
+      base_digest:
+        description: 'exact ghcr.io/manudss/iam-platform-poc@sha256:... app image used as the fixture base'
+        required: true
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: held-update-systemd-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  held_update_chain:
+    name: Real PID1 systemd units in a disposable runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      HELD_SYSTEMD_MODE: '1'
+      NODE_PATH: /tmp/delivery-pw/node_modules
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require real PID1 systemd and cgroup v2
+        run: |
+          test "$(cat /proc/1/comm)" = systemd
+          sudo systemctl show --property=Version
+          test -f /sys/fs/cgroup/cgroup.controllers
+      - name: Build four distinct real fixture images and the first-parent repo
+        id: fx
+        run: |
+          set -eu
+          export DOCKER_CONFIG="$HOME/.docker"
+          sudo --preserve-env=DOCKER_CONFIG python3 scripts/held-update-fixture-build.py --base "ghcr.io/${{ github.repository }}@$(echo '${{ inputs.base_digest || 'sha256:29c7af7a349a79b9432a077d32ed681a25a8443f9d84b74db3c82aa98e38a7e1' }}' | sed 's/.*@//')" --repo /root/held-fixture-repo --out /root/held-fixture.json --tag-prefix "held-fixture-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "sha0=$(sudo jq -r '.images[0].sha' /root/held-fixture.json)" >> "$GITHUB_OUTPUT"
+          echo "digest0=$(sudo jq -r '.images[0].digest' /root/held-fixture.json)" >> "$GITHUB_OUTPUT"
+      - name: Install browser-free dependencies
+        run: sudo apt-get update && sudo apt-get install -y libnss3-tools
+      - name: Real closed updater, queue, gates and supervision (private /opt namespace)
+        env:
+          DELIVERY_SHA: ${{ steps.fx.outputs.sha0 }}
+          HELD_FIXTURE_JSON: /root/held-fixture.json
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,HELD_FIXTURE_JSON,NODE_PATH,HELD_SYSTEMD_MODE unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/systemd-held-fixture.py --image "ghcr.io/${{ github.repository }}@${{ steps.fx.outputs.digest0 }}" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario held-update --delivery-extension scripts/systemd-held-extension.py --out /tmp/held-update-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: held-update-proof
+          path: |
+            /tmp/held-update-proof/execution-evidence.json
+            /tmp/held-update-proof/delivery-receipt.json
+            /tmp/held-update-proof/closed-helper-fixture-failure.json
+            /tmp/held-update-proof/held-update/*.json
+            /tmp/held-update-proof/**/systemd-cleanup.json
+          if-no-files-found: warn
