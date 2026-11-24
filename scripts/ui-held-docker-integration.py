@@ -214,6 +214,63 @@ def main():
   history={'format':2,'history':[{'sha':base,'digest':'sha256:'+'1'*64}],'recoveries':[{'target':{'sha':base}}],'recovery_fence':base,'resume_required':True,'syntheticFixture':True}
   def manifest(state):return {'format':1,'kind':'reviewed-ui-held-after-fence','state_fingerprint':q.fingerprint(state),'expected_delivered':state['history'][-1],'authorization_ref':'synthetic fixture only, no operational authorization','evidence_refs':['disposable synthetic evidence'],'target':target,'chain':[{'sha':targetsha,'parent':base,'outcome':'ui-open-automation-held'}],'opening_controller':spec(binroot/'reviewed-ui-held.py'),'opening':opening}
   def queueargs(state,verb):return ['python3',str(binroot/'ordered-queue.py'),verb,'--state',str(state),'--repository',str(src),'--container',c['app'],'--pause-file',str(root/'PAUSE'),'--update-lock',str(root/'update.lock')]
+  # Independent probe uses a copied evidence directory, never adds after/smoke
+  # files to the controller's exact-one evidence inventory.
+  def probe_after(label):
+   import tempfile,re
+   with tempfile.TemporaryDirectory(prefix='qualifier-probe-',dir=root) as directory:
+    copied=Path(directory)/'evidence';shutil.copytree(evidence,copied)
+    args_copy=list(qualargs);args_copy[args_copy.index('--evidence-dir')+1]=str(copied)
+    attempt=command([str(binroot/'qualification.py'),'--phase','after',*args_copy],False)
+    qm=module(binroot/'qualification.py','probe_diagnostic')
+    found=re.findall(r'^QUALIFICATION_DIAG_V1:([a-z][a-z0-9-]{0,47})(?:/([a-z][a-z0-9-]{0,47}))?$',attempt.stderr,re.M)
+    item={'exitCode':attempt.returncode,'stage':'unclassified','childStage':'unclassified'}
+    if found:
+     parent,child=found[-1]
+     import ast
+     tree=ast.parse((binroot/'qualification.py').read_text())
+     allowed_stages={n.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='stage' and n.args and isinstance(n.args[0],ast.Constant)}
+     if parent in allowed_stages:item['stage']=parent
+     if child in qm.CHILD_STAGES:item['childStage']=child
+    captures=sorted(copied.glob('after-*'),key=lambda path:path.stat().st_mtime_ns)
+    if captures:
+     before_state=json.loads((copied/'before.json').read_text());after_state=json.loads(captures[-1].read_text())
+     changes=qm.compare(before_state,after_state,policy)
+     fixed={'dolt','bao','credentials','postgres-schema','postgres-tables','postgres-sequences'}
+     categories=sorted({value if value in fixed else value.split(':',1)[0] if value.split(':',1)[0] in {'postgres-rows','postgres-append-preservation','postgres-sequence-rewind'} else 'other' for value in changes})
+     item['changeCategories']=categories
+    result.setdefault('isolatedQualifierProbes',{})[label]=item
+  stage='initial-active-preservation-probe'
+  probe_after('initial-before-any-opening')
+  stage='caught-real-ui-failure-rearms'
+  for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
+  probe_after('caught-failure')
+  badui=gates/'INVALID_UI';badui.write_text('fixture invalid UI');badui.chmod(0o644)
+  failedstate=root/'queue-caught-failure.json';q.atomic(failedstate,history)
+  result['caughtFailureUnlinkObservation']={}
+  attempt=trace_and_kill(queueargs(failedstate,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],None,result['caughtFailureUnlinkObservation'])
+  failed=q.load(failedstate)
+  if attempt.get('queueExitCode')!=1 or attempt.get('completedGateUnlinks')!=2 or failed['history']!=history['history'] or failed.get('opening_intent',{}).get('phase')!='failed-access-rearmed':raise RuntimeError('caught failure not safely rearmed')
+  if any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('caught failure gate bytes/mode')
+  u.check_origins(origins,503);badui.unlink();result['caughtFailureAutomaticRearm']=True
+  # Fresh fixture queue state per crash scenario; do not clear an interrupted intent.
+  result['interruptions']=[]
+  for when in [1,2]:
+   for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
+   stage='real-controller-sigkill-'+str(when);state=root/('queue-kill-'+str(when)+'.json');q.atomic(state,history)
+   probe_after('sigkill-'+str(when))
+   result['crashDiagnostic']={}
+   crash=trace_and_kill(queueargs(state,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],when,result['crashDiagnostic'])
+   stage='sigkill-'+str(when)+'-evidence-intent-history-gates'
+   saved=q.load(state)
+   result['crashDiagnostic'].update({'intentPresent':bool(saved.get('opening_intent')),'historyUnchanged':saved['history']==history['history'],'gateAbsenceCountCorrect':sum(not p.exists() for p in [gate,ops])==when})
+   if not saved.get('opening_intent') or saved['history']!=history['history'] or sum(not p.exists() for p in [gate,ops])!=when:raise RuntimeError('crash evidence mismatch')
+   stage='sigkill-'+str(when)+'-rearm-command'
+   command(queueargs(state,'rearm-interrupted-opening'))
+   stage='sigkill-'+str(when)+'-rearm-state'
+   if q.load(state)['opening_intent']['phase']!='interrupted-access-rearmed' or any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('real rearm failed')
+   stage='sigkill-'+str(when)+'-rearm-503'
+   u.check_origins(origins,503);crash['manualRearmVerified503']=True;result['interruptions'].append(crash)
   stage='successful-real-opening';state=root/'queue-success.json';q.atomic(state,history);m=manifest(history)
   command(queueargs(state,'open-reviewed-ui-held'),input=json.dumps(m));s=q.load(state)
   if s['history'][-1].get('mode')!='ui-open-automation-held' or not s['resume_required'] or gate.exists() or ops.exists():raise RuntimeError('held UI result not distinct')
@@ -247,54 +304,10 @@ def main():
   stage='render-auth-exact-image';browserout=out/'ui';browserout.mkdir(exist_ok=True)
   command(['node',str(src/'scripts/ui-held-browser-proof.cjs'),origins[0],str(browserout),str(cert)])
   result['renderedAuthenticatedExactImage']=True
-  # Independent probe uses a copied evidence directory, never adds after/smoke
-  # files to the controller's exact-one evidence inventory.
-  def probe_after(label):
-   import tempfile,re
-   with tempfile.TemporaryDirectory(prefix='qualifier-probe-',dir=root) as directory:
-    copied=Path(directory)/'evidence';shutil.copytree(evidence,copied)
-    args_copy=list(qualargs);args_copy[args_copy.index('--evidence-dir')+1]=str(copied)
-    attempt=command([str(binroot/'qualification.py'),'--phase','after',*args_copy],False)
-    qm=module(binroot/'qualification.py','probe_diagnostic')
-    found=re.findall(r'^QUALIFICATION_DIAG_V1:([a-z][a-z0-9-]{0,47})(?:/([a-z][a-z0-9-]{0,47}))?$',attempt.stderr,re.M)
-    item={'exitCode':attempt.returncode,'stage':'unclassified','childStage':'unclassified'}
-    if found:
-     parent,child=found[-1]
-     import ast
-     tree=ast.parse((binroot/'qualification.py').read_text())
-     allowed_stages={n.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='stage' and n.args and isinstance(n.args[0],ast.Constant)}
-     if parent in allowed_stages:item['stage']=parent
-     if child in qm.CHILD_STAGES:item['childStage']=child
-    result.setdefault('isolatedQualifierProbes',{})[label]=item
-  stage='caught-real-ui-failure-rearms'
+  # Manual fixture closure only, not controller rearm evidence.
   for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
-  probe_after('caught-failure')
-  badui=gates/'INVALID_UI';badui.write_text('fixture invalid UI');badui.chmod(0o644)
-  failedstate=root/'queue-caught-failure.json';q.atomic(failedstate,history)
-  result['caughtFailureUnlinkObservation']={}
-  attempt=trace_and_kill(queueargs(failedstate,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],None,result['caughtFailureUnlinkObservation'])
-  failed=q.load(failedstate)
-  if attempt.get('queueExitCode')!=1 or attempt.get('completedGateUnlinks')!=2 or failed['history']!=history['history'] or failed.get('opening_intent',{}).get('phase')!='failed-access-rearmed':raise RuntimeError('caught failure not safely rearmed')
-  if any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('caught failure gate bytes/mode')
-  u.check_origins(origins,503);badui.unlink();result['caughtFailureAutomaticRearm']=True
-  # Fresh fixture queue state per crash scenario; do not clear an interrupted intent.
-  result['interruptions']=[]
-  for when in [1,2]:
-   for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
-   stage='real-controller-sigkill-'+str(when);state=root/('queue-kill-'+str(when)+'.json');q.atomic(state,history)
-   probe_after('sigkill-'+str(when))
-   result['crashDiagnostic']={}
-   crash=trace_and_kill(queueargs(state,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],when,result['crashDiagnostic'])
-   stage='sigkill-'+str(when)+'-evidence-intent-history-gates'
-   saved=q.load(state)
-   result['crashDiagnostic'].update({'intentPresent':bool(saved.get('opening_intent')),'historyUnchanged':saved['history']==history['history'],'gateAbsenceCountCorrect':sum(not p.exists() for p in [gate,ops])==when})
-   if not saved.get('opening_intent') or saved['history']!=history['history'] or sum(not p.exists() for p in [gate,ops])!=when:raise RuntimeError('crash evidence mismatch')
-   stage='sigkill-'+str(when)+'-rearm-command'
-   command(queueargs(state,'rearm-interrupted-opening'))
-   stage='sigkill-'+str(when)+'-rearm-state'
-   if q.load(state)['opening_intent']['phase']!='interrupted-access-rearmed' or any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('real rearm failed')
-   stage='sigkill-'+str(when)+'-rearm-503'
-   u.check_origins(origins,503);crash['manualRearmVerified503']=True;result['interruptions'].append(crash)
+  result['finalManualFixtureClosure']=True
+  probe_after('after-browser-active')
   result['passed']=True;result['controllerSHA256']=digest(binroot/'reviewed-ui-held.py');result['qualifierSHA256']=digest(binroot/'qualification.py');result['qualifierContainerSHA256']=digest(binroot/'qualification-container.mjs')
   if result['controllerSHA256']!=expected['reviewed-ui-held.py'] or result['qualifierSHA256']!=expected['qualification.py'] or result['qualifierContainerSHA256']!=expected['qualification-container.mjs']:raise RuntimeError('result source hash mismatch')
  except Exception as error:
