@@ -31,6 +31,7 @@ jobs:
       gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
       dev_stack_check_required: ${{ steps.plan.outputs.dev_stack_check_required }}
       dev_ui_browser_check_required: ${{ steps.plan.outputs.dev_ui_browser_check_required }}
+      automation_hold_required: ${{ steps.plan.outputs.automation_hold_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -408,6 +409,7 @@ jobs:
           path: /tmp/gallery-shots
           if-no-files-found: ignore
       - name: Isolated automation hold and synthetic backlog qualification
+        if: needs.control_policy.outputs.automation_hold_required == 'true'
         run: node scripts/automation-hold-container-check.mjs iam-demo:ci /tmp/automation-hold-proof
       - name: Clean isolated qualification resources
         if: always()

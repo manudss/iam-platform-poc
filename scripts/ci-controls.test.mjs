@@ -71,6 +71,20 @@ describe('versioned CI control applicability', () => {
     assert.deepEqual(auditReferences(repo,legacy,plan,"      - name: bootstrap\n        if: needs.control_policy.outputs.gallery_bootstrap_required == 'true'\n        run: docker cp fixture:/browser /tmp/gallery-browser"),[]);
   }));
 
+  it('requires automation hold qualification at introduction and exempts only its strict predecessors', () => {
+    const repo=process.cwd();const git=(...args)=>execFileSync('git',args,{cwd:repo,encoding:'utf8'}).trim();
+    const c=CONTROLS.find(c=>c.id==='automation_hold');assert.equal(c.path,'scripts/automation-hold-container-check.mjs');assert.equal(c.introducedBy,'4fdd6727518563904c37403168b5116fb86104e9');
+    const workflow=readFileSync(join(repo,'.github/workflows/ci.yml'),'utf8');
+    for(const [target,required] of [[git('rev-parse',c.introducedBy+'^1'),false],[c.introducedBy,true],[git('rev-parse','HEAD'),true]]){
+      const plan=controlPlan(repo,target);assert.equal(plan.controls.find(x=>x.id===c.id).required,required);auditReferences(repo,target,plan,workflow);
+      if(!required){
+        const withoutMapping=controlPlan(repo,target,CONTROLS.filter(x=>x.id!==c.id));assert.throws(()=>auditReferences(repo,target,withoutMapping,workflow),/unmapped or required script reference missing/);
+        assert.throws(()=>auditReferences(repo,target,plan,workflow.replace("        if: needs.control_policy.outputs.automation_hold_required == 'true'\n",'')),/not protected/);
+      }
+      assert.throws(()=>auditReferences(repo,target,plan,workflow+'\n      - run: node scripts/absent-qualification-control.mjs\n'),/unmapped or required script reference missing/);
+    }
+  });
+
   it('maps the Gallery acknowledgement control and audits its actual historical boundaries', () => {
     const repo = process.cwd();
     const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
