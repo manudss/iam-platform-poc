@@ -270,7 +270,18 @@ def run(x):
         first200 = next((t for t,status in sampler.rows if closed_seen is not None and t>=closed_seen and status==200),None)
         if closed_seen is None:raise RuntimeError('closure-marker-not-proved')
         if kill_phase is None:
-            if wres['action'] != 'completed' or st['history'][-1]['sha'] != chain[-1]['sha'] or opening_seen is None or first200 is None or first200 < opening_seen: raise RuntimeError('clean-run-contract-failed')
+            if wres['action'] != 'completed' or st['history'][-1]['sha'] != chain[-1]['sha'] or opening_seen is None or first200 is None or first200 < opening_seen:
+                # Fixed enums, booleans and source line numbers only. Never publish private worker output.
+                import re
+                log=(folder/'worker.log').read_text(errors='replace') if (folder/'worker.log').exists() else ''
+                rec['contract']={'watchdogCompleted':wres['action']=='completed','targetReached':st['history'][-1]['sha']==chain[-1]['sha'],'openingObserved':opening_seen is not None,'postClosure200Observed':first200 is not None,'ordered200':first200 is not None and opening_seen is not None and first200>=opening_seen}
+                phase=str((st.get('opening_intent') or {}).get('phase',''))
+                rec['failurePhase']=phase if re.fullmatch(r'[a-z0-9-]{1,100}',phase) else 'unknown'
+                rec['sourceFrames']=[{'module':m,'line':int(n)} for m,n in re.findall(r'File "[^"\n]*/(held-update-host|ordered-queue|held-update-durable|reviewed-ui-held)\.py", line ([0-9]{1,6})',log)][-16:]
+                rec['exceptionTypes']=re.findall(r'^(ValueError|RuntimeError|FileNotFoundError|PermissionError|TypeError|KeyError|TimeoutError):',log,re.M)[-4:]
+                report['scenarios'][name]=rec
+                (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2,sort_keys=True))
+                raise RuntimeError('clean-run-contract-failed')
             if [h['mode'] for h in st['history'][-n:]] != ['closed-qualified-held'] * (n - 1) + ['ui-open-automation-held']: raise RuntimeError('history-modes-wrong')
             rec['zero_200_before_opening'] = True
         else:
