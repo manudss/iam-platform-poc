@@ -28,8 +28,15 @@ jobs:
     name: Held-update 1 and 3 successors, real closed updater, interruptions
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [clean, interruptions, orphan]
     env:
       NODE_PATH: /tmp/delivery-pw/node_modules
+      HELD_SOURCE_SHA: ${{ github.sha }}
+      HELD_RUN_ATTEMPT: ${{ github.run_attempt }}
+      HELD_SCENARIO_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -46,6 +53,7 @@ jobs:
           python3 deploy/oci/held-update.test.py
           python3 deploy/oci/held-update-durable.test.py
           python3 scripts/held-update-progress.test.py
+          python3 scripts/held-update-verdict.test.py
           python3 deploy/oci/ordered-queue.test.py
           node --test deploy/oci/update.test.mjs
       - name: Build four distinct real fixture images and the first-parent repo
@@ -63,14 +71,14 @@ jobs:
           DELIVERY_SHA: ${{ steps.fx.outputs.sha0 }}
           HELD_FIXTURE_JSON: /root/held-fixture.json
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,HELD_FIXTURE_JSON,NODE_PATH unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "ghcr.io/${{ github.repository }}@${{ steps.fx.outputs.digest0 }}" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario held-update --delivery-extension scripts/delivery-docker-integration.py --out /tmp/held-update-proof
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,HELD_FIXTURE_JSON,NODE_PATH,HELD_SCENARIO_SHARD,HELD_SOURCE_SHA,HELD_RUN_ATTEMPT unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "ghcr.io/${{ github.repository }}@${{ steps.fx.outputs.digest0 }}" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario held-update --delivery-extension scripts/delivery-docker-integration.py --out /tmp/held-update-proof
       - name: Publish only the bounded diagnostic for the unprivileged artifact uploader
         if: always()
         run: sudo python3 scripts/held-update-progress.py --publish-diagnostic /tmp/held-update-proof
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: held-update-proof
+          name: held-update-proof-${{ matrix.shard }}
           path: |
             /tmp/held-update-proof/execution-evidence.json
             /tmp/held-update-proof/delivery-receipt.json
@@ -78,3 +86,29 @@ jobs:
             /tmp/held-update-proof/held-progress.json
             /tmp/held-update-proof/held-update/*.json
           if-no-files-found: warn
+
+  held_update_verdict:
+    name: Complete held-update chain evidence
+    if: always()
+    needs: held_update_chain
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: held-update-proof-*
+          path: /tmp/held-update-shards
+      - name: Require all independently completed scenarios
+        env:
+          HELD_EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          HELD_EXPECTED_RUN_ID: ${{ github.run_id }}
+          HELD_EXPECTED_ATTEMPT: ${{ github.run_attempt }}
+          HELD_JOBS_RESULT: ${{ needs.held_update_chain.result }}
+        run: python3 scripts/held-update-verdict.py /tmp/held-update-shards --out /tmp/held-update-verdict.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: held-update-verdict
+          path: /tmp/held-update-verdict.json

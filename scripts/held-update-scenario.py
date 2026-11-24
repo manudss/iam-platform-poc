@@ -331,12 +331,17 @@ def run(x):
         report['scenarios'][name] = rec
         progress.safe(name,'scenario-complete')
 
-    supervise('one-clean', 1)
-    supervise('three-clean', 3)
-    supervise('three-kill-closed-step-0-running', 3, 'closed-step-0-running')
-    supervise('three-kill-closed-step-1-qualified', 3, 'closed-step-1-qualified')
-    supervise('three-kill-opening', 3, 'opening')
-    supervise('one-orphan-updater', 1, 'closed-step-0-updater-spawned', 'orphan')
-    if not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
-    progress.safe('one-orphan-updater','all-scenarios-complete')
+    selections={
+        'clean':[('one-clean',1),('three-clean',3)],
+        'interruptions':[('three-kill-closed-step-0-running',3,'closed-step-0-running'),('three-kill-closed-step-1-qualified',3,'closed-step-1-qualified'),('three-kill-opening',3,'opening')],
+        'orphan':[('one-orphan-updater',1,'closed-step-0-updater-spawned','orphan')],
+    }
+    selected=os.environ.get('HELD_SCENARIO_SHARD','all')
+    if selected not in {*selections,'all'}:raise RuntimeError('unknown-scenario-shard')
+    cases=sum(selections.values(),[]) if selected=='all' else selections[selected]
+    report['scenarioSelection']=selected
+    report['qualificationContext']={'sourceSHA':os.environ.get('HELD_SOURCE_SHA',''),'runID':os.environ.get('GITHUB_RUN_ID',''),'attempt':os.environ.get('HELD_RUN_ATTEMPT','')}
+    for case in cases:supervise(*case)
+    if selected in {'all','interruptions'} and not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
+    progress.safe(cases[-1][0],'all-scenarios-complete')
     result['checks']['heldUpdateChain'] = True
