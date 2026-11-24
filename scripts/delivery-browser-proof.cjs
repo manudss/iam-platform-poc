@@ -1,6 +1,6 @@
 // Synthetic runner browser proof only. No production origin or credentials.
 const fs=require('fs');
-let fixedStage='browser-import',proofPage,proofOut,networkFailed=0,httpErrors=0,proofOrigin,resourceSummary={},hydrationReclicks=0,finalApplications={};
+let fixedStage='browser-import',proofPage,proofOut,networkFailed=0,httpErrors=0,proofOrigin,resourceSummary={},hydrationReclicks=0,finalApplications={},applicationImages={};
 const safeNames=new Set(['Error','TimeoutError','TypeError','ReferenceError','SyntaxError']);
 function resource(request,status,failed){
  let sameOrigin=false,expectedDecorativeAbort=false,endpoint='other';
@@ -10,7 +10,7 @@ function resource(request,status,failed){
  const item={resourceType,status,sameOrigin,endpoint,phase:fixedStage,failed,expectedDecorativeAbort};const key=JSON.stringify(item);
  if(!resourceSummary[key])resourceSummary[key]={...item,count:0};resourceSummary[key].count++;
 }
-function counters(){return {networkIdleRequired:false,networkFailed,httpErrors,resources:Object.values(resourceSummary),hydrationReclicks,finalApplications}}
+function counters(){return {networkIdleRequired:false,networkFailed,httpErrors,resources:Object.values(resourceSummary),hydrationReclicks,finalApplications,applicationImages}}
 function diagnostic(error){
  let route='other';
  try{const p=new URL(proofPage.url()).pathname;route=p==='/login'?'login':(p==='/my-applications'||p==='/callback'||p.startsWith('/core/'))?'auth':'other'}catch{}
@@ -54,11 +54,16 @@ function diagnostic(error){
    if(await page.locator('app-launchpad #lp-problem').count()){finalApplications[name]='error';throw Error('applications load failed')}
    await page.waitForSelector('app-launchpad [data-app],app-launchpad #lp-empty');
    finalApplications[name]=await page.locator('app-launchpad [data-app]').count()?'loaded':'empty';
+   if(finalApplications[name]!=='loaded')throw Error('fixture user has no applications');
+   fixedStage=name+'-application-images';
+   await page.waitForFunction(()=>Array.from(document.querySelectorAll('app-launchpad img.lp-logo')).every(i=>i.complete&&i.naturalWidth>0),{},{timeout:30000});
+   applicationImages[name]=await page.locator('app-launchpad img.lp-logo').evaluateAll(images=>({count:images.length,complete:images.filter(i=>i.complete&&i.naturalWidth>0).length}));
+   if(applicationImages[name].count<1||applicationImages[name].complete!==applicationImages[name].count)throw Error('application images incomplete');
    // No tokens, cookies, raw URLs, page text or request contents are exported.
    await page.screenshot({path:out+'/'+name+'-authenticated.png',fullPage:true});
    await context.close();
   }
-  fs.writeFileSync(out+'/browser-proof.json',JSON.stringify({exactImageFixture:true,nativeTrustedTLS:true,desktop:true,mobile:true,authenticatedSyntheticUser:true,visualPixelInspectionPending:true,...counters()}));
+  fs.writeFileSync(out+'/browser-proof.json',JSON.stringify({exactImageFixture:true,nativeTrustedTLS:true,desktop:true,mobile:true,authenticatedSyntheticUser:true,capturesProduced:true,humanPixelInspectionAutomated:false,...counters()}));
  }catch(error){
   fs.writeFileSync(out+'/browser-failure-stage.json',JSON.stringify(diagnostic(error)));
   if(proofPage&&!proofPage.isClosed())await proofPage.screenshot({path:out+'/failure.png',fullPage:true}).catch(()=>{});

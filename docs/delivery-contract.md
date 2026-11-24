@@ -77,3 +77,13 @@ only launcher_sha256, preflight_sha256 and implementation_sha256 repeat, each
 exactly twice with identical lowercase hex64 values. Every other key occurs
 once. Negative tests cover other duplicates, divergent values and wrong counts.
 The real output bytes are checked without importing the incident opening code.
+
+Browser evidence requires nonempty applications for the seeded demo-alice user,
+all visible app-logo images loaded and decoded, and four screenshots plus the
+browser JSON. All five browser artifacts are rehashed by the aggregate. This
+asserts the browser path and produces captures; it does not automate human
+visual judgment. Human pixel inspection is recorded only for a specific run.
+Earlier 849 screenshots were taken before all app logos decoded (the browser
+recorded eleven HTTP 200 image responses per viewport); the contract now waits
+for image completion before capturing. Decorative external picsum backgrounds
+remain intentionally blocked and may show a small broken-image marker.

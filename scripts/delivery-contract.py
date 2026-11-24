@@ -64,6 +64,8 @@ def main():
     # Validate uploaded evidence bytes, not merely SHA-shaped strings in a receipt.
     for path in sorted(root.rglob('delivery-receipt.json')):
         record=json.loads(path.read_text())
+        if record.get('scenario')=='fresh' and not {'ui/browser-proof.json','ui/desktop-login.png','ui/mobile-login.png','ui/desktop-authenticated.png','ui/mobile-authenticated.png'}.issubset(record.get('evidence',{})):
+            result['errors'].append('browser-artifacts-missing')
         execution=path.parent/'execution-evidence.json'
         if execution.is_file():
             measured=json.loads(execution.read_text())
@@ -71,7 +73,7 @@ def main():
                 result['errors'].append('receipt-execution-evidence-mismatch')
         for name, expected in record.get('evidence', {}).items():
             item=path.parent/name
-            if Path(name).name!=name or item.is_symlink() or not item.is_file() or hashlib.sha256(item.read_bytes()).hexdigest()!=expected:
+            if Path(name).is_absolute() or '..' in Path(name).parts or name not in {'execution-evidence.json','candidate-script-hashes.json','ui/browser-proof.json','ui/desktop-login.png','ui/mobile-login.png','ui/desktop-authenticated.png','ui/mobile-authenticated.png'} or item.is_symlink() or not item.is_file() or hashlib.sha256(item.read_bytes()).hexdigest()!=expected:
                 result['errors'].append('artifact-evidence-mismatch')
     result['passed']=not result['errors']
     Path(args.out).write_text(json.dumps(result, indent=2) + '\n')

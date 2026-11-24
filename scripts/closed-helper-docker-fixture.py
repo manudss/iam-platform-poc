@@ -240,6 +240,10 @@ def main():
     public=out/'execution-evidence.json'
     public.write_text(json.dumps({k:v for k,v in record.items() if k not in ['evidence']},sort_keys=True,indent=2))
     record['evidence']={public.name:sha(public.read_bytes()),'candidate-script-hashes.json':sha((out/'candidate-script-hashes.json').read_bytes())}
+    if a.delivery_scenario=='fresh':
+     for name in ['browser-proof.json','desktop-login.png','mobile-login.png','desktop-authenticated.png','mobile-authenticated.png']:
+      path=out/'ui'/name
+      if path.is_file():record['evidence']['ui/'+name]=sha(path.read_bytes())
    (out/'delivery-receipt.json').write_text(json.dumps(record,indent=2))
    if not clean:raise RuntimeError('delivery fixture cleanup incomplete')
   shutil.rmtree(root)

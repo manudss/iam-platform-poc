@@ -72,13 +72,18 @@ class DeliveryVerdict(unittest.TestCase):
             root=Path(temp)
             for receipt in self.receipts:
                 folder=root/receipt['scenario'];folder.mkdir()
-                item=folder/'proof.json';item.write_text('real proof')
+                item=folder/'candidate-script-hashes.json';item.write_text('real proof')
                 receipt['evidence']={item.name:hashlib.sha256(item.read_bytes()).hexdigest()}
+                if receipt['scenario']=='fresh':
+                    (folder/'ui').mkdir()
+                    for name in ['browser-proof.json','desktop-login.png','mobile-login.png','desktop-authenticated.png','mobile-authenticated.png']:
+                        browser=folder/'ui'/name;browser.write_bytes(b'fixture-bytes')
+                        receipt['evidence']['ui/'+name]=hashlib.sha256(browser.read_bytes()).hexdigest()
                 (folder/'delivery-receipt.json').write_text(json.dumps(receipt))
             needs=root/'needs.json';needs.write_text(json.dumps(self.jobs))
             args=['python3',str(Path(__file__).with_name('delivery-contract.py')),'--needs',str(needs),'--receipts',str(root),'--sha',self.sha,'--digest',self.digest,'--out',str(root/'verdict.json')]
             self.assertEqual(subprocess.run(args,capture_output=True).returncode,0)
-            (root/'upgrade/proof.json').write_text('changed bytes')
+            (root/'upgrade/candidate-script-hashes.json').write_text('changed bytes')
             self.assertNotEqual(subprocess.run(args,capture_output=True).returncode,0)
 
     def test_truthy_is_not_true(self):
