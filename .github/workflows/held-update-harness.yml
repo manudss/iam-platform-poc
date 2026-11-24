@@ -6,6 +6,11 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - 'scripts/held-update-*'
+      - 'scripts/delivery-docker-integration.py'
+      - 'scripts/closed-helper-docker-fixture.py'
+      - 'deploy/oci/held-update*'
+      - 'deploy/oci/ordered-queue.py'
+      - 'deploy/oci/update.sh'
       - '.github/workflows/held-update-harness.yml'
   workflow_dispatch:
     inputs:
@@ -15,6 +20,9 @@ on:
 permissions:
   contents: read
   packages: write
+concurrency:
+  group: held-update-harness-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   held_update_chain:
     name: Held-update 1 and 3 successors, real closed updater, interruptions

@@ -214,6 +214,10 @@ def watchdog(folder,spec,recover=recovery,poll=5):
    try:confirmed=decision(folder,spec,read(spec['state']))
    except Exception:continue
    if confirmed!=action:continue
+   try:
+    if REQUIRE_UNITS:verify_units(folder,'watchdog',spec)   # systemd identity must still hold at the second tick, immediately before the single attempt
+   except Exception:
+    atomic(folder/'watchdog-result.json',{'action':'identity-unknown-report-only','wall':time.time(),'report_only':True,'needs_operator':True});return
    rec=recover(folder,spec);atomic(folder/'watchdog-result.json',{'action':action,'wall':time.time(),'recovery':rec,'needs_operator':True});return
   if action not in ['observe-live-queue','pre-go-await','await-intent','orphan-queue-alive-observe','state-unreadable']:
    atomic(folder/'watchdog-result.json',{'action':action,'wall':time.time(),'report_only':action.endswith('report-only') or action=='completed-audit-mismatch-report-only','needs_operator':action not in ('completed','recovery-done')});return

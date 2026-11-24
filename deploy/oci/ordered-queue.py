@@ -307,27 +307,43 @@ HOOK_PHASES=re.compile(r'closed-step-\d{1,3}-(running|qualified)|ops-gate-create
 HOOK_PROTECT=lambda st:not(st.st_uid or st.st_gid or st.st_mode&0o022)   # isolated runner dir must be root-owned, not group/world writable; tests may replace
 PRODUCTION_STATE='/opt/lyam/deploy-queue/state.json'
 def phase_hook_from(manifest,state_path):
-    """Test-only deterministic suspension point, inert by default. Enabled ONLY by a 'phase_hook' key inside the reviewed, hash-bound manifest
-    (never by environment or argv), and only for a non-production state path whose hook directory is protected and holds a sentinel that binds
-    the state path and engagement. After a phase is durably persisted it writes <dir>/<phase>.reached (exclusive) and waits for <dir>/<phase>.release;
-    a missing release within the timeout RAISES (the fixture fails, the phase is never silently skipped). Returns a callable or None."""
+    """Test-only deterministic suspension point, inert by default. Narrow claim: it is enabled ONLY by a 'phase_hook' key in the reviewed,
+    hash-bound manifest (never environment or argv), refuses any alias of the production state file (resolved path AND device/inode), and
+    requires a hook directory whose WHOLE ancestry is real and protected. It does NOT prove the host is disposable; the isolation of the
+    runner stays an external fact. Handshake is fresh: before any intent, no reached/release trace may exist for the configured phases.
+    After a phase is durably persisted it writes <dir>/<phase>.reached (exclusive, no-follow; pid, phase, engagement, random nonce) and waits
+    for <dir>/<phase>.release, a protected regular file whose content equals the reached text exactly. Timeout RAISES. Returns a callable or None."""
     cfg=manifest.get('phase_hook')
     if cfg is None:return None
-    if not isinstance(cfg,dict) or set(cfg)!={'dir','phases','timeout'} or type(cfg['timeout']) not in (int,float) or not 1<=cfg['timeout']<=120 or not isinstance(cfg['phases'],list) or not cfg['phases'] or not all(isinstance(x,str) and HOOK_PHASES.fullmatch(x) for x in cfg['phases']):
+    if not isinstance(cfg,dict) or set(cfg)!={'dir','phases','timeout'} or type(cfg['timeout']) not in (int,float) or not 1<=cfg['timeout']<=120 or not isinstance(cfg['phases'],list) or not cfg['phases'] or not all(isinstance(x,str) and HOOK_PHASES.fullmatch(x) for x in cfg['phases']) or len(set(cfg['phases']))!=len(cfg['phases']):
         raise ValueError('invalid phase_hook')
-    if str(Path(state_path).absolute())==PRODUCTION_STATE:raise ValueError('phase_hook refused on the production state path')
+    sp=Path(state_path).absolute();prod=Path(PRODUCTION_STATE)
+    if '..' in sp.parts or str(sp.resolve())==PRODUCTION_STATE or str(sp)==PRODUCTION_STATE:raise ValueError('phase_hook refused on the production state path')
+    if prod.exists() and sp.exists() and os.path.samefile(sp,prod):raise ValueError('phase_hook refused on an alias of the production state file')
+    if any(str(x).startswith(PRODUCTION_STATE.rsplit('/',1)[0]) for x in (sp,sp.resolve())):raise ValueError('phase_hook refused inside the production queue directory')
     d=Path(cfg['dir'])
-    if not d.is_absolute() or d.is_symlink() or not d.is_dir() or d.resolve()!=d or not HOOK_PROTECT(d.lstat()):raise ValueError('phase_hook directory must be absolute, real and protected')
+    if not d.is_absolute() or '..' in d.parts:raise ValueError('phase_hook directory must be absolute without dot segments')
+    for anc in [d]+list(d.parents):
+        st=anc.lstat()
+        if anc.is_symlink() or not anc.is_dir() or not HOOK_PROTECT(st):raise ValueError('phase_hook directory ancestry must be real and protected')
     sent=d/'ISOLATED_HARNESS'
-    want=hashlib.sha256(('%s\n%s'%(Path(state_path).absolute(),manifest.get('engagement_id'))).encode()).hexdigest()
+    want=hashlib.sha256(('%s\n%s'%(sp,manifest.get('engagement_id'))).encode()).hexdigest()
     if sent.is_symlink() or not sent.is_file() or not HOOK_PROTECT(sent.lstat()) or sent.read_text().strip()!=want:raise ValueError('phase_hook sentinel must bind this state path and engagement')
     phases=set(cfg['phases']);timeout=float(cfg['timeout'])
+    for ph in phases:
+        for suffix in ('.reached','.release'):
+            if os.path.lexists(d/(ph+suffix)):raise ValueError('stale phase_hook trace refused before any intent: '+ph+suffix)
+    engagement=manifest.get('engagement_id')
     def hook(phase):
         if phase not in phases:return
-        flag=d/(phase+'.reached');fd=os.open(flag,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-        with os.fdopen(fd,'w') as f:f.write(json.dumps({'pid':os.getpid(),'phase':phase}));f.flush();os.fsync(f.fileno())
+        flag=d/(phase+'.reached');text=json.dumps({'pid':os.getpid(),'phase':phase,'engagement_id':engagement,'nonce':os.urandom(16).hex()},sort_keys=True)
+        fd=os.open(flag,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'w') as f:f.write(text);f.flush();os.fsync(f.fileno())
         end=time.monotonic()+timeout;rel=d/(phase+'.release')
-        while not rel.exists():
+        while True:
+            if os.path.lexists(rel):
+                if rel.is_symlink() or not rel.is_file() or not HOOK_PROTECT(rel.lstat()) or rel.read_text()!=text:raise ValueError('phase_hook release is not the fresh protected echo of the reached marker')
+                return
             if time.monotonic()>end:raise ValueError('phase_hook release timeout at '+phase)
             time.sleep(.05)
     return hook

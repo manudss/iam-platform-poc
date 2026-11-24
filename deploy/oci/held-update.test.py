@@ -60,6 +60,7 @@ printf 'backup-readback %%s %%s\\n' $(sha256sum $ev/bk.json | cut -d' ' -f1) $ev
 echo '{}' > $r.launch
 [ -e %s/gates/FRONT ] || echo front-token > %s/gates/FRONT
 printf 'state=CLOSED_QUALIFIED\\nheld=true\\npublic_status=503\\nimage=%%s\\ngate_sha256=%%s\\nops_sha256=%%s\\nevidence_index=%%s\\nevidence_index_sha256=%%s\\nlaunch_proof=%%s\\nlaunch_proof_sha256=%%s\\n' "$img" $(sha256sum %s/gates/FRONT 2>/dev/null | cut -d' ' -f1) $(sha256sum %s/gates/OPS | cut -d' ' -f1) $r.evidence $(sha256sum $r.evidence | cut -d' ' -f1) $r.launch $(sha256sum $r.launch | cut -d' ' -f1) > $r
+[ -z "$FAKE_CFG" ] || echo config_sha256=$FAKE_CFG >> $r
 exit %s
 """%(d,lock,lock,d,d,d,d,d,rc_expr)
 
@@ -121,7 +122,7 @@ class Run(unittest.TestCase):
    if (d/'closed-step-0-qualified.reached').exists():break
    time.sleep(.02)
   self.assertTrue((d/'closed-step-0-qualified.reached').exists());self.assertEqual(q.load(self.path)['opening_intent']['phase'],'closed-step-0-qualified','phase is durable when the hook holds')
-  self.assertTrue(t.is_alive());(d/'closed-step-0-qualified.release').write_text('1');t.join(10)
+  self.assertTrue(t.is_alive());(d/'closed-step-0-qualified.release').write_text((d/'closed-step-0-qualified.reached').read_text());t.join(10)
   self.assertEqual(out['st']['history'][-1]['sha'],S(3))
  def test_phase_hook_timeout_fails_never_passes(self):
   m=manifest(self.s,3);d=self.hookdir(m,timeout=1)
@@ -140,6 +141,43 @@ class Run(unittest.TestCase):
   import unittest.mock as um
   with self.assertRaisesRegex(ValueError,'production'):q.phase_hook_from(m,q.PRODUCTION_STATE)
   self.assertNotIn('opening_intent',{k:v for k,v in q.load(self.path).items() if k=='opening_intent' and v and v.get('phase')=='held-update-prepared'} )
+ def test_phase_hook_alias_ancestry_and_stale_handshake_refusals(self):
+  import os,threading,time,tempfile
+  m=manifest(self.s,3);d=self.hookdir(m)
+  prod=Path(tempfile.mkdtemp())/'queue'/'state.json';prod.parent.mkdir();prod.write_text('{}');old=q.PRODUCTION_STATE;q.PRODUCTION_STATE=str(prod)
+  self.addCleanup(lambda:setattr(q,'PRODUCTION_STATE',old))
+  alias=Path(tempfile.mkdtemp())/'alias.json';alias.symlink_to(prod)
+  with self.assertRaisesRegex(ValueError,'production|alias'):q.phase_hook_from(m,alias)
+  hard=Path(tempfile.mkdtemp())/'hard.json';os.link(prod,hard)
+  with self.assertRaisesRegex(ValueError,'alias'):q.phase_hook_from(m,hard)
+  with self.assertRaisesRegex(ValueError,'production'):q.phase_hook_from(m,str(prod.parent)+'/../queue/state.json')
+  with self.assertRaisesRegex(ValueError,'production'):q.phase_hook_from(m,str(prod.parent/'other.json'))
+  q.PRODUCTION_STATE=old
+  # a stale trace refuses before any intent
+  (d/'closed-step-0-qualified.release').write_text('old')
+  with self.assertRaisesRegex(ValueError,'stale'):self.run_with(m)
+  self.assertNotIn('opening_intent',q.load(self.path));(d/'closed-step-0-qualified.release').unlink()
+  (d/'closed-step-0-qualified.release').symlink_to('/etc/hostname')
+  with self.assertRaisesRegex(ValueError,'stale'):self.run_with(m)
+  (d/'closed-step-0-qualified.release').unlink()
+  # dotted directory, unprotected ancestor
+  m2=manifest(self.s,3);self.hookdir(m2);m2['phase_hook']['dir']=str(d)+'/../'+d.name
+  with self.assertRaisesRegex(ValueError,'dot'):q.phase_hook_from(m2,self.path)
+  m3=manifest(self.s,3);dd=self.hookdir(m3);bad=dd.parent
+  q.HOOK_PROTECT=lambda st:st.st_ino!=bad.lstat().st_ino
+  with self.assertRaisesRegex(ValueError,'ancestry'):q.phase_hook_from(m3,self.path)
+  q.HOOK_PROTECT=lambda st:True
+  # wrong echo release is refused (a release for another engagement/phase/nonce)
+  m4=manifest(self.s,3);d4=self.hookdir(m4,timeout=5);out={}
+  def run():
+   try:self.run_with(m4)
+   except Exception as e:out['err']=str(e)
+  t=threading.Thread(target=run);t.start()
+  for _ in range(100):
+   if (d4/'closed-step-0-qualified.reached').exists():break
+   time.sleep(.02)
+  (d4/'closed-step-0-qualified.release').write_text('{"nonce":"stale"}');t.join(10)
+  self.assertIn('fresh protected echo',out.get('err',''))
  def test_phase_hook_holds_a_real_process_killable_at_the_phase(self):
   import subprocess,sys,time,os,signal
   m=manifest(self.s,3);d=self.hookdir(m,phases=('opening',),timeout=30)
@@ -274,13 +312,27 @@ class RealHost(unittest.TestCase):
  def test_closed_step_installs_config_before_updater_and_refusal_stops_before_updater(self):
   dst,sc=self.stepcfg();h=self.host(plan=True);h.step_configs=sc
   fd=os.open(self.d/'lock',os.O_RDWR);import fcntl;fcntl.flock(fd,fcntl.LOCK_EX)
-  f0,p0=h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2);self.assertEqual(json.loads(dst.read_text())['image'],'ghcr.io/manudss/iam-platform-poc@'+D(3))
+  os.environ['FAKE_CFG']=sc['steps'][0]['sha256']
+  try:f0,p0=h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2)
+  finally:os.environ.pop('FAKE_CFG')
+  self.assertEqual(json.loads(dst.read_text())['image'],'ghcr.io/manudss/iam-platform-poc@'+D(3))
   before=(self.d/'args').read_text() if (self.d/'args').exists() else ''
   for n in ['OPS','FRONT']:
    if (self.d/'gates'/n).exists():(self.d/'gates'/n).unlink()
   h2=self.host(plan=True);h2.step_configs=self.stepcfg(mut=lambda i,c:{**c,'network':'z'})[1]
   with self.assertRaisesRegex(ValueError,'only image'):h2.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2)
   self.assertEqual((self.d/'args').read_text() if (self.d/'args').exists() else '',before,'the updater is not invoked when the config refuses')
+  for n in ['OPS','FRONT']:(self.d/'gates'/n).unlink(missing_ok=True)
+  for p in (self.d/'r').iterdir():p.unlink()
+  h3=self.host(plan=True);h3.step_configs=self.stepcfg()[1];os.environ['FAKE_CFG']='0'*64
+  try:
+   with self.assertRaisesRegex(ValueError,'receipt config_sha256'):h3.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2)
+   os.environ.pop('FAKE_CFG')
+   for n in ['OPS','FRONT']:(self.d/'gates'/n).unlink(missing_ok=True)
+   for p in (self.d/'r').iterdir():p.unlink()
+   h4=self.host(plan=True);h4.step_configs=self.stepcfg()[1]
+   with self.assertRaisesRegex(ValueError,'receipt config_sha256'):h4.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2)   # receipt without the field
+  finally:os.environ.pop('FAKE_CFG',None)
   os.close(fd)
  def test_preflight_requires_absent_gates_and_hold(self):
   h=self.host();h.preflight();(self.d/'gates'/'FRONT').write_text('x')

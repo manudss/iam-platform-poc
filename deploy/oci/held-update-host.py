@@ -185,6 +185,7 @@ class Host:
   r=self.run(['sh','-c','exec "$@" 8>&%d'%lock_fd,'held-step']+args,check=False,pass_fds=[lock_fd])
   if r.returncode!=10:raise RuntimeError('closed step did not return CLOSED_QUALIFIED (rc %s); no retry, no rollback'%r.returncode)
   fields=parse_receipt(receipt,image)
+  if self.step_configs is not None and fields.get('config_sha256')!=self.step_configs['steps'][index]['sha256']:raise ValueError('receipt config_sha256 differs from the reviewed step config actually installed')
   for p in [receipt,fields['evidence_index'],fields['launch_proof']]:PROTECT(p);fsync_path(p)
   self.check_continuity(fields)
   self.step_gates.append(gate_record(self.front))

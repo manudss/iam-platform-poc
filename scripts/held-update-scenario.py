@@ -67,6 +67,13 @@ def run(x):
         config['qualificationSHA256'] = {str(p): sh256(p) for p in [bindir / 'qualification.py', bindir / 'qualification-container.mjs', pol]}
         configpath.write_text(json.dumps(config))
 
+    def unseal_bao():
+        for attempt in range(30):
+            r=runp(['python3',str(root/'bao-unseal.py'),str(root/'bao-keys/init.json'),c['bao']],False)
+            if r.returncode==0:return
+            time.sleep(1)
+        raise RuntimeError('fixture-bao-unseal-timeout')
+
     # ---- pristine copy of the cold baseline dataset, then every scenario restarts from it (never reused across scenarios)
     docker('stop', app)
     # Quiescent synthetic checkpoint of all three stores, never only a data-dir copy.
@@ -78,7 +85,7 @@ def run(x):
     docker('stop',c['bao']); bao_pristine=root/'bao-pristine'
     runp(['cp','-a',str(root/'bao-storage'),str(bao_pristine)])
     docker('start',c['bao'])
-    runp(['python3',str(root/'bao-unseal.py'),str(root/'bao-keys/init.json'),c['bao']])
+    unseal_bao()
     report['checkpoint']={'stores':['data','postgres','bao'],'appStopped':True,'baoColdCopy':True,'pgDumpSHA256':sh256(pg_dump)}
     def reset_baseline():
         runp(['docker', 'rm', '-f', app], False)
@@ -86,9 +93,13 @@ def run(x):
         shutil.rmtree(c['data'], ignore_errors=True); runp(['cp', '-a', str(pristine), c['data']])
         with pg_dump.open('rb') as f:
             subprocess.run(['docker','exec','-i',c['pg'],'psql','-X','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1'],stdin=f,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
-        docker('stop',c['bao']);shutil.rmtree(root/'bao-storage')
-        runp(['cp','-a',str(bao_pristine),str(root/'bao-storage')]);docker('start',c['bao'])
-        runp(['python3',str(root/'bao-unseal.py'),str(root/'bao-keys/init.json'),c['bao']])
+        docker('stop',c['bao'])
+        # Keep the mounted directory inode. Replacing it would leave Docker bound to deleted storage.
+        for child in (root/'bao-storage').iterdir():
+            if child.is_dir() and not child.is_symlink():shutil.rmtree(child)
+            else:child.unlink()
+        runp(['cp','-a',str(bao_pristine)+'/.',str(root/'bao-storage')]);docker('start',c['bao'])
+        unseal_bao()
         shutil.rmtree(root / 'backups', ignore_errors=True); shutil.rmtree(queue_dir, ignore_errors=True); queue_dir.mkdir(mode=0o700)
         pause.write_text('harness pause\n'); lock.write_text(''); arm_config()
         runp([str(wrappers['preflight']), *args]); runp([str(wrappers['launcher']), *args])
@@ -195,7 +206,7 @@ def run(x):
             if kill_phase and ph == kill_phase and killed is None and (folder/'hooks'/(kill_phase+'.reached')).is_file() and (folder / 'queue-identity.json').exists():
                 qi = jread(folder / 'queue-identity.json')
                 marker=jread(folder/'hooks'/(kill_phase+'.reached'))
-                if marker!={'pid':qi['pid'],'phase':kill_phase}:raise RuntimeError('phase-marker-identity-mismatch')
+                if marker.get('pid')!=qi['pid'] or marker.get('phase')!=kill_phase or marker.get('engagement_id')!=engagement or not marker.get('nonce'):raise RuntimeError('phase-marker-identity-mismatch')
                 (os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL); killed = ph
             time.sleep(0.1)
         for p in (wk, wd):
