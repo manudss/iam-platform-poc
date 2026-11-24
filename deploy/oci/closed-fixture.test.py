@@ -28,6 +28,12 @@ class PostApp(unittest.TestCase):
   result=f.failure_details('RuntimeError: HELPER_COMMAND_FAILURE NS_IP6TABLES 2 UNKNOWN_OPTION')
   self.assertEqual(result['commandFailure'],{'category':'NS_IP6TABLES','returnCode':2,'reason':'UNKNOWN_OPTION'})
   self.assertNotIn('commandFailure',f.failure_details('RuntimeError: HELPER_COMMAND_FAILURE PRIVATE 2 private'))
+ def test_gateway_family_not_order(self):
+  v4={'Gateway':'172.18.0.1'};v6={'Gateway':'fd42::1'}
+  self.assertEqual(f.ipv4_gateway([v6,v4]),'172.18.0.1')
+  self.assertEqual(f.ipv4_gateway([v4,v6]),'172.18.0.1')
+  self.assertRaises(ValueError,f.ipv4_gateway,[v6])
+  self.assertRaises(ValueError,f.ipv4_gateway,[v4,v4])
  def test_postapp(self):
   launch={'policy4Exact':'four','policy6Exact':'six'};summary={'pid1Status':['CapEff: 0000000000000000','CapBnd: 0000000000000000','NoNewPrivs: 1']};f.assert_postapp('four','six',launch,summary)
   for a,b in [('changed','six'),('four','changed')]:self.assertRaises(ValueError,f.assert_postapp,a,b,launch,summary)

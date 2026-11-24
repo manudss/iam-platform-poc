@@ -7,6 +7,9 @@ Preflight never starts an image. Launch never starts app until namespace probes 
 from urllib.parse import urlsplit
 import argparse, hashlib, ipaddress, json, os, pathlib, re, shutil, stat, subprocess, tempfile, time
 
+def assert_ownip_denied(result,before,after):
+    if result!={'connected':False} or after<=before:raise ValueError('ownIP denial not established')
+
 def command_failure(args,rc,stderr):
     # Finite diagnostic vocabulary only. Never echo arguments, endpoints or output.
     category='OTHER'
@@ -73,6 +76,8 @@ def image_files(image,paths):
     finally:call(['docker','rm',cid])
 
 def preflight(a,c):
+    for key,family in [('gateway',4),('externalProbeIP',4),('ipv6ProbeIP',6)]:
+        if ipaddress.ip_address(c[key]).version!=family:raise ValueError('probe address family differs from reviewed contract')
     settings=envfile(a.env_file);companions(c)
     for key,host,port in [('IAM_PG_URL','pg',5432),('IAM_BAO_ADDR','bao',8200)]:
         u=urlsplit(settings.get(key,''))
@@ -194,9 +199,9 @@ def launch(a,c):
                 result.update(one)
             assert_probe_result(result)
         ownip=x['NetworkSettings']['Networks'][c['network']]['IPAddress']
-        owncode="const n=require('net');let s=n.createServer();s.listen(0,'0.0.0.0',()=>{let c=n.connect(s.address().port,process.argv[1]);c.setTimeout(1000);c.on('connect',()=>process.exit(1));c.on('error',()=>s.close());c.on('timeout',()=>process.exit(2))})"
-        b=rejects('iptables');call(['docker','exec',cid,'node','-e',owncode,ownip])
-        if rejects('iptables')<=b:raise ValueError('ownIP denial not established')
+        owncode="const n=require('net');let done=false,c;function finish(connected){if(done)return;done=true;if(c)c.destroy();s.close(()=>{console.log(JSON.stringify({connected}))})}let s=n.createServer(x=>x.destroy());s.on('error',()=>process.exit(3));s.listen(0,'0.0.0.0',()=>{c=n.connect(s.address().port,process.argv[1]);c.setTimeout(1000);c.on('connect',()=>finish(true));c.on('error',()=>finish(false));c.on('timeout',()=>finish(false))})"
+        b=rejects('iptables');ownresult=json.loads(call(['docker','exec',cid,'node','-e',owncode,ownip]))
+        assert_ownip_denied(ownresult,b,rejects('iptables'))
         socketprobe="import socket,sys; s=socket.socket(socket.AF_INET,int(sys.argv[1]),int(sys.argv[2])); payload=bytes.fromhex('0800f7fd00010001') if sys.argv[2]=='1' else b'fixture'; s.sendto(payload,(sys.argv[3],53))"
         for typ,proto in [('2','17'),('3','1')]:
             b=rejects('iptables')

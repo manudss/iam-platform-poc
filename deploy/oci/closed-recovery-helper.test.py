@@ -9,7 +9,7 @@ class Tests(unittest.TestCase):
   self.manifest=json.dumps({'format':1,'versions':[{'id':'0001','checksum':checksum,'files':self.files}]}).encode()
   self.ledger={'format':1,'entries':[{'id':'0001','checksum':checksum,'disposition':'adopted'}]}
   self.path=self.home/'migrations/journal.json';self.path.write_text(json.dumps(self.ledger))
-  self.config={'image':'ghcr.io/manudss/iam-platform-poc@sha256:'+'a'*64,'imageID':'sha256:'+'b'*64,'ledgerSHA256':h.digest(self.path.read_bytes()),'manifestSHA256':h.digest(self.manifest),'offlineFileSHA256':{'/bundle':h.digest(b'good')},'implementationSHA256':'h','network':'test','helperSHA256':{'LYAM_CLOSED_PREFLIGHT':'h','LYAM_CLOSED_LAUNCHER':'h'}}
+  self.config={'image':'ghcr.io/manudss/iam-platform-poc@sha256:'+'a'*64,'imageID':'sha256:'+'b'*64,'ledgerSHA256':h.digest(self.path.read_bytes()),'manifestSHA256':h.digest(self.manifest),'offlineFileSHA256':{'/bundle':h.digest(b'good')},'implementationSHA256':'h','network':'test','gateway':'172.18.0.1','externalProbeIP':'1.1.1.1','ipv6ProbeIP':'2606:4700:4700::1111','helperSHA256':{'LYAM_CLOSED_PREFLIGHT':'h','LYAM_CLOSED_LAUNCHER':'h'}}
   self.args=type('A',(),{'image':self.config['image'],'env_file':'unused','data_dir':str(self.home)})()
   self.original={'/app/migration-source/data/migrations/manifest.json':self.manifest,'/bundle':b'good','/app/migration-source/a.ts':b'source'}
  def invoke(self):
@@ -23,6 +23,14 @@ class Tests(unittest.TestCase):
  def test_command_failure_sanitized(self):
   self.assertEqual(h.command_failure(['nsenter','-t','123','-n','ip6tables','private'],2,'private unknown option private'),'HELPER_COMMAND_FAILURE NS_IP6TABLES 2 UNKNOWN_OPTION')
   self.assertEqual(h.command_failure(['docker','exec','private'],1,'private'),'HELPER_COMMAND_FAILURE DOCKER_EXEC 1 UNCLASSIFIED')
+ def test_ownip_requires_denial_and_counter(self):
+  h.assert_ownip_denied({'connected':False},4,5)
+  for result,before,after in [({'connected':True},4,5),({'connected':False},4,4),({'connected':False},4,3),({},4,5)]:
+   self.assertRaises(ValueError,h.assert_ownip_denied,result,before,after)
+ def test_probe_address_family(self):
+  for key,value in [('gateway','fd42::1'),('externalProbeIP','::1'),('ipv6ProbeIP','1.1.1.1')]:
+   original=self.config[key];self.config[key]=value
+   self.assertRaises(ValueError,self.invoke);self.config[key]=original
  def test_matching(self):self.assertTrue(self.invoke()['preflight'])
  def test_changed_ledger(self):self.path.write_text(json.dumps(self.ledger,indent=2));self.assertRaises(ValueError,self.invoke)
  def test_changed_manifest(self):self.config['manifestSHA256']='0'*64;self.assertRaises(ValueError,self.invoke)

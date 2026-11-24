@@ -4,7 +4,7 @@ Requires exact pushed GHCR digest, helper and both wrappers as input files.
 Creates only prefixed disposable containers/network and private synthetic bind data.
 Runs complete unmodified helper, then checks real AppModule held and policy stable.
 """
-import argparse,ast,hashlib,json,os,pathlib,re,shutil,subprocess,tempfile,time
+import argparse,ast,hashlib,ipaddress,json,os,pathlib,re,shutil,subprocess,tempfile,time
 
 COMMAND_DIAGNOSTIC={}
 HELPER_ERRORS=set()
@@ -42,6 +42,11 @@ def wait(name,port,path,seconds=220):
   if not inspect(name)['State']['Running']:raise RuntimeError('fixture process died')
   time.sleep(2)
  raise RuntimeError('fixture health timeout')
+def ipv4_gateway(ipam):
+ gateways=[x['Gateway'] for x in ipam if x.get('Gateway') and ipaddress.ip_address(x['Gateway']).version==4]
+ if len(gateways)!=1:raise ValueError('fixture requires exactly one IPv4 gateway')
+ return gateways[0]
+
 def assert_fixture_ancestry(root):
  for path in [root]+list(root.parents):
   st=path.stat()
@@ -76,7 +81,7 @@ def main():
  root=pathlib.Path('/root')/prefix
  assert_fixture_ancestry(root.parent) # Fail before creating resources; never repair shared ancestors.
  root.mkdir(mode=0o700);assert_fixture_ancestry(root);data=root/'data';data.mkdir(mode=0o700)
- containers=[];created_network=False;stage='setup';readiness={};negative={}
+ containers=[];created_network=False;stage='setup';readiness={};negative={};gateway_family=None
  try:
   # Checked-in helper is copied, not changed. Wrappers are rebound only to this fixture root.
   impl=root/'closed-recovery-helper.py';shutil.copyfile(a.helper,impl);impl.chmod(0o700)
@@ -100,7 +105,8 @@ def main():
   # Create fictional dataset with network none and hold, then stop cold. Never use production data.
   containers.append(seed);d('run','-d','--name',seed,'--network','none','-v',str(data)+':/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',a.image)
   wait(seed,3000,'/health');d('stop',seed)
-  im=json.loads(d('image','inspect',a.image))[0];pgip=inspect(pg)['NetworkSettings']['Networks'][network]['IPAddress'];baoip=inspect(bao)['NetworkSettings']['Networks'][network]['IPAddress'];gateway=json.loads(d('network','inspect',network))[0]['IPAM']['Config'][0]['Gateway']
+  im=json.loads(d('image','inspect',a.image))[0];pgip=inspect(pg)['NetworkSettings']['Networks'][network]['IPAddress'];baoip=inspect(bao)['NetworkSettings']['Networks'][network]['IPAddress'];gateway=ipv4_gateway(json.loads(d('network','inspect',network))[0]['IPAM']['Config'])
+  gateway_family=ipaddress.ip_address(gateway).version
   cid=d('create','--network','none','--entrypoint','/bin/true',a.image).strip();containers.append(cid)
   paths=['/app/migration-source/data/migrations/manifest.json','/usr/local/bin/docker-entrypoint.sh','/app/demo/start.sh']
   hashes={}
@@ -161,7 +167,7 @@ def main():
     state=inspect(name)['State']
     states.append({'running':state['Running'],'exitCode':state['ExitCode'],'status':state['Status'],'oomKilled':state.get('OOMKilled')})
    except Exception:states.append({'unavailable':True})
-  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
+  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'gatewayFamily':gateway_family,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
   raise
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)

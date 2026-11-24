@@ -36,7 +36,9 @@ class LaunchTests(unittest.TestCase):
     code=args[5]
     if 'ipv6/conf' in code:return json.dumps({'interfaces':[{'name':'eth0','disabled':'0'}],'addresses':'','routes':''})
     if 'CapEff' in code:return 'CapEff: 0000000000000000\nCapBnd: 0000000000000000\nNoNewPrivs: '+('0' if fail=='caps' else '1')+'\n'
-    if 'createServer' in code:counts['iptables']+=1;return ''
+    if 'createServer' in code:
+     if fail!='own-counter':counts['iptables']+=1
+     return json.dumps({'connected':fail=='own-connect'})
     tests=json.loads(args[6]);out={}
     for name,host,port in tests:
      allowed=name in ['pg','bao'];out[name]=allowed
@@ -79,4 +81,6 @@ class LaunchTests(unittest.TestCase):
  def test_readback_failure(self):self.go('readback')
  def test_identity_failure(self):self.go('identity')
  def test_counter_failure(self):self.go('counter')
+ def test_own_connect_failure(self):self.go('own-connect')
+ def test_own_counter_failure(self):self.go('own-counter')
 if __name__=='__main__':unittest.main()
