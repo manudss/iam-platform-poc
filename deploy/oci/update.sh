@@ -465,7 +465,8 @@ if [ -n "$ADOPT_RECEIPT" ]; then
     [ "$secured" != / ] || break
     secured="$(dirname "$secured")"
   done
-  adopt_field() { sed -n "s/^$1=//p" "$ADOPT_RECEIPT" | tail -n 1; }
+  # Strict: each adopted field must appear exactly once (a duplicate or an absent field is refused, never "last wins").
+  adopt_field() { [ "$(grep -c "^$1=" "$ADOPT_RECEIPT")" = 1 ] || fail 1 "adopted receipt field $1 not exactly once"; sed -n "s/^$1=//p" "$ADOPT_RECEIPT"; }
   [ "$(adopt_field state)" = CLOSED_QUALIFIED ] && [ "$(adopt_field held)" = true ] && [ "$(adopt_field public_status)" = 503 ] \
     || fail 1 "adopted receipt is not a held CLOSED_QUALIFIED receipt"
   [ -f "$BARRIER_FILE" ] && [ ! -L "$BARRIER_FILE" ] && [ "$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" = "$(adopt_field gate_sha256)" ] \

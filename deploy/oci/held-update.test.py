@@ -156,7 +156,7 @@ class Run(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'unresolved'):q.deploy(self.path,{'format':1,'base':S(2),'entries':[]},'u')
    with self.assertRaises(ValueError):q.check_held_update(st,manifest(st,3),pause_present=True)
 
-hs=importlib.util.spec_from_file_location('hostmod',Path(__file__).with_name('held-update-host.py'));hm=importlib.util.module_from_spec(hs);hs.loader.exec_module(hm);hm.PROTECT=lambda p:Path(p)
+hs=importlib.util.spec_from_file_location('hostmod',Path(__file__).with_name('held-update-host.py'));hm=importlib.util.module_from_spec(hs);hs.loader.exec_module(hm);hm.PROTECT=lambda p:Path(p);hm.STRICT=False
 import hashlib,stat
 GOOD={'State':{'Running':True},'Config':{'Image':'ghcr.io/manudss/iam-platform-poc@'+D(2),'Env':['IAM_DEMO_SEED_MODE=never','IAM_AUTOMATION_HOLD=1']},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges']}}
 class RealHost(unittest.TestCase):
@@ -261,7 +261,7 @@ spec=importlib.util.spec_from_file_location('qq',sys.argv[1]);q=importlib.util.m
 q.PROTECTED=lambda st:True
 orig=q.bound_module
 def bm(*a):
- m=orig(*a);m.PROTECT=lambda p:Path(p)
+ m=orig(*a);m.PROTECT=lambda p:Path(p);m.STRICT=False
  m.Host._docker_inspect=staticmethod(lambda c:{'State':{'Running':True},'Config':{'Image':'ghcr.io/manudss/iam-platform-poc@sha256:'+'0'*63+'2','Env':['IAM_DEMO_SEED_MODE=never','IAM_AUTOMATION_HOLD=1']},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges']}})
  return m
 q.bound_module=bm
@@ -336,10 +336,12 @@ class RealCli(unittest.TestCase):
   self.assertFalse(q.queue_alive(dead));self.assertTrue(q.queue_alive(me))
   st['opening_intent']['queue']=dead;q.atomic(self.state,st);q.rearm_held_update(self.state,controller=c)
   self.assertEqual(c.calls,['close','verify']);self.assertEqual(q.load(self.state)['opening_intent']['phase'],'interrupted-access-rearmed')
+ def _dead(self):
+  p=subprocess.Popen(['true']);i=q.queue_identity(p.pid);p.wait();return i
  def test_queue_state_tristate(self):
   me=q.queue_identity()
   self.assertEqual(q.queue_state(me),'alive')
-  self.assertEqual(q.queue_state({**me,'boot_id':'other-boot'}),'absent')
+  self.assertEqual(q.queue_state({**me,'boot_id':'other-boot'}),'unknown','other boot = other identity, not inferred dead')
   self.assertEqual(q.queue_state({**me,'starttime':str(int(me['starttime'])+1)}),'unknown','reused pid / other process is NOT dead')
   for bad in [None,{},{'pid':1},{**me,'extra':1},{**me,'pid':'x'},{**me,'starttime':'abc'},{**me,'boot_id':''}]:self.assertEqual(q.queue_state(bad),'unknown')
   p=subprocess.Popen(['sleep','0.1']);dead=q.queue_identity(p.pid);p.wait();self.assertEqual(q.queue_state(dead),'absent')
@@ -351,14 +353,14 @@ class RealCli(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'not certainly absent'):q.rearm_held_update(self.state,controller=C())
   self.assertEqual(C.calls,[])
  def test_rearm_close_error_is_durable_unknown(self):
-  st=q.load(self.state);st['opening_intent']={'phase':'opening','queue':{'pid':999999,'starttime':'1','boot_id':'other'},'gates':[],'container':'lyam','manifest':{'opening_static':{}}};q.atomic(self.state,st)
+  st=q.load(self.state);st['opening_intent']={'phase':'opening','queue':self._dead(),'gates':[],'container':'lyam','manifest':{'opening_static':{}}};q.atomic(self.state,st)
   class C:
    def close_gates(self,i):raise OSError('boom')
    def stop_candidate(self,c):raise RuntimeError('stop failed')
   with self.assertRaises(OSError):q.rearm_held_update(self.state,controller=C())
   i=q.load(self.state)['opening_intent'];self.assertEqual(i['phase'],'failed-access-unknown');self.assertTrue(i['rearm_stop_failed'])
  def test_rearm_unmeasured_closure_marks_unknown_and_stops(self):
-  st=q.load(self.state);p=subprocess.Popen(['true']);dead=q.queue_identity(p.pid) if False else {'pid':999999,'starttime':'1','boot_id':'x'};p.wait()
+  st=q.load(self.state);p=subprocess.Popen(['true']);dead=self._dead();p.wait()
   st['opening_intent']={'phase':'opening','queue':dead,'gates':[],'container':'lyam','manifest':{'opening_static':{}}};q.atomic(self.state,st)
   class C:
    calls=[]

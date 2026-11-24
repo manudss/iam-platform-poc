@@ -249,7 +249,7 @@ jobs:
         run: |
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/held-update.test.py
-          python3 deploy/oci/held-update-watchdog.test.py
+          python3 deploy/oci/held-update-durable.test.py
           python3 deploy/oci/reviewed-ui-held.test.py
           python3 deploy/oci/reviewed-ui-controller.test.py
           python3 deploy/oci/qualification.test.py

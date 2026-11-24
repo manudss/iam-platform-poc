@@ -14,6 +14,7 @@ def _protected(path):
   if stat.S_ISLNK(s.st_mode) or s.st_uid or s.st_gid or s.st_mode&0o022:raise ValueError('unprotected path ancestry')
  return p
 
+STRICT=True  # production: real root owner and root-owned non-writable ancestry (no sticky/current-uid allowance); tests set False explicitly
 PROTECT=_protected  # tests replace this; production keeps the root-ownership check
 
 def env_settings(env_path):
@@ -52,14 +53,17 @@ def fsync_path(p):
  try:os.fsync(d)
  finally:os.close(d)
 
+def _owner_ok(uid):return uid==0 if STRICT else uid in (0,os.geteuid())
+def _ancestor_ok(anc):
+ a=Path(anc).lstat()
+ if stat.S_ISLNK(a.st_mode) or not _owner_ok(a.st_uid):raise ValueError('gate ancestor not root-owned')
+ if a.st_mode&0o022 and (STRICT or not a.st_mode&0o1000):raise ValueError('gate ancestor writable by others')
 def gate_record(p):
  p=Path(p);st=p.lstat()
  if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):raise ValueError('gate must be a regular non-symlink file')
  if st.st_nlink!=1:raise ValueError('gate must have a single link')
- if st.st_uid!=0 and st.st_uid!=os.geteuid():raise ValueError('gate owner must be root')
- for anc in [p.parent,*p.parent.parents]:
-  a=anc.stat()
-  if (a.st_uid!=0 and a.st_uid!=os.geteuid()) or (a.st_mode&0o022 and not a.st_mode&0o1000):raise ValueError('gate ancestor not private to root')
+ if not _owner_ok(st.st_uid):raise ValueError('gate owner must be root')
+ for anc in [p.parent,*p.parent.parents]:_ancestor_ok(anc)
  return {'path':str(p),'bytes_hex':p.read_bytes().hex(),'mode':st.st_mode&0o777,'uid':st.st_uid,'gid':st.st_gid}
 
 class Host:
@@ -109,9 +113,7 @@ class Host:
   st=os.lstat(self.ops)
   if stat.S_IMODE(st.st_mode)!=0o644 or st.st_uid!=self.ops_record['uid']:raise ValueError('OPS gate mode/owner differs from plan')
   for anc in [self.ops.parent,*self.ops.parent.parents]:
-   a=anc.stat()
-   if a.st_uid!=0 and a.st_uid!=os.geteuid():raise ValueError('gate ancestor not root-owned')
-   if a.st_mode&0o022 and not a.st_mode&0o1000:raise ValueError('gate ancestor writable by others')
+   _ancestor_ok(anc)
   d=os.open(self.ops.parent,os.O_RDONLY)
   try:os.fsync(d)
   finally:os.close(d)

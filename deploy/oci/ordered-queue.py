@@ -376,7 +376,7 @@ def queue_state(identity):
         return 'unknown'
     try:boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     except OSError:return 'unknown'
-    if boot!=identity['boot_id']:return 'absent'
+    if boot!=identity['boot_id']:return 'unknown'  # other boot = other identity, not inferred dead
     try:stat=Path('/proc/%d/stat'%identity['pid']).read_text()
     except FileNotFoundError:return 'absent'
     except OSError:return 'unknown'
