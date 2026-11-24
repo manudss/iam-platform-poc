@@ -79,8 +79,10 @@ class Controller(unittest.TestCase):
   class Opener:
    def open(self,*a,**kw):return Response()
   with patch.object(u.urllib.request,'build_opener',return_value=Opener()),self.assertRaisesRegex(ValueError,'UI login document absent'):u.ui_document('https://a.invalid')
-  Response.read=lambda self,n:b'<title>lyam</title><app-root>Sign in</app-root>'
+  Response.read=lambda self,n:b'<title>Sign in</title><app-root>Sign in</app-root>'
   with patch.object(u.urllib.request,'build_opener',return_value=Opener()):u.ui_document('https://a.invalid')
+  Response.read=lambda self,n:b'<title>lyam</title><app-root></app-root>'
+  with patch.object(u.urllib.request,'build_opener',return_value=Opener()),self.assertRaisesRegex(ValueError,'UI login document absent'):u.ui_document('https://a.invalid')
  def test_rearm_preserves_mode_and_owner_from_intent(self):
   import os
   p=self.root/'gate';intent={'gates':[{'path':str(p),'bytes_hex':b'owned'.hex(),'mode':0o640,'uid':os.geteuid(),'gid':os.getegid()}]}

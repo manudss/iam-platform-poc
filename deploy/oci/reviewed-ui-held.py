@@ -40,7 +40,7 @@ def ui_document(origin):
   def redirect_request(self,*args,**kwargs):return None
  r=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect).open(origin+'/login',timeout=15)
  raw=r.read(2*1024*1024+1)
- if r.status!=200 or len(raw)>2*1024*1024 or 'text/html' not in r.headers.get('Content-Type','') or b'<app-root' not in raw or b'<title>lyam</title>' not in raw:raise ValueError('expected UI login document absent')
+ if r.status!=200 or len(raw)>2*1024*1024 or 'text/html' not in r.headers.get('Content-Type','') or b'<app-root' not in raw or b'<title>Sign in</title>' not in raw:raise ValueError('expected UI login document absent')
 
 def check_origins(origins,expected):
  for origin in origins:status(origin,expected)
