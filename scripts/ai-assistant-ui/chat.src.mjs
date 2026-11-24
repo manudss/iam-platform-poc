@@ -5,7 +5,7 @@
 // Chat on the left, models (local + external, added by an administrator) below. Text from the model or from tool
 // results is always inserted as text, never as HTML.
 
-import { AbstractChat, DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses } from 'ai';
+import { AbstractChat, DefaultChatTransport } from 'ai';
 
 /** The minimal (framework-free) ChatState the SDK's AbstractChat asks for: the screen re-renders on every change. */
 class ScreenChatState {
@@ -99,7 +99,6 @@ class AiAssistantScreen extends HTMLElement {
     this._chat = new ScreenChat({
       id: convId, messages: r.data.messages ?? [],
       transport: new DefaultChatTransport({ api: `${this._ctx.api}/ai/conversations/${encodeURIComponent(convId)}/chat`, headers: () => this.h(), prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages[messages.length - 1] } }) }),
-      sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
     }, () => { this.renderChat(); });
     this._confirmDelete = false; this._problem = ''; this.render(); this.scrollDown();
   }
@@ -117,15 +116,12 @@ class AiAssistantScreen extends HTMLElement {
     await this._chat.sendMessage({ text });
   }
   busy() { const s = this._chat?.status; return s === 'submitted' || s === 'streaming'; }
-  pendingParts() { const last = this._chat?.messages.at(-1); return last?.role === 'assistant' ? last.parts.filter((p) => this.isTool(p) && p.state === 'approval-requested') : []; }
   isTool(p) { return p.type === 'dynamic-tool' || String(p.type).startsWith('tool-'); }
   toolName(p) { return p.type === 'dynamic-tool' ? p.toolName : String(p.type).slice(5); }
-  decide(approvalId, approved) { void this._chat.addToolApprovalResponse({ id: approvalId, approved }); }
   async newConversation() {
     const sel = this.querySelector('[name=aimodel]'); const title = this.querySelector('[name=aititle]')?.value.trim();
     if (!sel?.value) { this._problem = 'Choose a model first (add one below if the list is empty).'; this.render(); return; }
-    const auto = this.querySelector('[name=aiauto]')?.checked === true;
-    const r = await this.call('POST', '/conversations', { modelId: sel.value, title: title || undefined, autoApproveWrites: auto });
+    const r = await this.call('POST', '/conversations', { modelId: sel.value, title: title || undefined });
     if (this.fail(r)) { this.render(); return; }
     await this.load(); await this.open(r.data.conversation.id);
   }
@@ -153,7 +149,7 @@ class AiAssistantScreen extends HTMLElement {
   renderPart(p) {
     if (p.type === 'text') return `<div>${this.esc(p.text)}</div>`;
     if (!this.isTool(p)) return '';
-    const state = { 'input-streaming': 'preparing', 'input-available': 'running', 'approval-requested': 'waiting for approval', 'approval-responded': 'answered', 'output-available': 'done', 'output-error': 'failed', 'output-denied': 'declined' }[p.state] ?? p.state;
+    const state = { 'input-streaming': 'preparing', 'input-available': 'running', 'output-available': 'done', 'output-error': 'failed' }[p.state] ?? p.state;
     const out = p.state === 'output-available' ? `<pre>${this.esc(this.outputText(p.output))}</pre>` : p.state === 'output-error' ? `<pre>${this.esc(p.errorText ?? '')}</pre>` : '';
     return `<div class="call" data-tool="${this.esc(this.toolName(p))}">uses <b>${this.esc(this.toolName(p))}</b> ${this.esc(JSON.stringify(p.input ?? {}).slice(0, 300))} <small>(${this.esc(state)})</small>${out}</div>`;
   }
@@ -162,17 +158,14 @@ class AiAssistantScreen extends HTMLElement {
   chatCard() {
     const t = this._thread; const chat = this._chat;
     if (!this._cur || !chat) return '<div class="card" id="ai-chatcard"><p class="hint">Open a conversation or start a new one.</p></div>';
-    const pend = this.pendingParts(); const busy = this.busy();
-    const pending = pend.map((p) => `<div class="pending" data-pending="${this.esc(p.approval?.id)}"><b>The assistant wants to run ${this.esc(this.toolName(p))}</b>
-      <pre>${this.esc(JSON.stringify(p.input ?? {}, null, 2))}</pre><div class="hint">Changes go to its own working branch. Nothing is live until a human merges and applies. Anything beyond a draft is only run with your approval.</div>
-      <button data-approve="${this.esc(p.approval?.id)}">Approve</button><button class="secondary" data-deny="${this.esc(p.approval?.id)}">Decline</button></div>`).join('');
+    const busy = this.busy();
     const err = chat.error ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(String(chat.error.message ?? chat.error).slice(0, 300))}</p>` : '';
     return `<div class="card" id="ai-chatcard"><h3>${this.esc(this._cur.title)}</h3>
-        <p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. The assistant can read and prepare changes there. It cannot merge, approve or apply: a human publishes.${this._cur.autoApproveWrites ? ' Branch writes are approved automatically in this conversation.' : ''}</p>
+        <p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session and cannot merge, approve or apply: a human publishes.</p>
         <div class="thread" id="ai-thread" aria-live="polite">${chat.messages.map((m) => this.renderMsg(m)).join('') || '<p class="hint">Ask a question about the platform, for example: who has the accountant role?</p>'}${busy ? '<p class="hint">Working...</p>' : ''}</div>
-        ${err}${pending}
-        <textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy || pend.length ? 'disabled' : ''}></textarea>
-        <button id="ai-send" ${busy || pend.length || t?.active === false ? 'disabled' : ''}>Send</button>
+        ${err}
+        <textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
+        <button id="ai-send" ${busy || t?.active === false ? 'disabled' : ''}>Send</button>
         <button class="secondary" id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button>
       </div>`;
   }
@@ -186,13 +179,12 @@ class AiAssistantScreen extends HTMLElement {
       <td>${m.builtin ? '' : `<button class="secondary" data-test="${this.esc(m.id)}">Test</button><button class="secondary" data-toggle="${this.esc(m.id)}">${m.enabled ? 'Disable' : 'Enable'}</button><button class="secondary" data-delmodel="${this.esc(m.id)}">${this._del === m.id ? 'Confirm delete' : 'Delete'}</button>`}</td></tr>`).join('');
     const presets = PRESETS.map((x) => `<option value="${x.id}" ${x.id === this._preset ? 'selected' : ''}>${this.esc(x.label)}</option>`).join('');
     this.innerHTML = `<style>${css}</style>
-    <p class="lead">AI assistant. Chat with a model that can use the platform tools. It works on its own branch and can only prepare changes: every change waits for your approval, and publishing stays human.</p>
+    <p class="lead">AI assistant. Chat with a model that can use the platform tools. It works on its own branch and can only prepare changes: it acts with your MCP session rights, and publishing stays human.</p>
     ${this._note ? `<p role="status" class="msg ok" id="ai-note">${this.esc(this._note)}</p>` : ''}${this._problem ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(this._problem)}</p>` : ''}
     <div class="layout"><div>
       <section class="card"><h3>New conversation</h3>
         <div class="row"><label>Model<select name="aimodel">${opts || '<option value="">No model yet</option>'}</select></label></div>
         <div class="row"><label>Title<input name="aititle" maxlength="100" placeholder="optional"></label></div>
-        <label class="hint"><input type="checkbox" name="aiauto"> Approve writes on its branch automatically (other actions still ask)</label>
         <button id="ai-new">Start</button></section>
       <section class="card"><h3>Conversations</h3><ul class="convs">${convs || '<li class="hint">None yet.</li>'}</ul></section>
     </div><div>${chat}</div></div>
@@ -217,8 +209,6 @@ class AiAssistantScreen extends HTMLElement {
     q('#ai-send')?.addEventListener('click', () => void this.send());
     q('[name=aimsg]')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void this.send(); });
     q('#ai-delete')?.addEventListener('click', () => void this.removeConversation());
-    for (const b of this.querySelectorAll('[data-approve]')) b.addEventListener('click', () => this.decide(b.getAttribute('data-approve'), true));
-    for (const b of this.querySelectorAll('[data-deny]')) b.addEventListener('click', () => this.decide(b.getAttribute('data-deny'), false));
   }
   wire() {
     const q = (s) => this.querySelector(s);

@@ -1,11 +1,9 @@
 /**
- * ai-assistant plugin: one chat turn, on the AI SDK. The SDK owns the model call, the tool loop, streaming and the
- * approval protocol; Lyam keeps three things here, none of them a prompt instruction:
- *  - the tools are exactly those the EXISTING MCP server lists for the conversation's own session (Bearer token of an
- *    ordinary MCP session: Cedar per call, branch confinement, activity trace all stay in the MCP gateway);
- *  - every tool that is not a read needs the person's approval (SDK `toolApproval`), and approval requests are HMAC-signed
- *    (`experimental_toolApprovalSecret`) so a client cannot forge one;
- *  - tool output is DATA: cut, wrapped as untrusted, never able to change tools, approval or limits. The turn is bounded.
+ * ai-assistant plugin: one chat turn, on the AI SDK. The SDK owns the model call, the tool loop and streaming. Rights,
+ * validations and branches are the EXISTING MCP server's: the tools are exactly those it lists for the conversation's own
+ * session (Bearer token of an ordinary MCP session: Cedar per call, branch confinement, its own confirm parameters, activity
+ * trace). This module adds no rights or approval layer. It only treats tool output as DATA: cut, wrapped as untrusted, never
+ * able to change tools or limits. The turn is bounded.
  */
 import { createRequire } from 'node:module';
 const require = createRequire(new URL('./package.json', import.meta.url));
@@ -40,25 +38,14 @@ export async function openMcp({ url, token, fetch: f }) {
   return { client, tools };
 }
 
-/** The approval rule: reads run, writes follow the conversation's choice, anything else (lifecycle, proxy, unknown) always asks. */
-export function approvalFor(kindOf, autoApproveWrites) {
-  return ({ toolCall }) => {
-    const k = kindOf(toolCall.toolName);
-    if (k === 'read') return 'not-applicable';
-    if (k === 'write' && autoApproveWrites) return 'not-applicable';
-    return 'user-approval';
-  };
-}
-
 /**
  * One turn: `messages` are UI messages (the whole stored conversation + the new one). Returns the StreamTextResult; the caller
  * pipes `result.pipeUIMessageStreamToResponse(res, { originalMessages, onFinish })` and closes `opened.client` when done.
  */
-export async function startTurn({ languageModel, opened, messages, kindOf, autoApproveWrites, approvalSecret, maxTokens, abortSignal }) {
+export async function startTurn({ languageModel, opened, messages, maxTokens, abortSignal }) {
   const modelMessages = await convertToModelMessages(messages, { tools: opened.tools });
   return streamText({
     model: languageModel, system: SYSTEM_PROMPT, messages: modelMessages, tools: opened.tools,
-    toolApproval: approvalFor(kindOf, autoApproveWrites), experimental_toolApprovalSecret: approvalSecret,
     stopWhen: isStepCount(MAX_STEPS), maxOutputTokens: maxTokens, abortSignal,
   });
 }

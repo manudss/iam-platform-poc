@@ -8,13 +8,12 @@ A chat in the console (Extensions > AI assistant) with a model that can use the 
 | --- | --- | --- |
 | Model calls, streaming, the tool loop, step limit | `ai` (AI SDK 7), `@ai-sdk/openai-compatible`, `@ai-sdk/anthropic`, `@ai-sdk/google` | Apache-2.0 |
 | Tools | `@ai-sdk/mcp` client on the existing endpoint `POST /tenants/:tenant/mcp` | the same tools, Cedar checks, branch confinement and activity trace as an external MCP client |
-| Approval of changes | SDK `toolApproval` + `experimental_toolApprovalSecret` | approval requests are HMAC-signed, so a client cannot forge one |
 | Chat client in the browser | the SDK chat classes (`AbstractChat`, `DefaultChatTransport`) bundled into the plugin screen | NOT the `@ai-sdk/angular` package: a plugin screen is one self-contained `.mjs` loaded from a blob URL, so the SDK UI code is bundled in (`scripts/ai-assistant-ui`) |
-| Ours | model registry (keys sealed at rest), the network guard, one MCP session per conversation, server-side history, caps, the screen | |
+| Ours | model registry (keys sealed at rest), the network guard, one MCP session per conversation, server-side history, caps, the screen. No approval or rights layer of our own | |
 
 ## Rights
 
-No new rights layer. A conversation is an ordinary MCP session of the signed-in administrator (own branch cut from main, 8 hours). What runs is decided by the existing rights: the screen right (show and use the chat, admin only) and the MCP server rights (Cedar read/write/lifecycle per call). The SDK approval step asks the person before any tool that is not a read; with "approve writes on its branch" a conversation skips that for branch writes only. No tool can merge or apply: a human publishes.
+No new rights layer, no extra confirmation step. The chat routes use the same guard as the MCP administration screens: the screen right `mcp` (the `ai` screen maps to it) on an enabled plugin. A conversation is an ordinary MCP session of the signed-in administrator (own branch cut from main, 8 hours). What a tool may do is decided by the existing MCP gateway: Cedar per call, branch confinement, the tools' own validations (for example `confirmDestructive` and `confirm`, which are tool parameters of the MCP contract) and the activity trace. A refusal comes back as the tool result and the chat shows it as is. No tool can merge or apply: a human publishes.
 
 ## Models
 
@@ -25,7 +24,7 @@ No new rights layer. A conversation is an ordinary MCP session of the signed-in 
 
 | Variable | Meaning |
 | --- | --- |
-| `IAM_AI_KEY_SECRET` | required, 16+ characters: seals model keys and the conversations' MCP tokens, signs approval requests. POC grade: use a secret manager in production |
+| `IAM_AI_KEY_SECRET` | required, 16+ characters: seals model keys and the conversations' MCP tokens. POC grade: use a secret manager in production |
 | `IAM_AI_LOCAL_URL`, `IAM_AI_LOCAL_MODEL`, `IAM_AI_LOCAL_MAX_TOKENS` | the built-in local model |
 | `IAM_AI_LOCAL_ENDPOINTS` | operator list of `host:port` allowed over plain http (default `localhost:11434,127.0.0.1:11434,ollama:11434`) |
 | `IAM_AI_ALLOWED_HOSTS` | optional allowlist of remote model hosts |
@@ -35,13 +34,13 @@ No new rights layer. A conversation is an ordinary MCP session of the signed-in 
 
 - Everything the assistant changes is on its own branch; publishing stays human.
 - Tool output is data: cut, fenced as untrusted, and it cannot add tools, skip approval or raise a limit. The confinement does not depend on the model obeying a prompt.
-- The client sends only its last message; history lives on the server. A user message is text only; an assistant message is accepted only as answers to approval requests the server stored.
+- The client sends only its last message; history lives on the server. Only a text user message is accepted; an assistant or tool message sent by a client is refused.
 - Model endpoints: https only for remote hosts, every DNS answer must be public, and the connection is pinned to the checked address (TLS still validates the host name), redirects refused. This reduces SSRF, it does not replace egress filtering: restrict outbound traffic and set `IAM_AI_ALLOWED_HOSTS`.
-- Limits: 8 steps per turn, 80 tool calls and 400 messages per conversation, one turn at a time.
+- Limits: 8 steps per turn, 80 tool calls and 400 messages per conversation, one turn at a time (the lock is held until the stream ended and the turn was stored).
 
 ## Tests
 
-Unit (providers against fake endpoints, chat turn against a real MCP server with a scripted model, DNS and pinning), end to end (real Dolt and core, scripted model: read, approval, refusal, forged approval, injection, privacy, revocation), screen (headless Chrome), and an Ollama workflow that runs a real small model (`.github/workflows/ai-local-model.yml`).
+Unit (providers against fake endpoints, chat turn against a real MCP server with a scripted model, DNS and pinning), end to end (real Dolt and core, scripted model: read, write on the branch only, MCP refusal, unlisted tool, forged history, one turn at a time, privacy, revocation), screen (headless Chrome), and an Ollama workflow that runs a real small model (`.github/workflows/ai-local-model.yml`).
 
 ## Option studied, not enabled: GitHub Copilot SDK
 

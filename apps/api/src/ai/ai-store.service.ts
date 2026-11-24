@@ -9,7 +9,7 @@ export interface AiModel {
   id: string; name: string; kind: ModelKind; model: string; baseUrl: string; local: boolean; builtin: boolean; enabled: boolean;
   maxTokens: number; hasKey: boolean; createdAt: string; lastStatus: string; lastCheck: string | null;
 }
-export interface Conversation { id: string; tenant: string; owner: string; modelId: string; sessionId: string; title: string; autoApproveWrites: boolean; createdAt: string; updatedAt: string }
+export interface Conversation { id: string; tenant: string; owner: string; modelId: string; sessionId: string; title: string; createdAt: string; updatedAt: string }
 /** A stored chat message is an AI SDK UIMessage (parts: text, tool calls with their state and approval). */
 export interface StoredMessage { id: string; role: 'user' | 'assistant'; parts: Record<string, unknown>[]; metadata?: unknown }
 
@@ -63,7 +63,7 @@ export class AiStoreService {
             last_status VARCHAR(120) NOT NULL DEFAULT 'never-checked', last_check DATETIME(3) NULL, UNIQUE KEY uq_ai_model_name (tenant, name))`);
           await m.query(`CREATE TABLE IF NOT EXISTS ai_conversations (
             id VARCHAR(40) PRIMARY KEY, tenant VARCHAR(32) NOT NULL, owner_sub VARCHAR(64) NOT NULL, model_id VARCHAR(40) NOT NULL, session_id VARCHAR(40) NOT NULL, mcp_secret_enc TEXT NOT NULL,
-            title VARCHAR(120) NOT NULL, auto_approve_writes BOOLEAN NOT NULL DEFAULT FALSE, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL)`);
+            title VARCHAR(120) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL)`);
           await m.query(`CREATE TABLE IF NOT EXISTS ai_messages (
             id BIGINT AUTO_INCREMENT PRIMARY KEY, conversation_id VARCHAR(40) NOT NULL, at DATETIME(3) NOT NULL DEFAULT NOW(3), payload LONGTEXT NOT NULL, KEY ix_ai_msg_conv (conversation_id, id))`);
         } finally { await m.end(); }
@@ -137,12 +137,12 @@ export class AiStoreService {
 
   // ---- conversations ----
   private shapeConv(r: Row): Conversation {
-    return { id: String(r.id), tenant: String(r.tenant), owner: String(r.owner_sub), modelId: String(r.model_id), sessionId: String(r.session_id), title: String(r.title), autoApproveWrites: !!r.auto_approve_writes, createdAt: String(r.created_at), updatedAt: String(r.updated_at) };
+    return { id: String(r.id), tenant: String(r.tenant), owner: String(r.owner_sub), modelId: String(r.model_id), sessionId: String(r.session_id), title: String(r.title), createdAt: String(r.created_at), updatedAt: String(r.updated_at) };
   }
-  async createConversation(tenant: string, owner: string, modelId: string, sessionId: string, mcpSecret: string, title: string, autoApproveWrites: boolean): Promise<Conversation> {
+  async createConversation(tenant: string, owner: string, modelId: string, sessionId: string, mcpSecret: string, title: string): Promise<Conversation> {
     const id = `cv-${randomBytes(6).toString('hex')}`, now = new Date().toISOString().slice(0, 23);
     const m = await this.meta();
-    try { await m.query('INSERT INTO ai_conversations (id, tenant, owner_sub, model_id, session_id, mcp_secret_enc, title, auto_approve_writes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id, tenant, owner.slice(0, 64), modelId, sessionId, providers.sealKey(mcpSecret), title.slice(0, 120), autoApproveWrites ? 1 : 0, now, now]); } finally { await m.end(); }
+    try { await m.query('INSERT INTO ai_conversations (id, tenant, owner_sub, model_id, session_id, mcp_secret_enc, title, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)', [id, tenant, owner.slice(0, 64), modelId, sessionId, providers.sealKey(mcpSecret), title.slice(0, 120), now, now]); } finally { await m.end(); }
     return (await this.getConversation(tenant, owner, id))!;
   }
   async listConversations(tenant: string, owner: string): Promise<Conversation[]> {

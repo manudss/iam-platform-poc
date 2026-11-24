@@ -28,7 +28,9 @@ const messages = [
     { type: 'text', text: 'Two people have it. I can also give demo-bob the role if you want.' }] },
   { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'Yes, give it to demo-bob.' }] },
   { id: 'a2', role: 'assistant', parts: [
-    { type: 'dynamic-tool', toolName: 'assign_role', toolCallId: 'call_2', state: 'approval-requested', input: { identity: 'demo-bob', role: 'accountant' }, approval: { id: 'ap_1', signature: 'sig' } }] }];
+    { type: 'dynamic-tool', toolName: 'assign_role', toolCallId: 'call_2', state: 'output-available', input: { identity: 'demo-bob', role: 'accountant' }, output: { content: [{ type: 'text', text: 'assigned on branch ai/mcp-0123456789ab' }] } },
+    { type: 'dynamic-tool', toolName: 'execute_write', toolCallId: 'call_3', state: 'output-available', input: { sql: 'insert into credentials values (1)' }, output: { isError: true, content: [{ type: 'text', text: 'refused: table not writable through MCP' }] } },
+    { type: 'text', text: 'The role is set on my branch. The credentials write was refused by the platform.' }] }];
 const sse = (chunks) => { const enc = new TextEncoder(); return new ReadableStream({ start(c) { for (const x of chunks) c.enqueue(enc.encode('data: ' + JSON.stringify(x) + '\\n\\n')); c.enqueue(enc.encode('data: [DONE]\\n\\n')); c.close(); } }); };
 window.fetch = async (url, init = {}) => {
   const u = String(url), m = init.method ?? 'GET'; calls.push(m + ' ' + u);
@@ -40,9 +42,8 @@ window.fetch = async (url, init = {}) => {
   if (u.includes('/conversations/cv-aaaaaaaaaaaa/chat')) {
     const sent = JSON.parse(init.body); window.__sent = sent;
     return { status: 200, ok: true, headers: new Headers({ 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' }), body: sse([
-      { type: 'start', messageId: 'a2' }, { type: 'start-step' },
-      { type: 'tool-output-available', toolCallId: 'call_2', dynamic: true, output: { content: [{ type: 'text', text: 'assigned' }] } },
-      { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'Done: demo-bob now has the accountant role on the branch.' }, { type: 'text-end', id: 't1' },
+      { type: 'start', messageId: 'a3' }, { type: 'start-step' },
+      { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'Done: nothing else to change.' }, { type: 'text-end', id: 't1' },
       { type: 'finish-step' }, { type: 'finish' }]) };
   }
   if (u.includes('/conversations/cv-aaaaaaaaaaaa')) return json({ conversation: { id: 'cv-aaaaaaaaaaaa', title: 'Accountant role', autoApproveWrites: false }, branch: 'ai/mcp-0123456789ab', sessionActive: true, messages: [...messages] });
@@ -55,14 +56,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const checks = {};
 await wait(200);
 el.querySelector('[data-open]').click(); await wait(200);
-checks.pendingCard = !!el.querySelector('[data-pending="ap_1"]');
-checks.sendDisabledWhilePending = el.querySelector('#ai-send').disabled;
+checks.toolCalls = el.querySelectorAll('.call').length === 3;
+checks.refusalShown = el.textContent.includes('refused: table not writable through MCP');
+checks.sendEnabled = !el.querySelector('#ai-send').disabled;
+checks.noApprovalUi = !el.querySelector('[data-approve],[data-pending]');
 checks.noInjectedElement = !el.querySelector('.call img') && window.__xss !== 1;
 checks.poisonShownAsText = el.querySelector('.call pre').textContent.includes('onerror=');
 checks.noMergeButton = !/merge|apply/i.test([...el.querySelectorAll('button')].map((b) => b.textContent).join(' '));
 checks.modelsListed = el.querySelectorAll('#ai-model-table tbody tr').length === 2;
 window.__shot = true; await wait(50);
-if (location.hash === '#approve') { el.querySelector('[data-approve]').click(); await wait(250); checks.approvedSent = calls.some((c) => c.includes('/chat')) && window.__sent?.message?.role === 'assistant' && Object.keys(window.__sent).join() === 'message'; checks.pendingGone = !el.querySelector('[data-pending]'); checks.finalAnswer = el.textContent.includes('now has the accountant role'); }
+if (location.hash === '#approve') { const box = el.querySelector('[name=aimsg]'); box.value = 'thanks'; el.querySelector('#ai-send').click(); await wait(300); checks.sentOnlyLast = window.__sent?.message?.role === 'user' && Object.keys(window.__sent).join() === 'message'; checks.finalAnswer = el.textContent.includes('Done: nothing else to change.'); }
 document.getElementById('result').textContent = JSON.stringify(checks); document.title = 'ready';
 </script></body></html>`;
 
@@ -78,6 +81,6 @@ const dom = spawnSync(chrome, ['--headless=new', '--no-sandbox', '--disable-gpu'
 const m = /<pre id="result"[^>]*>([^<]*)<\/pre>/.exec(dom.stdout ?? '');
 const checks = m ? JSON.parse(m[1].replace(/&quot;/g, '"')) : null;
 console.log(JSON.stringify(checks));
-const want = ['pendingCard', 'sendDisabledWhilePending', 'noInjectedElement', 'poisonShownAsText', 'noMergeButton', 'modelsListed', 'approvedSent', 'pendingGone', 'finalAnswer'];
+const want = ['toolCalls', 'refusalShown', 'sendEnabled', 'noApprovalUi', 'noInjectedElement', 'poisonShownAsText', 'noMergeButton', 'modelsListed', 'sentOnlyLast', 'finalAnswer'];
 for (const k of want) if (!checks?.[k]) { console.error('FAILED check:', k); failed++; }
 process.exit(failed ? 1 : 0);
