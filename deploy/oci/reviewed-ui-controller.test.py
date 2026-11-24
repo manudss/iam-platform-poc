@@ -134,6 +134,31 @@ class VerifyBindings(unittest.TestCase):
   self.fields[key]=value;self.paths[self.opening['closed_receipt']['path']].write_text(''.join(k+'='+v+'\n' for k,v in self.fields.items()))
  def test_positive_verify_links_exact_config_helper_qualifier_policy_and_gates(self):
   env,fields=self.verify();self.assertEqual(env,self.env);self.assertEqual(fields,self.fields);self.assertEqual(len(self.calls),4)
+ def real_producer_receipt(self):
+  # Concatenation follows actual update.sh printf: whole integrity block, then
+  # explicit closed fields including the same three helper hashes again.
+  hashes={'launcher_sha256':'b'*64,'preflight_sha256':'c'*64,'implementation_sha256':self.fields['implementation_sha256']}
+  self.fields.update(hashes)
+  integrity={'config_sha256':self.fields['config_sha256'],'qualification_inventory_sha256':'e'*64,**hashes}
+  self.fields['qualification_inventory_sha256']='e'*64
+  self.integrity_output=''.join(k+'='+v+'\n' for k,v in integrity.items())
+  raw=self.integrity_output+''.join(k+'='+v+'\n' for k,v in self.fields.items() if k not in {'config_sha256','qualification_inventory_sha256'})
+  self.paths[self.opening['closed_receipt']['path']].write_text(raw)
+  return raw
+ def test_real_update_concatenated_receipt_complete_verify(self):
+  self.real_producer_receipt()
+  original=self.command
+  def run(args):return self.integrity_output if args[0]=='python3' else original(args)
+  with patch.object(self,'command',side_effect=run):
+   env,fields=self.verify();self.assertEqual(fields,self.fields)
+ def test_receipt_compatibility_negative_counts_conflicts_and_other_keys(self):
+  raw=self.real_producer_receipt()
+  mutations=[raw+'launcher_sha256='+'b'*64+'\n',raw+'state=CLOSED_QUALIFIED\n',raw.replace('launcher_sha256='+'b'*64,'launcher_sha256='+'d'*64,1),raw.replace('launcher_sha256='+'b'*64+'\n','',1)]
+  for value in mutations:
+   with self.subTest(value=len(value)),self.assertRaisesRegex(ValueError,'duplicate closed receipt'):u.receipt_fields(value.encode())
+ def test_single_keys_valid_and_nonhex_duplicate_refused(self):
+  self.assertEqual(u.receipt_fields(b'state=CLOSED_QUALIFIED\n'),{'state':'CLOSED_QUALIFIED'})
+  with self.assertRaisesRegex(ValueError,'helper hash invalid'):u.receipt_fields(b'launcher_sha256=x\nlauncher_sha256=x\n')
  def test_changed_integrity_binding_refused_exact_reason(self):
   self.mutate_fields('config_sha256','bad')
   with self.assertRaisesRegex(ValueError,'closed integrity binding changed'):self.verify()

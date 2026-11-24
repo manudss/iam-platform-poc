@@ -2,7 +2,7 @@
 """Reviewed held-UI opening only. Never clear deployment pause or automation hold.
 Run through ordered-queue open-reviewed-ui-held, under both locks.
 """
-import hashlib,json,os,stat,subprocess,sys,urllib.request,urllib.error
+import hashlib,json,os,re,stat,subprocess,sys,urllib.request,urllib.error
 from pathlib import Path
 
 def protected(path):
@@ -57,14 +57,24 @@ def settings(manifest):
  env.setdefault('LYAM_OPS_BARRIER_FILE','/var/lib/lyam-front-gate/OPS-MAINTENANCE')
  return env
 
+def receipt_fields(raw):
+ # update.sh historically emits these helper hashes once in INTEGRITY_PROOF
+ # and once explicitly. No other duplicate, count or value is accepted.
+ known={'launcher_sha256','preflight_sha256','implementation_sha256'}
+ fields={};counts={}
+ for line in raw.decode().splitlines():
+  k,v=line.split('=',1);counts[k]=counts.get(k,0)+1
+  if k in fields:
+   if k not in known or counts[k]!=2 or fields[k]!=v:raise ValueError('duplicate closed receipt field')
+   if not re.fullmatch(r'[0-9a-f]{64}',v):raise ValueError('duplicate closed receipt helper hash invalid')
+  else:fields[k]=v
+ if any(count>1 for count in counts.values()) and any(counts.get(key)!=2 for key in known):raise ValueError('duplicate closed receipt helper set incomplete')
+ return fields
+
 def verify(manifest,container,target,public=503):
  opening=manifest['opening'];env=settings(manifest)
  if env.get('LYAM_CONTAINER','lyam')!=container:raise ValueError('container/config mismatch')
- receipt_path,raw=read_spec(opening['closed_receipt']);fields={}
- for line in raw.decode().splitlines():
-  k,v=line.split('=',1)
-  if k in fields:raise ValueError('duplicate closed receipt field')
-  fields[k]=v
+ receipt_path,raw=read_spec(opening['closed_receipt']);fields=receipt_fields(raw)
  image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
  if any(fields.get(k)!=v for k,v in {'state':'CLOSED_QUALIFIED','held':'true','public_status':'503','image':image}.items()):raise ValueError('closed receipt target/state mismatch')
  # Verify installed controller/helper bindings, then exact live confinement again.
