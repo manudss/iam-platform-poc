@@ -635,7 +635,34 @@ rm -rf "$STAGE"
 [ "$rec_ok" = 1 ] && [ -s "$RECOVERY" ] || abort_preservation "recovery bundle failed"
 
 prune() { ls -1t "$BACKUP_DIR"/$1 2>/dev/null | tail -n "+$((KEEP + 1))" | while read -r f; do rm -f "$f"; done; }
-prune 'lyam-data-*.tar.gz'; prune 'lyam-pg-*.sql.gz'; prune 'lyam-bao-*.tar.gz'; prune 'lyam-recovery-*.tar.gz'
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  # Read every compressed byte and parse each tar before any candidate swap.
+  # This is archive readability, not a restore or a claim of semantic PG recovery.
+  for archive in "$DATA_BACKUP" "${BAO_BACKUP:-}" "$RECOVERY"; do
+    [ -n "$archive" ] || continue
+    gzip -t "$archive" && tar -tzf "$archive" >/dev/null \
+      || abort_preservation "closed backup archive readback failed; no candidate swap"
+  done
+  if [ -n "${PG_BACKUP:-}" ]; then
+    gzip -t "$PG_BACKUP" || abort_preservation "closed PostgreSQL dump readback failed; no candidate swap"
+  fi
+  python3 "$CLOSED_INTEGRITY" "$ENV_FILE" >/dev/null \
+    || abort_preservation "closed code changed after backup; no candidate swap"
+  "$CLOSED_PREFLIGHT" --image "$IMAGE" --container "$CONTAINER" --env-file "$ENV_FILE" --data-dir "$DATA_DIR" --port "$PORT" \
+    || abort_preservation "closed post-backup exact image/ledger/companion preflight failed; no candidate swap"
+  CLOSED_BACKUP_PROOF="$BACKUP_DIR/closed-backup-readback-$TS.txt"
+  ( umask 077; set -C
+    { printf '%s\n' 'state=ARCHIVES_READABLE_BEFORE_SWAP' "image=$IMAGE" 'restore_tested=false' 'pruning=disabled'
+      for archive in "$DATA_BACKUP" "${PG_BACKUP:-}" "${BAO_BACKUP:-}" "$RECOVERY"; do
+        [ -n "$archive" ] || continue
+        sha256sum "$archive" || exit 1
+      done
+    } > "$CLOSED_BACKUP_PROOF"
+  ) || abort_preservation "cannot retain closed backup readback proof; no candidate swap"
+  log 'closed backup readback and post-backup preflight passed; all prior generations retained'
+else
+  prune 'lyam-data-*.tar.gz'; prune 'lyam-pg-*.sql.gz'; prune 'lyam-bao-*.tar.gz'; prune 'lyam-recovery-*.tar.gz'
+fi
 
 # --- swap (front still gated: the probe runs inside the container) ----------------------------
 # The validated container is never recreated: the very container that passes the health gate
@@ -654,7 +681,7 @@ if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
   # version's possible writes, no exposed-but-unverified service either.
   gate_lift || fail 4 "the new version is healthy BUT the front could not be proven open (gate removal or 200-probe failed) - maintenance re-armed at $BARRIER_FILE, the service stays behind it; NO blind rollback (visitor writes may already exist on this version): diagnose the front path manually"
   if [ "$CLOSED_RECOVERY" = 1 ]; then
-    ( umask 077; set -C; printf '%s\n' "$INTEGRITY_PROOF" 'state=CLOSED_QUALIFIED' "image=$IMAGE" 'held=true' 'public_status=503' "ops_sha256=$OPS_BARRIER_HASH" "gate_sha256=$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" "launcher_sha256=$LAUNCHER_HASH" "preflight_sha256=$PREFLIGHT_HASH" "implementation_sha256=$IMPLEMENTATION_HASH" "launch_proof=$CLOSED_LAUNCH_PROOF" "launch_proof_sha256=$CLOSED_LAUNCH_HASH" "ipv6_disabled_proved=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["ipv6DisabledProved"]).lower())' "$CLOSED_LAUNCH_PROOF")" "ipv6_state_sha256=$(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1]))["ipv6State"],sort_keys=True).encode()).hexdigest())' "$CLOSED_LAUNCH_PROOF")" > "$CLOSED_RECEIPT" ) || fail 4 "cannot write fresh closed receipt"
+    ( umask 077; set -C; printf '%s\n' "$INTEGRITY_PROOF" 'state=CLOSED_QUALIFIED' "image=$IMAGE" "backup_readback_proof=$CLOSED_BACKUP_PROOF" "backup_readback_sha256=$(sha256sum "$CLOSED_BACKUP_PROOF" | cut -d' ' -f1)" 'held=true' 'public_status=503' "ops_sha256=$OPS_BARRIER_HASH" "gate_sha256=$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" "launcher_sha256=$LAUNCHER_HASH" "preflight_sha256=$PREFLIGHT_HASH" "implementation_sha256=$IMPLEMENTATION_HASH" "launch_proof=$CLOSED_LAUNCH_PROOF" "launch_proof_sha256=$CLOSED_LAUNCH_HASH" "ipv6_disabled_proved=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["ipv6DisabledProved"]).lower())' "$CLOSED_LAUNCH_PROOF")" "ipv6_state_sha256=$(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1]))["ipv6State"],sort_keys=True).encode()).hexdigest())' "$CLOSED_LAUNCH_PROOF")" > "$CLOSED_RECEIPT" ) || fail 4 "cannot write fresh closed receipt"
     log "closed-qualified: $CONTAINER runs $IMAGE under hold, backup $DATA_BACKUP; no public opening"
     exit 10
   fi
