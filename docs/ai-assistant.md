@@ -13,7 +13,7 @@ An admin chat that drives the IAM through the same MCP tool surface as external 
 | `IAM_AI_LOCAL_URL`, `IAM_AI_LOCAL_MODEL` | built-in local model |
 | `IAM_AI_LOCAL_HOSTS` | hosts allowed over plain http (default `localhost,127.0.0.1,::1,ollama`) |
 | `IAM_AI_ALLOWED_HOSTS` | optional allowlist for remote hosts |
-| `IAM_AI_KEY_SECRET` | key sealing secret (set it; POC grade) |
+| `IAM_AI_KEY_SECRET` | key sealing secret, 16+ characters, **required** to store an external key (no default value; without it the API refuses the key) |
 | `IAM_AI_LOCAL_MAX_TOKENS` | output cap for the local model |
 
 ## Safety model
@@ -28,7 +28,7 @@ Tests, all in CI: `apps/api/src/ai/ai-assistant.spec.ts` (URL rules, providers o
 
 ## Limits
 
-No streaming. Sessions last 8h. DNS rebinding on remote hosts is not handled (SSRF check is on the URL host). Key sealing secret is POC grade. The MCP spec version is not upgraded here.
+No streaming. Sessions last 8h. Remote hosts are resolved before each call and refused if any answer is private, loopback, link-local or mapped; the connection itself is not pinned to the checked address, so a DNS answer changing between the check and the connect is a residual risk (use `IAM_AI_ALLOWED_HOSTS` and an egress rule in production). The per-turn limits reset with each user message, so a conversation is also capped (80 tool calls, 400 messages). Key sealing is POC grade (AES-GCM with one shared secret, no rotation). The MCP spec version is not upgraded here.
 
 ## Option studied, not enabled: GitHub Copilot SDK
 

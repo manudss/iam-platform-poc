@@ -4,6 +4,7 @@ import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, IncomingMessage, Server } from 'node:http';
 import { loadPluginModule } from '../plugins/v1/loader.js';
+process.env.IAM_AI_KEY_SECRET ??= 'test-only-secret-0123456789abcdef';
 
 type Msg = { role: string; content: string; toolCalls?: { id: string; name: string; args: Record<string, unknown>; badArgs?: boolean }[]; toolCallId?: string; name?: string };
 const p = loadPluginModule('ai-assistant', 'providers.mjs') as any;
@@ -161,5 +162,19 @@ describe('agent loop', () => {
     const s = scripted([{ toolCalls: [{ id: 'a', name: 'list_users', args: {} }, { id: 'b', name: 'list_users', args: {} }, { id: 'c', name: 'list_users', args: {} }] }]);
     let n = 0; const r = await a.runAgent({ messages: ask, host: { ...s.host, callModel: async () => ({ text: '', toolCalls: ['a', 'b', 'c'].map((x) => ({ id: `${x}${n++}`, name: 'list_users', args: {} })) }) } });
     assert.equal(r.status, 'limit'); assert.ok(s.ran.length >= a.MAX_TOOL_CALLS && s.ran.length <= a.MAX_TOOL_CALLS + 5);
+  });
+  it('refuses to seal a key without a configured secret (no public fallback)', () => {
+    const saved = process.env.IAM_AI_KEY_SECRET; delete process.env.IAM_AI_KEY_SECRET;
+    try { assert.throws(() => p.sealKey('sk-abc-123456'), /IAM_AI_KEY_SECRET/); process.env.IAM_AI_KEY_SECRET = 'short'; assert.throws(() => p.sealKey('sk-abc-123456'), /IAM_AI_KEY_SECRET/); } finally { process.env.IAM_AI_KEY_SECRET = saved; }
+  });
+  it('a public name that resolves inside is refused at call time (DNS), before any request', async () => {
+    const model = { kind: 'openai-compatible', baseUrl: 'https://models.example.org/v1', model: 'm', maxTokens: 256 };
+    let called = false;
+    const fetchImpl = (async () => { called = true; return new Response('{}'); }) as unknown as typeof fetch;
+    for (const address of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '::1', 'fd00::1', '::ffff:10.0.0.1']) {
+      await assert.rejects(p.callModel({ model, apiKey: 'sk-abc-123456', system: 's', messages: [{ role: 'user', content: 'x' }], tools: [], fetchImpl, resolveImpl: async () => [{ address }] }), /private or loopback/);
+    }
+    await assert.rejects(p.callModel({ model, apiKey: 'sk-abc-123456', system: 's', messages: [{ role: 'user', content: 'x' }], tools: [], fetchImpl, resolveImpl: async () => [{ address: '93.184.216.34' }, { address: '10.0.0.5' }] }), /private or loopback/);
+    assert.equal(called, false);
   });
 });

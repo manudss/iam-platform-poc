@@ -15,6 +15,7 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { branchContext } from '../workspace/context.js';
 import type { Request, Response, NextFunction } from 'express';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
+process.env.IAM_AI_KEY_SECRET ??= 'test-only-secret-0123456789abcdef';
 
 // Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
 let testBus: TestBus | undefined;

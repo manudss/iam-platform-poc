@@ -16,6 +16,8 @@
  */
 import { createRequire } from 'node:module';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
@@ -68,7 +70,12 @@ export function validateModelInput(b) {
   return { name: b.name.trim(), kind: b.kind, model: b.model.trim(), baseUrl: url, local, apiKey, maxTokens, enabled: b.enabled !== false };
 }
 
-const encKey = () => createHash('sha256').update(process.env.IAM_AI_KEY_SECRET ?? 'demo-only-not-a-secret').digest();
+// No built-in fallback secret: without IAM_AI_KEY_SECRET (16+ chars) a key is refused instead of being sealed with a public value.
+const encKey = () => {
+  const secret = process.env.IAM_AI_KEY_SECRET ?? '';
+  if (secret.length < 16) throw new BadRequestException('IAM_AI_KEY_SECRET (16+ characters) must be set on the API before an external model key can be stored');
+  return createHash('sha256').update(secret).digest();
+};
 export function sealKey(key) {
   const iv = randomBytes(12);
   const c = createCipheriv('aes-256-gcm', encKey(), iv);
@@ -81,6 +88,24 @@ export function openKey(sealed) {
   const d = createDecipheriv('aes-256-gcm', encKey(), iv);
   d.setAuthTag(tag);
   return Buffer.concat([d.update(data), d.final()]).toString('utf8');
+}
+/** True for an address a remote model endpoint must never resolve to (loopback, private, link-local, metadata, mapped, ULA). */
+export function privateAddress(addr) {
+  const v = isIP(addr);
+  if (v === 4) return privateIp(addr);
+  if (v === 6) {
+    const a = addr.toLowerCase();
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+    if (mapped) return privateIp(mapped[1]);
+    return a === '::' || a === '::1' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a) || a.startsWith('::ffff:');
+  }
+  return true;
+}
+/** Resolves the host of a remote endpoint and refuses it when ANY answer is a private address (blocks a public name pointing inside). */
+export async function assertPublicResolution(hostname, resolve = (h) => lookup(h, { all: true, verbatim: true })) {
+  let answers;
+  try { answers = await resolve(hostname); } catch (e) { throw new ModelCallError(`the model host does not resolve: ${e.code ?? e.message}`, 502); }
+  if (!answers?.length || answers.some((a) => privateAddress(a.address))) throw new ModelCallError('the model host resolves to a private or loopback address: refused', 400);
 }
 export const redact = (msg, key) => (key ? String(msg).split(key).join('[redacted]') : String(msg));
 
@@ -141,12 +166,14 @@ function parseAnthropic(j) {
  * One model turn. `model`: { kind, baseUrl, model, maxTokens }. `apiKey`: string | null (opened by the adapter).
  * `fetchImpl` is injectable for the tests. Errors never carry the key.
  */
-export async function callModel({ model, apiKey, system, messages, tools, fetchImpl = fetch, timeoutMs = 90_000 }) {
+export async function callModel({ model, apiKey, system, messages, tools, fetchImpl = fetch, timeoutMs = 90_000, resolveImpl }) {
   const anthropic = model.kind === 'anthropic';
   const url = anthropic ? `${model.baseUrl}/v1/messages` : `${model.baseUrl}/chat/completions`;
   const headers = { 'content-type': 'application/json' };
   if (anthropic) { headers['anthropic-version'] = '2023-06-01'; if (apiKey) headers['x-api-key'] = apiKey; } else if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   const body = anthropic ? anthropicBody(model, system, messages, tools) : openaiBody(model, system, messages, tools);
+  const host = new URL(url).hostname.toLowerCase();
+  if (!localHosts().includes(host)) await assertPublicResolution(host, resolveImpl);
   let res;
   try { res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), redirect: 'error' }); } catch (e) { throw new ModelCallError(redact(`the model endpoint is unreachable: ${e.message}`, apiKey), 502); }
   const text = await res.text();

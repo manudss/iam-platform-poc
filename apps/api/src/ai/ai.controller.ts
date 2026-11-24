@@ -41,6 +41,9 @@ const agent = loadPluginModule('ai-assistant', 'agent.mjs') as AgentModule;
 const PLUGIN = 'ai-assistant';
 const SESSION_TTL_SECONDS = 8 * 3600;
 const MAX_USER_CHARS = 8000;
+// The per-turn limits (8 steps, 12 calls) reset with every user message: this caps a whole conversation.
+const MAX_CONVERSATION_TOOL_CALLS = 80;
+const MAX_CONVERSATION_MESSAGES = 400;
 
 /** What the console shows of a stored message: tool output is cut, the usage block is dropped. */
 export function view(m: ChatMessage) {
@@ -212,6 +215,7 @@ export class AiController {
       const history = await this.store.messages(conv.id);
       // A new user message while changes still wait for a decision is refused: the pending calls must be answered first.
       if (input.user && agent.pendingCalls(history).length) throw new ConflictException('changes are waiting for your decision: approve or decline them first');
+      if (history.length >= MAX_CONVERSATION_MESSAGES || history.filter((m) => m.role === 'tool').length >= MAX_CONVERSATION_TOOL_CALLS) throw new ConflictException('this conversation reached its size limit: start a new conversation');
       if (input.user) await this.store.append(conv.id, [input.user]);
       const messages = input.user ? [...history, input.user] : history;
       const opened = await this.openTools(tenant, session);
