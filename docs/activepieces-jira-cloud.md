@@ -94,14 +94,24 @@ the existing config limits, not fetched from arbitrary user URLs by the adapter.
 Installed upstream attachment paths request redirects, and one action uses a
 provider-returned content URL. No leak was observed: this was a code-level risk.
 A scoped AsyncLocalStorage transport guard now checks every native Jira fetch,
-including property resolution and trigger lifecycle, against the bound API root,
+including property resolution and trigger lifecycle, against the exact bound site or
+Atlassian gateway cloud prefix and API3/API2/agile1.0 roots,
 and forces manual redirects then refuses every 3xx. Foreign content/CDN URLs are
 therefore refused, not downloaded. Unrelated concurrent requests are unchanged.
 These are intentional compatibility limits. This process-wide wrapper and async
 scope isolation need independent review; no complete-catalogue safety claim is
-made from two transport fixtures. Native package upgrades must requalify that
+made from transport fixtures alone. Encoded dot/separator/double-encoding,
+foreign host/port/HTTP and cross-cloud paths are refused before fetch. Custom calls
+remain API3-only. The installed native board action exercises agile1.0; API2 is
+transport-compatible but only sample avatar URLs, not executable API2 calls, were
+found in the pinned bundle. Removing the origin check fails the same-path foreign
+destination test. Native package upgrades must requalify that
 its HTTP paths still pass through fetch; any replacement of the guard fails
 closed at native entry.
+
+The reviewed security loader from PR166 is integrated locally: native sources are
+neutralized before compilation and process TLS verification must remain enabled.
+This does not qualify a live account or permit service recovery.
 
 Evidence: exhaustive action/lifecycle dispatch uses doubles; representative
 installed-package HTTP-intercepted tests cover baseline/category epoch/repeats,
