@@ -12,7 +12,7 @@ def command(args,check=True):
  return r
 
 class Handle:
- def __init__(self,unit,identity,du,cgroup,folder):self.folder=folder;self.unit=unit;self.pid=identity['pid'];self.identity=identity;self.du=du;self.cgroup=cgroup
+ def __init__(self,unit,identity,du,cgroup,folder,role,engagement):self.folder=folder;self.unit=unit;self.pid=identity['pid'];self.identity=identity;self.du=du;self.cgroup=cgroup;self.role=role;self.engagement=engagement
  def wait(self,timeout=120):
   end=time.monotonic()+timeout
   while self.du.state_of(self.identity)=='alive':
@@ -63,7 +63,7 @@ def start(folder,engagement,py,du_path,du,poll=2):
    if not evidence[role]['mountNamespaceMatches']:raise RuntimeError('systemd-mount-namespace-mismatch')
   (folder/'unit-bindings.json').write_text(json.dumps(bindings));(folder/'unit-bindings.json').chmod(0o600)
   (folder/'UNIT_BINDINGS_READY').write_text('fixture binding ready\n')
-  handles={r:Handle(bindings[r]['unit'],{k:bindings[r][k] for k in ['pid','starttime','boot_id']},du,bindings[r]['controlGroup'],folder) for r in ['worker','watchdog']}
+  handles={r:Handle(bindings[r]['unit'],{k:bindings[r][k] for k in ['pid','starttime','boot_id']},du,bindings[r]['controlGroup'],folder,r,engagement) for r in ['worker','watchdog']}
   if du.state_of(owner)!='alive':raise RuntimeError('mount-owner-not-live-before-return')
   return handles,evidence
  except BaseException as original:
@@ -88,8 +88,39 @@ def independent_cgroup_state(cg):
   if events['populated']=='1':populated=True
  return 'populated' if populated else 'empty'
 
+def inactive_unloaded_properties(p):
+ return all(p.get(k)==v for k,v in {'ActiveState':'inactive','SubState':'dead','MainPID':'0','InvocationID':'','ControlGroup':''}.items())
+
+def watchdog_cleanup_noop(unit,old,before,preproof,postproof,stop,final,binding):
+ """Cleanup only, never evidence of product completion or recovery."""
+ ident=old.get('identity') or {};cg=old.get('cgroup');engagement=old.get('engagement')
+ if old.get('role')!='watchdog' or not isinstance(engagement,str) or not __import__('re').fullmatch(r'[A-Za-z0-9._-]{8,64}',engagement):return False
+ if unit!='lyam-durable-held-'+engagement+'-watchdog.service':return False
+ if set(ident)!={'pid','starttime','boot_id'} or type(ident['pid']) is not int or ident['pid']<=0 or not ident['starttime'] or not ident['boot_id']:return False
+ if not cg or not cg.startswith('/') or '..' in cg.split('/') or not cg.endswith('/'+unit):return False
+ if not binding or binding.get('unit')!=unit or binding.get('controlGroup')!=cg or not binding.get('invocationID'):return False
+ if any(binding.get(k)!=ident[k] for k in ident):return False
+ if not inactive_unloaded_properties(before):return False
+ if stop.get('returnCode')!=5 or stop.get('exactUnitNotLoaded') is not True or stop.get('stdoutEmpty') is not True:return False
+ for snapshot in [preproof,postproof]:
+  if snapshot.get('originalMainState')!='absent' or snapshot.get('originalCgroupState') not in ('gone','empty'):return False
+ return final.get('LoadState')=='not-found' and inactive_unloaded_properties(final)
+
+def final_cleanup_manager(unit):
+ keys=['LoadState','ActiveState','SubState','MainPID','InvocationID','ControlGroup']
+ result=command(['systemctl','show','--no-pager',unit,'-p',','.join(keys)],False)
+ if result.returncode or result.stderr.strip():raise RuntimeError('cleanup-manager-unverifiable')
+ lines=result.stdout.splitlines()
+ if len(lines)!=len(keys) or any('=' not in line for line in lines):raise RuntimeError('cleanup-manager-incomplete')
+ props=dict(line.split('=',1) for line in lines)
+ if set(props)!=set(keys):raise RuntimeError('cleanup-manager-incomplete')
+ return props
+
 def cleanup(units,known,du,folder=None):
- errors=[];before={};stops={};proof={};preproof={}
+ errors=[];before={};stops={};proof={};preproof={};final={};bindings={}
+ if folder is not None:
+  try:bindings=json.loads((Path(folder)/'unit-bindings.json').read_text())
+  except Exception:pass
  for unit in units:
   try:
    p=du.unit_properties(unit)
@@ -112,8 +143,7 @@ def cleanup(units,known,du,folder=None):
   try:
    result=command(['systemctl','stop',unit],False)
    expected='Failed to stop '+unit+': Unit '+unit+' not loaded.'
-   stops[unit]={'returnCode':result.returncode,'exactUnitNotLoaded':result.stderr.strip()==expected}
-   if result.returncode:errors.append('stop-refused')
+   stops[unit]={'returnCode':result.returncode,'exactUnitNotLoaded':result.stderr.strip()==expected,'stdoutEmpty':result.stdout==''}
   except Exception:errors.append('stop-exception')
  for unit in units:
   old=known.get(unit) or {};ident=old.get('identity');cg=old.get('cgroup')
@@ -129,6 +159,16 @@ def cleanup(units,known,du,folder=None):
    proof.setdefault(unit,{})['originalCgroupState']=cstate
    if cstate not in ('empty','gone'):errors.append('cgroup-not-empty')
   except Exception:errors.append('cgroup-unverifiable')
+ for unit in units:
+  try:final[unit]=final_cleanup_manager(unit)
+  except Exception:final[unit]={'properties':'unavailable'}
+  result=stops.get(unit,{})
+  if result.get('returnCode'):
+   old=known.get(unit) or {}
+   binding=bindings.get('watchdog') if bindings.get('engagementID')==old.get('engagement') else None
+   if watchdog_cleanup_noop(unit,old,before.get(unit,{}),preproof.get(unit,{}),proof.get(unit,{}),result,final[unit],binding):result['stopOutcome']='already-unloaded-verified'
+   else:errors.append('stop-refused');result['stopOutcome']='refused'
+  elif result.get('returnCode')==0:result['stopOutcome']='stopped'
  if folder is not None:
   try:
    bindings=json.loads((Path(folder)/'unit-bindings.json').read_text());record=json.loads((Path(folder)/'worker-unit-start.json').read_text());e=bindings['worker']
@@ -136,10 +176,10 @@ def cleanup(units,known,du,folder=None):
    proof['workerStartRecordMatchesBinding']=record==expected and type(record['start']) is int and record['start']>0
    proof['workerStartMatchesPreCleanupManager']=str(record['start'])==before[e['unit']]['ExecMainStartTimestampMonotonic']
   except Exception:proof['workerStartRecordMatchesBinding']=False;proof['workerStartMatchesPreCleanupManager']=False
- if folder is not None:(Path(folder)/'systemd-cleanup.json').write_text(json.dumps({'preCleanup':before,'preCleanupBoundProcessAndCgroupProof':preproof,'cgroupProbe':'independent-harness-procs-and-events-recursive','stopResults':stops,'boundProcessAndCgroupProof':proof,'errors':sorted(set(errors)),'passed':not errors}))
+ if folder is not None:(Path(folder)/'systemd-cleanup.json').write_text(json.dumps({'preCleanup':before,'preCleanupBoundProcessAndCgroupProof':preproof,'cgroupProbe':'independent-harness-procs-and-events-recursive','stopResults':stops,'finalManager':final,'boundProcessAndCgroupProof':proof,'errors':sorted(set(errors)),'passed':not errors}))
  if errors:raise RuntimeError('systemd-cleanup-incomplete:'+','.join(sorted(set(errors))))
 
 def stop(handles):
  units=[h.unit for h in handles.values()]
- known={h.unit:{'identity':h.identity,'cgroup':h.cgroup} for h in handles.values()}
+ known={h.unit:{'identity':h.identity,'cgroup':h.cgroup,'role':h.role,'engagement':h.engagement} for h in handles.values()}
  cleanup(units,known,next(iter(handles.values())).du,Path(next(iter(handles.values())).folder))
