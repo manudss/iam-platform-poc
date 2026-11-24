@@ -202,7 +202,15 @@ def run(x):
             try: p.wait(timeout=120)
             except subprocess.TimeoutExpired: p.kill(); raise RuntimeError('supervision-process-did-not-exit')
         sampler.stop.set(); sampler.join(5)
-        wres = jread(folder / 'watchdog-result.json'); st = jread(state_path); rec = {'watchdog': {k: wres.get(k) for k in ['action', 'needs_operator']}, 'killed_at_phase': killed, 'statuses': sampler.statuses(), 'worker_exit': jread(folder / 'worker-result.json')['exit'] if (folder / 'worker-result.json').exists() else None}
+        wres = jread(folder / 'watchdog-result.json'); st = jread(state_path)
+        persisted_steps=(st.get('opening_intent') or {}).get('steps')
+        if persisted_steps is None:
+            matches=[r for r in st.get('recoveries',[]) if r.get('manifest',{}).get('engagement_id')==engagement]
+            persisted_steps=matches[-1].get('steps',[]) if matches else []
+        for i,step in enumerate(persisted_steps):
+            if step.get('receipt',{}).get('config_sha256')!=manifest['step_configs']['steps'][i]['sha256']:
+                raise RuntimeError('actual-helper-receipt-config-binding-mismatch')
+        rec = {'watchdog': {k: wres.get(k) for k in ['action', 'needs_operator']}, 'killed_at_phase': killed, 'statuses': sampler.statuses(), 'worker_exit': jread(folder / 'worker-result.json')['exit'] if (folder / 'worker-result.json').exists() else None}
         report.setdefault('initialStatuses',{})[name]=sorted({v for t,v in sampler.rows if closed_seen is None or t<closed_seen})
         first200 = next((t for t,status in sampler.rows if closed_seen is not None and t>=closed_seen and status==200),None)
         if closed_seen is None:raise RuntimeError('closure-marker-not-proved')
