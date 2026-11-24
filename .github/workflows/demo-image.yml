@@ -10,7 +10,7 @@ name: Demo image (GHCR)
 # Tags (ghcr.io/<owner>/<repo>):
 #   <full commit sha>   immutable tag, the one previews and the demo deploy
 #   pr-<N>              moving tag on pull requests (convenience)
-#   latest              moving tag on pushes to main only
+#   latest              FROZEN during closed recovery, no publication until separate reviewed change
 #
 # Triggers: every push to main and every (same-repo) PR head, so the image for a
 # PR head normally exists BEFORE anyone comments /preview; workflow_dispatch
@@ -71,9 +71,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TAGS="${TAGS},ghcr.io/${REPO}:pr-${{ github.event.pull_request.number }}"
           fi
-          if [ -z "${{ inputs.sha }}" ] && [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS},ghcr.io/${REPO}:latest"
-          fi
+          # Closed recovery: never move an existing Render-consumed image tag.
+          # Exact SHA tags and digest output still support OCI and qualification.
+          # Resuming latest publication requires a separate reviewed change.
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "version=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"

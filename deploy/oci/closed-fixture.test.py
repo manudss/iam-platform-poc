@@ -1,7 +1,16 @@
 #!/usr/bin/python3
 import unittest,importlib.util
+from unittest.mock import patch
+from types import SimpleNamespace
 s=importlib.util.spec_from_file_location('f',str(__import__('pathlib').Path(__file__).parents[2]/'scripts/closed-helper-docker-fixture.py'));f=importlib.util.module_from_spec(s);s.loader.exec_module(f)
 class PostApp(unittest.TestCase):
+ def test_companion_readiness_explicit_http(self):
+  for pgcode,baocode,expected in [(0,0,True),(1,0,False),(0,1,False),(1,1,False)]:
+   with patch.object(f,'call',side_effect=[SimpleNamespace(returncode=pgcode),SimpleNamespace(returncode=baocode)]) as call:
+    diagnostics={}
+    self.assertEqual(f.companions_ready('fixture-pg','fixture-bao',diagnostics),expected)
+    self.assertEqual(diagnostics,{'pgIsReadyRC':pgcode,'baoStatusRC':baocode})
+    self.assertEqual(call.call_args_list[1].args,(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200','fixture-bao','bao','status'],False))
  def test_postapp(self):
   launch={'policy4Exact':'four','policy6Exact':'six'};summary={'pid1Status':['CapEff: 0000000000000000','CapBnd: 0000000000000000','NoNewPrivs: 1']};f.assert_postapp('four','six',launch,summary)
   for a,b in [('changed','six'),('four','changed')]:self.assertRaises(ValueError,f.assert_postapp,a,b,launch,summary)

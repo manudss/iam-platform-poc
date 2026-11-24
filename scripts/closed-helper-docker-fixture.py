@@ -22,6 +22,13 @@ def wait(name,port,path,seconds=220):
   if not inspect(name)['State']['Running']:raise RuntimeError('fixture process died')
   time.sleep(2)
  raise RuntimeError('fixture health timeout')
+def companions_ready(pg,bao,diagnostics=None):
+ # Dev server listens without TLS. Never let the CLI default select HTTPS.
+ pgcheck=call(['docker','exec',pg,'pg_isready','-U','lyam'],False)
+ baocheck=call(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','status'],False)
+ if diagnostics is not None:diagnostics.update(pgIsReadyRC=pgcheck.returncode,baoStatusRC=baocheck.returncode)
+ return pgcheck.returncode==0 and baocheck.returncode==0
+
 def assert_postapp(r4,r6,launch,summary):
  if r4!=launch['policy4Exact'] or r6!=launch['policy6Exact']:raise ValueError('policy changed after AppModule startup')
  status='\n'.join(summary['pid1Status'])
@@ -41,7 +48,7 @@ def main():
  out=pathlib.Path(a.out).resolve();out.mkdir(parents=True,exist_ok=True)
  prefix='closed-ci-'+str(os.getpid());network=prefix+'-net';pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app'
  root=pathlib.Path('/opt')/prefix;root.mkdir(mode=0o700);data=root/'data';data.mkdir(mode=0o700)
- containers=[];created_network=False
+ containers=[];created_network=False;stage='setup';readiness={}
  try:
   # Checked-in helper is copied, not changed. Wrappers are rebound only to this fixture root.
   impl=root/'closed-recovery-helper.py';shutil.copyfile(a.helper,impl);impl.chmod(0o700)
@@ -56,10 +63,12 @@ def main():
   d(*netargs,network);created_network=True
   containers.append(pg);d('run','-d','--name',pg,'--network',network,'-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',a.pg_image)
   containers.append(bao);d('run','-d','--name',bao,'--network',network,'--cap-add','IPC_LOCK','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-ci-only',a.bao_image,'server','-dev','-dev-listen-address=0.0.0.0:8200')
+  stage='companion-readiness'
   for _ in range(60):
-   if call(['docker','exec',pg,'pg_isready','-U','lyam'],False).returncode==0 and call(['docker','exec',bao,'bao','status'],False).returncode==0:break
+   if companions_ready(pg,bao,readiness):break
    time.sleep(1)
   else:raise RuntimeError('synthetic companions unavailable')
+  stage='seed-and-offline-inventory'
   # Create fictional dataset with network none and hold, then stop cold. Never use production data.
   containers.append(seed);d('run','-d','--name',seed,'--network','none','-v',str(data)+':/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',a.image)
   wait(seed,3000,'/health');d('stop',seed)
@@ -73,12 +82,14 @@ def main():
   conf=root/'config.json';conf.write_text(json.dumps(config));conf.chmod(0o600)
   env=root/'app.env';env.write_text('\n'.join(['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never','LYAM_DOCKER_NETWORK='+network,'LYAM_CLOSED_CONFIG='+str(conf),'LYAM_CLOSED_IMPLEMENTATION='+str(impl),'LYAM_CLOSED_PREFLIGHT='+str(wrappers['preflight']),'LYAM_CLOSED_LAUNCHER='+str(wrappers['launcher']),'IAM_PG_URL=postgres://lyam@pg:5432/lyam','IAM_BAO_ADDR=http://bao:8200','IAM_BAO_TOKEN=synthetic-ci-only','IAM_PUBLIC_ORIGIN=http://localhost:8080'])+'\n');env.chmod(0o600)
   args=['--image',a.image,'--container',app,'--env-file',str(env),'--data-dir',str(data),'--port','18089']
+  stage='negative-ledger'
   goodconfig=conf.read_text();wrong={**config,'ledgerSHA256':'0'*64};conf.write_text(json.dumps(wrong))
   refused=call([str(wrappers['preflight']),*args],False)
   if refused.returncode==0 or call(['docker','inspect',app],False).returncode==0:raise ValueError('bad ledger did not refuse before candidate creation')
   conf.write_text(goodconfig)
   pre=json.loads(call([str(wrappers['preflight']),*args]).stdout)
   containers.append(app)
+  stage='negative-policy'
   original_impl=impl.read_text();needle="for ip,port in peers.values():nscmd('iptables','-A','OUTPUT','-d',ip,'-p','tcp','--dport',str(port),'-j','ACCEPT')"
   if needle not in original_impl:raise ValueError('policy mutation target changed; explicit review needed')
   impl.write_text(original_impl.replace(needle,'for ip,port in []:pass'));impl.chmod(0o700)
@@ -88,9 +99,11 @@ def main():
   if badlaunch.returncode==0 or failed['State']['Running'] or failed['Config']['Entrypoint']!=['sh']:raise ValueError('incomplete policy did not stop before release')
   # Explicit fixture-owned failed candidate cleanup only, never a production retry policy.
   d('rm',app);impl.write_text(original_impl);impl.chmod(0o700);config['implementationSHA256']=sha(impl.read_bytes());conf.write_text(json.dumps(config))
+  stage='complete-helper'
   launch=json.loads(call([str(wrappers['launcher']),*args]).stdout)
   proofpath=root/'launch-proof.json';proofpath.write_text(json.dumps(launch));proofpath.chmod(0o600)
   if launch['ipv6DisabledProved']!=(a.ipv6_mode=='inactive'):raise ValueError('wrong IPv6 branch exercised')
+  stage='app-held-live-postcheck'
   wait(app,3000,'/health');wait(app,8080,'/healthz')
   pid=inspect(app)['State']['Pid']
   r4=call(['nsenter','-t',str(pid),'-n','iptables','-S']).stdout;r6=call(['nsenter','-t',str(pid),'-n','ip6tables','-S']).stdout
@@ -102,11 +115,23 @@ def main():
   def ipv6shape(x):return {'interfaces':x['interfaces'],'addresses':sorted(x['addresses'].splitlines()),'routes':sorted(' '.join(l.split()[:5]+l.split()[-1:]) for l in x['routes'].splitlines())}
   if ipv6shape(postipv6)!=ipv6shape(launch['ipv6State']):raise ValueError('IPv6 state changed after AppModule')
   # Restart must return to inert FIFO, never run app or retain a release signal.
+  stage='restart-inert'
   d('stop',app);d('start',app);time.sleep(2)
   inert=call(['docker','exec',app,'node','-e',"const f=require('fs');if(!f.statSync('/tmp/lyam-closed-start.fifo').isFIFO())process.exit(1);const live=f.readdirSync('/proc').filter(p=>p!==String(process.pid)).some(p=>{try{return f.readFileSync('/proc/'+p+'/cmdline','utf8').includes('dist/main.js')}catch{return false}});if(live)process.exit(2)"],False)
   if inert.returncode:raise ValueError('restart did not fail closed')
   result={'passed':True,'scope':'real Docker helper, Linux policy, real synthetic PG/Bao and real AppModule, no production data','image':a.image,'imageID':im['Id'],'preflight':pre,'launch':launch,'appModule':summary,'liveVerification':live,'postAppRules4':r4,'postAppRules6':r6,'restartInert':True,'badLedgerRefusedBeforeCandidate':True,'incompletePolicyRefusedBeforeReleaseAndStopped':True,'ipv6Mode':a.ipv6_mode,'fixtureConfigAutoExtracted':True,'fixtureWrappersReboundToPrivatePrefix':True,'syntheticFreshLedgerNotHostLedger':True,'companionImages':[a.pg_image,a.bao_image],'limitations':['Does not exercise provider calls or production queue','Offline bundle TLS inventory is a separate exact-image gate','Not production qualification']}
   (out/'closed-helper-docker-result.json').write_text(json.dumps(result,indent=2));print('PASS real Docker closed-helper fixture')
+ except Exception as error:
+  # Always retain a bounded, sanitized failure artifact before cleanup. No env,
+  # logs, credentials, or raw docker-inspect payloads are uploaded.
+  states=[]
+  for name in containers:
+   try:
+    state=inspect(name)['State']
+    states.append({'running':state['Running'],'exitCode':state['ExitCode'],'status':state['Status'],'oomKilled':state.get('OOMKilled')})
+   except Exception:states.append({'unavailable':True})
+  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'readiness':readiness,'syntheticContainerStates':states},indent=2))
+  raise
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)
   if created_network:call(['docker','network','rm',network],False)

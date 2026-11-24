@@ -89,9 +89,11 @@ describe('versioned CI control applicability', () => {
     const repo=process.cwd(),c=CONTROLS.find(x=>x.id==='render_state');assert.equal(c.introducedBy,'9782e49dd23e27407204e5acd163348c8ed39ecf');
     const git=(...args)=>execFileSync('git',args,{cwd:repo,encoding:'utf8'}).trim(),workflow=readFileSync(join(repo,'.github/workflows/ci.yml'),'utf8');
     const legacy=git('rev-parse',c.introducedBy+'^1'),plan=controlPlan(repo,legacy);
-    assert.equal(plan.controls.find(x=>x.id==='render_state').required,false);auditReferences(repo,legacy,plan,workflow);
-    assert.throws(()=>auditReferences(repo,legacy,controlPlan(repo,legacy,CONTROLS.filter(x=>x.id!=='render_state')),workflow),/unmapped or required/);
-    assert.throws(()=>auditReferences(repo,legacy,plan,workflow.replaceAll("if: needs.control_policy.outputs.render_state_required == 'true'","if: true")),/not protected/);
+    // The temporary job is removed before main; keep testing the original feature boundary.
+    const readerWorkflow=git('show','29508ab65702ace1ba10522c0486237f482616d1:.github/workflows/ci.yml');
+    assert.equal(plan.controls.find(x=>x.id==='render_state').required,false);auditReferences(repo,legacy,plan,readerWorkflow);
+    assert.throws(()=>auditReferences(repo,legacy,controlPlan(repo,legacy,CONTROLS.filter(x=>x.id!=='render_state')),readerWorkflow),/unmapped or required/);
+    assert.throws(()=>auditReferences(repo,legacy,plan,readerWorkflow.replaceAll("if: needs.control_policy.outputs.render_state_required == 'true'","if: true")),/not protected/);
     assert.equal(controlPlan(repo,c.introducedBy).controls.find(x=>x.id==='render_state').required,true);
   });
 

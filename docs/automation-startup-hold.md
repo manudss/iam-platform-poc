@@ -136,3 +136,21 @@ private, root-controlled files. Live helper verification runs after held API
 health and before preservation qualification, then again in the independent
 caller. The receipt binds the IPv6 classification and raw-state hash to the
 launch proof. No automatic destructive rollback follows a closed failure.
+
+### Render merge side effects
+
+The image workflow no longer moves `latest`. This freeze remains in force until
+a separate reviewed change explicitly lifts it, including after OCI recovery. It still
+publishes the exact commit SHA and the PR qualification tag and exposes the
+immutable digest required by OCI. The production Render job remains hard
+suspended. The temporary Render secret-reading CI job has been removed; its
+read-only helper and versioned control remain without any workflow execution.
+
+Observed service state was image runtime, autoDeploy no, no Git repository or
+branch and no active deploys. Image identity remained unknown in the sanitized
+observation. That is not an immutable-image qualification. Render does not
+redeploy image-backed services when a registry tag changes, but a later restart
+or rescheduling can pull their configured tag again. Freezing `latest` avoids
+our merge changing the existing production tag. No Render service was modified.
+Before integration, check no prior image or production deploy run is still
+queued or active; a future guard cannot cancel an already-created run.

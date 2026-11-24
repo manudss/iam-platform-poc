@@ -101,3 +101,11 @@ test('shipped closed-recovery suspension cannot contact Render, even with key an
  const yaml=readFileSync(new URL('../.github/workflows/demo-deploy.yml',import.meta.url),'utf8');
  assert.match(yaml,/if: \$\{\{ false \}\}/);
 });
+
+test('closed recovery never publishes latest and removes the temporary secret reader job',()=>{
+ const image=readFileSync(new URL('../.github/workflows/demo-image.yml',import.meta.url),'utf8');
+ assert.doesNotMatch(image,/TAGS=.*:latest/);
+ assert.match(image,/TAGS="ghcr\.io\/\$\{REPO\}:\$\{SHA\}"/);
+ const ci=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8');
+ assert.doesNotMatch(ci,/^  render_state:/m);assert.doesNotMatch(ci,/RENDER_API_KEY/);
+});

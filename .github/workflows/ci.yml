@@ -198,24 +198,6 @@ jobs:
           path: /tmp/blocks-shots
           retention-days: 7
           if-no-files-found: ignore
-  render_state:
-    name: Read-only Render recovery state
-    needs: control_policy
-    if: needs.control_policy.outputs.render_state_required == 'true' && github.event_name == 'pull_request' && github.head_ref == 'fix/closed-recovery-qualification' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    permissions: { contents: read }
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
-      - name: Read current production service metadata only
-        if: needs.control_policy.outputs.render_state_required == 'true'
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-        run: node scripts/render-prod-state.mjs
-
   web:
     needs: control_policy
     runs-on: ubuntu-latest
