@@ -65,3 +65,7 @@ No GPL-only, LGPL-only, SSPL or proprietary dependency in any production tree.
 All dependencies are permissive (MIT/Apache-2.0/BSD/ISC-style): their only
 obligations are notice retention, satisfied by the NOTICE file. They do not affect
 the project's proprietary, all-rights-reserved status.
+
+## Addendum 2026-11-24: AI SDK (plugin `ai-assistant`)
+
+20 packages added to the root plugin dependencies (`ai`, `@ai-sdk/mcp`, `@ai-sdk/openai-compatible`, `@ai-sdk/anthropic`, `@ai-sdk/google` and their dependencies): 10 Apache-2.0, 7 MIT, 2 ISC, 1 `(AFL-2.1 OR BSD-3-Clause)`. All permissive. The screen build (`scripts/ai-assistant-ui`, esbuild, MIT) is a build tool only; the bundle embeds the Apache-2.0 `ai` chat classes.
