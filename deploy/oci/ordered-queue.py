@@ -314,14 +314,14 @@ def held_update(path,manifest,repository,container,make_host,lock_fd,verify=veri
     host=make_host(manifest);host.preflight(container,state['history'][-1])
     c=controller or opening_controller(manifest)
     original_state=copy.deepcopy(state)
-    intent={'queue':queue_identity(),'phase':'held-update-prepared','at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'manifest':copy.deepcopy(manifest),'gates':[],'container':container,'target':copy.deepcopy(chain[-1]),'steps':[],'original_fingerprint':fingerprint(state)}
+    at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+    planned=host.plan_ops_gate('lyam-held-update-ops:%d:%s'%(os.getpid(),at))  # closure plan exists from the very first intent
+    intent={'queue':queue_identity(),'phase':'held-update-prepared','at':at,'manifest':copy.deepcopy(manifest),'gates':[planned],'container':container,'target':copy.deepcopy(chain[-1]),'steps':[],'original_fingerprint':fingerprint(state)}
     state['opening_intent']=intent;state['format']=3;atomic(path,state)
     def persist(phase):
         intent['phase']=phase;intent['gates']=host.snapshot_gates();atomic(path,state)
     try:
-        token='lyam-held-update-ops:%d:%s'%(os.getpid(),intent['at'])
-        planned=host.plan_ops_gate(token)
-        intent['gates']=[planned];intent['phase']='ops-gate-planned';atomic(path,state)  # exact bytes durable BEFORE creation
+        intent['phase']='ops-gate-planned';atomic(path,state)  # exact bytes durable BEFORE creation
         host.create_ops_gate();persist('ops-gate-created')
         adopt=None
         for i,entry in enumerate(chain):
@@ -351,11 +351,13 @@ def held_update(path,manifest,repository,container,make_host,lock_fd,verify=veri
         try:
             intent['gates']=intent['gates'] or host.snapshot_gates()
             c.close_gates(intent)
-            if hasattr(c,'verify_closed_access'):c.verify_closed_access(final if 'final' in dir() else manifest)
+            if hasattr(c,'verify_closed_access'):c.verify_closed_access({'opening':manifest.get('opening_static')})
             intent['phase']='failed-access-rearmed'
         except BaseException:
             intent['phase']='failed-access-unknown'
-            if hasattr(c,'stop_candidate'):c.stop_candidate(container)
+            try:
+                if hasattr(c,'stop_candidate'):c.stop_candidate(container)
+            except BaseException:intent['stop_candidate_failed']=True
         state=original_state;state['format']=3
         state['opening_intent']=intent;atomic(path,state)
         raise
@@ -363,31 +365,52 @@ def held_update(path,manifest,repository,container,make_host,lock_fd,verify=veri
 def queue_identity(pid=None):
     pid=pid or os.getpid()
     stat=Path('/proc/%d/stat'%pid).read_text()
-    start=stat[stat.rindex(')')+2:].split()[19]
-    return {'pid':pid,'starttime':start,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
+    rest=stat[stat.rindex(')')+2:].split()
+    return {'pid':pid,'starttime':rest[19],'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
 
-def queue_alive(identity):
-    try:current=queue_identity(identity['pid'])
-    except (OSError,ValueError,KeyError):return False
-    return current==identity
+def queue_state(identity):
+    """'alive' | 'absent' | 'unknown'. Only certain absence is 'absent': a different kernel boot, ENOENT for the
+    pid, or the exact identity as a zombie. A reused pid, a bad schema or any read error is 'unknown'."""
+    if not isinstance(identity,dict) or set(identity)!={'pid','starttime','boot_id'} or type(identity['pid']) is not int or identity['pid']<2 \
+       or not isinstance(identity['starttime'],str) or not identity['starttime'].isdigit() or not isinstance(identity['boot_id'],str) or not identity['boot_id']:
+        return 'unknown'
+    try:boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:return 'unknown'
+    if boot!=identity['boot_id']:return 'absent'
+    try:stat=Path('/proc/%d/stat'%identity['pid']).read_text()
+    except FileNotFoundError:return 'absent'
+    except OSError:return 'unknown'
+    try:rest=stat[stat.rindex(')')+2:].split();state,start=rest[0],rest[19]
+    except (ValueError,IndexError):return 'unknown'
+    if start!=identity['starttime']:return 'unknown'
+    return 'absent' if state in ('Z','X') else 'alive'
+
+def queue_alive(identity):return queue_state(identity)=='alive'
 
 HELD_PHASES=('held-update-prepared','ops-gate-planned','ops-gate-created','closed-step-','opening')
 
-def rearm_held_update(path,controller=None,alive=queue_alive):
-    """Close access after an interrupted held-update. Refuses unless the recorded queue identity is
-    dead (pid+starttime+boot id); the caller already holds the updater lock, so a live updater child
-    also blocks this. Access must then be MEASURED closed (503 on every reviewed origin)."""
+def rearm_held_update(path,controller=None,state_of=queue_state):
+    """Close access after an interrupted held-update. Proceeds only if the recorded queue identity is
+    CERTAINLY absent (pid+starttime+boot id); alive/unknown refuse. Called under both locks, state and
+    phase are re-read before mutation. Closure AND its measurement (503 on every reviewed origin) are one
+    guarded unit with a durable outcome; any failure is recorded as failed-access-unknown."""
     state=load(path);intent=state.get('opening_intent')
     if not intent or not str(intent.get('phase','')).startswith(HELD_PHASES):raise ValueError('no interrupted held-update intent')
-    ident=intent.get('queue')
-    if not isinstance(ident,dict) or alive(ident):raise ValueError('queue identity unknown or still alive; no rearm')
+    if state_of(intent.get('queue'))!='absent':raise ValueError('queue identity alive or not certainly absent; no rearm')
     c=controller or opening_controller(intent['manifest'])
-    view={'opening':intent['manifest']['opening_static']}
-    c.close_gates(intent)
-    try:c.verify_closed_access(view)
-    except BaseException:
-        if hasattr(c,'stop_candidate'):c.stop_candidate(intent['container'])
-        intent['phase']='failed-access-unknown';atomic(path,state)
+    view=intent.get('closing_view') or {'opening':intent['manifest']['opening_static']}
+    again=load(path)
+    if again!=state or state_of(intent.get('queue'))!='absent':raise ValueError('state or queue identity changed before rearm')
+    try:
+        c.close_gates(intent)
+        if hasattr(c,'verify_closed_access'):c.verify_closed_access(view)
+    except BaseException as error:
+        intent['phase']='failed-access-unknown';intent['rearm_error']=type(error).__name__
+        try:
+            if hasattr(c,'stop_candidate'):c.stop_candidate(intent['container'])
+        except BaseException:
+            intent['rearm_stop_failed']=True
+        atomic(path,state)
         raise
     intent['phase']='interrupted-access-rearmed';atomic(path,state)
     return state
@@ -440,7 +463,7 @@ def main():
                     print('UI open, automation held; pause and explicit resume barrier retained; not full delivery')
                 elif a.command=='held-update-reviewed':
                     if not a.repository:raise ValueError('reviewed repository required')
-                    controller=opening_controller(manifest);env=controller.settings(manifest)
+                    controller=opening_controller(manifest);env=controller.settings({'opening':manifest['opening_static']})
                     if Path(env.get('LYAM_LOCK_FILE','/opt/lyam/.update.lock'))!=Path(a.update_lock) or Path(env.get('LYAM_PAUSE_FILE','/opt/lyam/UPDATE_PAUSED'))!=pause:raise ValueError('configured lock/pause mismatch')
                     if manifest.get('updater',{}).get('path')!=str(Path(a.updater).absolute()):raise ValueError('updater path must equal the reviewed updater binding')
                     hm=bound_module(manifest.get('held_host'),'held-update-host.py','held host')

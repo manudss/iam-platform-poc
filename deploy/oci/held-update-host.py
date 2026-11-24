@@ -55,6 +55,11 @@ def fsync_path(p):
 def gate_record(p):
  p=Path(p);st=p.lstat()
  if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):raise ValueError('gate must be a regular non-symlink file')
+ if st.st_nlink!=1:raise ValueError('gate must have a single link')
+ if st.st_uid!=0 and st.st_uid!=os.geteuid():raise ValueError('gate owner must be root')
+ for anc in [p.parent,*p.parent.parents]:
+  a=anc.stat()
+  if (a.st_uid!=0 and a.st_uid!=os.geteuid()) or (a.st_mode&0o022 and not a.st_mode&0o1000):raise ValueError('gate ancestor not private to root')
  return {'path':str(p),'bytes_hex':p.read_bytes().hex(),'mode':st.st_mode&0o777,'uid':st.st_uid,'gid':st.st_gid}
 
 class Host:
@@ -97,7 +102,16 @@ class Host:
  def create_ops_gate(self,token=None):
   token=self.ops_token if token is None else token
   fd=os.open(self.ops,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o644)
-  with os.fdopen(fd,'wb') as f:f.write(token.encode());f.flush();os.fsync(f.fileno())
+  with os.fdopen(fd,'wb') as f:
+   # Independent of the process umask: the plan says 0644 and Caddy must read it.
+   os.fchmod(f.fileno(),0o644);os.fchown(f.fileno(),self.ops_record['uid'],self.ops_record['gid'])
+   f.write(token.encode());f.flush();os.fsync(f.fileno())
+  st=os.lstat(self.ops)
+  if stat.S_IMODE(st.st_mode)!=0o644 or st.st_uid!=self.ops_record['uid']:raise ValueError('OPS gate mode/owner differs from plan')
+  for anc in [self.ops.parent,*self.ops.parent.parents]:
+   a=anc.stat()
+   if a.st_uid!=0 and a.st_uid!=os.geteuid():raise ValueError('gate ancestor not root-owned')
+   if a.st_mode&0o022 and not a.st_mode&0o1000:raise ValueError('gate ancestor writable by others')
   d=os.open(self.ops.parent,os.O_RDONLY)
   try:os.fsync(d)
   finally:os.close(d)

@@ -178,9 +178,15 @@ class RealHost(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'both gates absent'):h.preflight()
   (self.d/'gates'/'FRONT').unlink();self.env.write_text(self.env.read_text().replace('IAM_AUTOMATION_HOLD=1','IAM_AUTOMATION_HOLD=0'))
   with self.assertRaisesRegex(ValueError,'hold'):self.host().preflight()
+ def test_ops_gate_mode_is_umask_independent(self):
+  old=os.umask(0o077)
+  try:
+   h=self.host();h.plan_ops_gate('tok');h.create_ops_gate()
+  finally:os.umask(old)
+  self.assertEqual(stat.S_IMODE((self.d/'gates'/'OPS').stat().st_mode),0o644);h.check_continuity()
  def test_ops_gate_exclusive_and_snapshot(self):
-  h=self.host();h.create_ops_gate('tok');self.assertEqual((self.d/'gates'/'OPS').read_text(),'tok')
-  with self.assertRaises(FileExistsError):h.create_ops_gate('other')
+  h=self.host();h.plan_ops_gate('tok');h.create_ops_gate();self.assertEqual((self.d/'gates'/'OPS').read_text(),'tok')
+  with self.assertRaises(FileExistsError):h.create_ops_gate()
   self.assertEqual((self.d/'gates'/'OPS').read_text(),'tok');self.assertEqual(len(h.snapshot_gates()),1)
  def test_closed_step_only_rc10_inherits_fd_8_for_source_fd_equal_and_different_and_adopts(self):
   for fixed8 in [False,True]:
@@ -249,7 +255,7 @@ class RealHost(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'static opening'):self.host().opening_manifest({},fields,str(rc))
 
 RUNNER=r"""
-import importlib.util,sys,functools
+import importlib.util,sys,functools,os
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('qq',sys.argv[1]);q=importlib.util.module_from_spec(spec);spec.loader.exec_module(q)
 q.PROTECTED=lambda st:True
@@ -260,7 +266,7 @@ def bm(*a):
  return m
 q.bound_module=bm
 class C:
- def settings(self,m):return {'LYAM_LOCK_FILE':m['_lock'],'LYAM_PAUSE_FILE':m['_pause']}
+ def settings(self,m):return {'LYAM_LOCK_FILE':os.environ['FAKE_LOCK'],'LYAM_PAUSE_FILE':os.environ['FAKE_PAUSE']}
  def open_gates(self,m,c,t):return {'mode':'ui-open-automation-held','public_status':200,'automation_held':True,'pause_retained':True}
  def close_gates(self,i):pass
  def verify_closed_access(self,m):pass
@@ -269,6 +275,18 @@ q.held_update=functools.partial(q.held_update,qualify=lambda p,e:None,verify=lam
 sys.argv=['ordered-queue.py']+sys.argv[2:]
 q.main()
 """
+class RealController(unittest.TestCase):
+ """REAL reviewed-ui-held.py settings/verify_closed_access on the STATIC view used by the held-update CLI
+ (no manifest.opening exists before the steps). Only the root-ownership check is replaced."""
+ def test_static_view_is_accepted_and_dynamic_view_is_not_needed(self):
+  spec=importlib.util.spec_from_file_location('rc',Path(__file__).parent/'reviewed-ui-held.py');rc=importlib.util.module_from_spec(spec);spec.loader.exec_module(rc)
+  rc.protected=lambda p:Path(p)
+  with tempfile.TemporaryDirectory() as d:
+   env=Path(d)/'e';env.write_text('IAM_AUTOMATION_HOLD=1\nLYAM_LOCK_FILE=/x\n');pol=Path(d)/'p';pol.write_text(json.dumps({'origins':[]}))
+   sp=lambda p:{'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+   view={'opening':{'env':sp(env),'policy':sp(pol),'integrity':{},'qualifier':{}}}
+   self.assertEqual(rc.settings(view)['LYAM_LOCK_FILE'],'/x');rc.verify_closed_access(view)
+   with self.assertRaises(KeyError):rc.settings({'opening_static':view['opening']})
 class RealCli(unittest.TestCase):
  """Real ordered-queue CLI process -> real Host class -> real child process inheriting the caller lock onto fd 8.
  Updater and controller are FAKES (no docker, no gates, no root)."""
@@ -288,7 +306,7 @@ class RealCli(unittest.TestCase):
    'opening_static':{'env':{'path':str(self.env),'sha256':'0'},'integrity':{},'policy':{},'qualifier':{}},
    'updater':{'path':str(self.d/'upd.sh'),'sha256':hashlib.sha256((self.d/'upd.sh').read_bytes()).hexdigest()},
    'held_host':{'path':str(self.inst/'held-update-host.py'),'sha256':hashlib.sha256((self.inst/'held-update-host.py').read_bytes()).hexdigest()}})
-  return subprocess.run([sys.executable,'-c',RUNNER,str(self.inst/'ordered-queue.py'),'held-update-reviewed','--state',str(self.state),'--pause-file',str(self.pause),'--update-lock',str(self.lock),'--repository','repo','--container','lyam','--updater',str(self.d/'upd.sh')],input=json.dumps(m),capture_output=True,text=True,env={**os.environ,'FAKE_RC':str(rc)})
+  return subprocess.run([sys.executable,'-c',RUNNER,str(self.inst/'ordered-queue.py'),'held-update-reviewed','--state',str(self.state),'--pause-file',str(self.pause),'--update-lock',str(self.lock),'--repository','repo','--container','lyam','--updater',str(self.d/'upd.sh')],input=json.dumps(m),capture_output=True,text=True,env={**os.environ,'FAKE_RC':str(rc),'FAKE_LOCK':str(self.lock),'FAKE_PAUSE':str(self.pause)})
  def test_cli_one_and_three_commits_with_real_inherited_lock(self):
   r=self.cli(3);self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(q.load(self.state)['recovery_fence'],S(3))
   self.assertEqual((self.d/'args').read_text().count('--inherit-lock-fd 8'),1)
@@ -310,14 +328,35 @@ class RealCli(unittest.TestCase):
    def close_gates(self,i):self.calls.append('close')
    def verify_closed_access(self,m):self.calls.append('verify')
   c=C()
-  with self.assertRaisesRegex(ValueError,'still alive'):q.rearm_held_update(self.state,controller=c)
+  with self.assertRaisesRegex(ValueError,'alive or not certainly absent'):q.rearm_held_update(self.state,controller=c)
   st['opening_intent'].pop('queue');q.atomic(self.state,st)
-  with self.assertRaisesRegex(ValueError,'unknown'):q.rearm_held_update(self.state,controller=c)
+  with self.assertRaisesRegex(ValueError,'not certainly absent'):q.rearm_held_update(self.state,controller=c)
   self.assertEqual(c.calls,[])
   p=subprocess.Popen(['sleep','0.1']);dead=q.queue_identity(p.pid);p.wait()
   self.assertFalse(q.queue_alive(dead));self.assertTrue(q.queue_alive(me))
   st['opening_intent']['queue']=dead;q.atomic(self.state,st);q.rearm_held_update(self.state,controller=c)
   self.assertEqual(c.calls,['close','verify']);self.assertEqual(q.load(self.state)['opening_intent']['phase'],'interrupted-access-rearmed')
+ def test_queue_state_tristate(self):
+  me=q.queue_identity()
+  self.assertEqual(q.queue_state(me),'alive')
+  self.assertEqual(q.queue_state({**me,'boot_id':'other-boot'}),'absent')
+  self.assertEqual(q.queue_state({**me,'starttime':str(int(me['starttime'])+1)}),'unknown','reused pid / other process is NOT dead')
+  for bad in [None,{},{'pid':1},{**me,'extra':1},{**me,'pid':'x'},{**me,'starttime':'abc'},{**me,'boot_id':''}]:self.assertEqual(q.queue_state(bad),'unknown')
+  p=subprocess.Popen(['sleep','0.1']);dead=q.queue_identity(p.pid);p.wait();self.assertEqual(q.queue_state(dead),'absent')
+ def test_rearm_reused_pid_is_unknown_and_refused(self):
+  st=q.load(self.state);me=q.queue_identity();st['opening_intent']={'phase':'opening','queue':{**me,'starttime':str(int(me['starttime'])+1)},'gates':[],'container':'lyam','manifest':{'opening_static':{}}};q.atomic(self.state,st)
+  class C:
+   calls=[]
+   def close_gates(self,i):self.calls.append('close')
+  with self.assertRaisesRegex(ValueError,'not certainly absent'):q.rearm_held_update(self.state,controller=C())
+  self.assertEqual(C.calls,[])
+ def test_rearm_close_error_is_durable_unknown(self):
+  st=q.load(self.state);st['opening_intent']={'phase':'opening','queue':{'pid':999999,'starttime':'1','boot_id':'other'},'gates':[],'container':'lyam','manifest':{'opening_static':{}}};q.atomic(self.state,st)
+  class C:
+   def close_gates(self,i):raise OSError('boom')
+   def stop_candidate(self,c):raise RuntimeError('stop failed')
+  with self.assertRaises(OSError):q.rearm_held_update(self.state,controller=C())
+  i=q.load(self.state)['opening_intent'];self.assertEqual(i['phase'],'failed-access-unknown');self.assertTrue(i['rearm_stop_failed'])
  def test_rearm_unmeasured_closure_marks_unknown_and_stops(self):
   st=q.load(self.state);p=subprocess.Popen(['true']);dead=q.queue_identity(p.pid) if False else {'pid':999999,'starttime':'1','boot_id':'x'};p.wait()
   st['opening_intent']={'phase':'opening','queue':dead,'gates':[],'container':'lyam','manifest':{'opening_static':{}}};q.atomic(self.state,st)
