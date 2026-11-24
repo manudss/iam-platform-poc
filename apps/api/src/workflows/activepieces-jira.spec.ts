@@ -49,6 +49,32 @@ describe('shared provider scheduler durable fixture',()=>{
 });
 
 describe('scoped Jira transport, no network beyond interceptors',()=>{
+ it('refuses same-path foreign host, port, HTTP, gateway cloud drift and encoded separators before fetch',async()=>{
+  nock.disableNetConnect();
+  const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
+  const base='https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000001',gw={...settings,jiraInstanceUrl:base};
+  const cases=[
+   [settings,'https://foreign.invalid/rest/api/3/myself'],
+   [settings,'https://fictional.atlassian.net:8443/rest/api/3/myself'],
+   [settings,'http://fictional.atlassian.net/rest/api/3/myself'],
+   [settings,auth.props.instanceUrl+'/rest/api/3evil/myself'],
+   [settings,auth.props.instanceUrl+'/rest/api/3/%252e%252e%252fsecret'],
+   [settings,auth.props.instanceUrl+'/rest/api/3/%2fsecret'],
+   [gw,'https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000002/rest/api/3/myself'],
+   [gw,'https://api.atlassian.com/rest/api/3/myself'],
+   [gw,base+'/rest/api/3/%5csecret'],
+  ]as const;
+  for(const[bound,url]of cases){const u=new URL(url),hit=nock(u.origin).get(u.pathname).reply(200,{leaked:true});await assert.rejects(()=>transport.withJiraTransport(bound,()=>fetch(url,{headers:{Authorization:'FICTIONAL'}})),/destination refused/);assert.equal(hit.isDone(),false,url);}
+  for(const bad of ['http://fictional.atlassian.net','https://foreign.invalid','https://api.atlassian.com/ex/jira/other','https://fictional.atlassian.net/path','https://fictional.atlassian.net:8443'])await assert.rejects(()=>transport.withJiraTransport({...settings,jiraInstanceUrl:bad},()=>fetch(bad)),/destination refused/);
+ });
+ it('allows only the exact bound gateway plus native API3 API2 and agile roots',async()=>{
+  nock.disableNetConnect();const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
+  for(const base of [auth.props.instanceUrl,'https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000001'])for(const path of ['/rest/api/3/myself','/rest/api/2/issue/KAN-1','/rest/agile/1.0/board']){const u=new URL(base),suffix=u.pathname==='/'?'':u.pathname;const hit=nock(u.origin).get(suffix+path).reply(200,{ok:true});assert.deepEqual(await transport.withJiraTransport({...settings,jiraInstanceUrl:base},()=>fetch(base+path).then(r=>r.json())),{ok:true});assert.ok(hit.isDone());}
+ });
+ it('real native board and sprint actions use the agile endpoint under the same guard',async()=>{
+  nock.disableNetConnect();const boards=nock(auth.props.instanceUrl).get('/rest/agile/1.0/board').query(true).reply(200,{values:[{id:1,name:'Board'}]});const b=externalBlock(full.jiraBlockType('list_boards'))!;const out=await b.run({config:{startAt:0,maxResults:50},settings,pieceRuntime:{withLock:async(fn:any)=>fn()}}as any);assert.ok(boards.isDone());assert.ok(JSON.stringify(out).includes('Board'));
+ });
+
  it('refuses provider-supplied attachment destination before credentials can leave the bound API',async()=>{
   nock.disableNetConnect();nock(auth.props.instanceUrl).get('/rest/api/3/attachment/7').reply(200,{id:'7',filename:'proof.txt',content:'https://untrusted.invalid/collect'});const foreign=nock('https://untrusted.invalid').get('/collect').reply(200,'bad');const b=externalBlock(full.jiraBlockType('get-issue-attachment'))!;await assert.rejects(()=>b.run({config:{attachmentId:'7'},settings,pieceRuntime:{withLock:async(fn:any)=>fn(),files:{write:async()=>{throw Error('must not write');}}}}as any),/destination refused/);assert.equal(foreign.isDone(),false);
  });

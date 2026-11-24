@@ -1,5 +1,5 @@
 /** Installed Jira Cloud native contracts, no workflow-specific business rules. */
-import{withJiraTransport}from'./jira-transport.mjs';
+import{withJiraTransport,jiraTransportRoot,assertJiraDestination}from'./jira-transport.mjs';
 import{createHash}from'node:crypto';
 import{piece,runPieceAction}from'./adapter.mjs';
 import{sheetFields,sheetProps}from'./google-sheets-full.mjs';
@@ -12,8 +12,7 @@ const jiraFields=p=>sheetFields(normalize(p));
 const KEYS=Object.fromEntries(Object.keys(JIRA_ACTIONS).map(k=>[jiraBlockType(k),k]));
 const authOf=settings=>{if(!settings?.jiraInstanceUrl||!settings.jiraEmail||!settings.jiraApiToken)throw Error('Managed Jira connection required');return{props:{instanceUrl:settings.jiraInstanceUrl.replace(/\/$/,''),email:settings.jiraEmail,apiToken:settings.jiraApiToken}};};
 export function validateJiraCustomCall(props,settings){
- const root=new URL(authOf(settings).props.instanceUrl+'/rest/api/3/');if(!props.url||typeof props.url.url!=='string')throw Error('Custom URL object required');const u=new URL(props.url.url,root);
- if(u.origin!==root.origin||!u.pathname.startsWith(root.pathname)||u.username||u.password||u.hash)throw Error('Custom API restricted to bound Jira API');
+ const root=jiraTransportRoot(settings);if(!props.url||typeof props.url.url!=='string')throw Error('Custom URL object required');const u=assertJiraDestination(new URL(props.url.url,new URL('rest/api/3/',root)),root,true);
  if(props.followRedirects)throw Error('Custom redirects disabled');
  if(Object.keys(props.headers??{}).some(k=>['authorization','proxy-authorization','host','cookie','x-http-method-override','x-method-override','x-http-method'].includes(k.toLowerCase())))throw Error('Custom authentication headers forbidden');
  if([...u.searchParams.keys(),...Object.keys(props.queryParams??{})].some(k=>['access_token','oauth_token','api_token','token'].includes(k.toLowerCase())))throw Error('Custom query authentication forbidden');props.url={...props.url,url:u.toString()};
