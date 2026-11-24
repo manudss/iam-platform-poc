@@ -36,6 +36,21 @@ wait_loop() { # $1 description, rest: probe command; LYAM_BOOT_TRIES x 5s
   done
 }
 
+# Held containers use an inert FIFO restart fence. Never let boot recreate or
+# restart one through the normal updater, or bypass an interrupted opening intent.
+if [ "$(getconf IAM_AUTOMATION_HOLD)" = 1 ]; then
+  QUEUE="$(getconf LYAM_ORDERED_QUEUE)"; QUEUE="${QUEUE:-/opt/lyam/bin/ordered-queue.py}"
+  STATE="$(getconf LYAM_QUEUE_STATE)"; STATE="${STATE:-/opt/lyam/deploy-queue/state.json}"
+  if [ -f "$STATE" ]; then
+    # Recovery is access-only; a missing intent is harmless, every other error
+    # leaves the app stopped for explicit operator review.
+    PAUSE="$(getconf LYAM_PAUSE_FILE)"; PAUSE="${PAUSE:-/opt/lyam/UPDATE_PAUSED}"
+    LOCK="$(getconf LYAM_LOCK_FILE)"; LOCK="${LOCK:-/opt/lyam/.update.lock}"
+    python3 "$QUEUE" rearm-interrupted-opening --state "$STATE" --pause-file "$PAUSE" --update-lock "$LOCK" </dev/null || true
+  fi
+  fail "automation hold persists: manual reviewed recovery required, no boot start/recreate"
+fi
+
 if [ -n "$PG_CONTAINER" ]; then
   log "starting PostgreSQL companion $PG_CONTAINER"
   docker start "$PG_CONTAINER" >/dev/null
