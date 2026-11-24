@@ -54,6 +54,7 @@ def start(folder,engagement,py,du_path,du,poll=2):
     target=Path('/proc/%d/fd/%d'%(pid,n)).readlink();expected=folder/(role+('.stdout' if n==1 else '.stderr'))
     if str(target)!=str(expected):raise RuntimeError('systemd-output-fd-mismatch')
     fds[str(n)]=True
+   if props.get('RemainAfterExit')!=('yes' if role=='worker' else 'no'):raise RuntimeError('systemd-retention-contract-mismatch')
    bindings[role]={'unit':unit,'invocationID':props['InvocationID'],'pid':pid,'starttime':ident['starttime'],'boot_id':ident['boot_id'],'controlGroup':props['ControlGroup']}
    relations=command(['systemctl','show',unit,'-p','PartOf','-p','BindsTo']).stdout
    if any(line.split('=',1)[1] for line in relations.splitlines() if '=' in line):raise RuntimeError('unexpected-unit-coupling')
@@ -77,7 +78,7 @@ def cleanup(units,known,du,folder=None):
  for unit in units:
   try:
    p=du.unit_properties(unit)
-   before[unit]={k:p[k] for k in ['ActiveState','MainPID','InvocationID','ControlGroup']}
+   before[unit]={k:p[k] for k in ['ActiveState','SubState','MainPID','InvocationID','ControlGroup','Result','ExecMainPID','ExecMainCode','ExecMainStatus','RemainAfterExit','ExecMainStartTimestampMonotonic','ExecMainExitTimestampMonotonic']}
    if not (known.get(unit) or {}).get('cgroup') and p['ControlGroup']:
     known[unit]={'identity':du.identity(int(p['MainPID'])) if int(p['MainPID'])>0 else None,'cgroup':p['ControlGroup']}
   except Exception:before[unit]={'properties':'unavailable'}

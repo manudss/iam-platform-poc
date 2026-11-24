@@ -93,47 +93,146 @@ class D(unittest.TestCase):
   (self.f/'supervision-spec.json').write_text(json.dumps(sp))
   with self.assertRaisesRegex(ValueError,'non-symlink'):du.check_spec(self.f)
  def test_units_bound_to_systemd_properties(self):
-  fake=self.d/'systemctl';fake.write_text('#!/bin/sh\ncat "$FAKE_SHOW"\n');fake.chmod(0o755);du.SYSTEMCTL=str(fake)
+  fake=self.d/'systemctl';fake.write_text('#!/bin/sh\ncat "$FAKE_SHOW"\ncase "$3" in *-worker.service) echo RemainAfterExit=yes;; *) echo RemainAfterExit=no;; esac\n');fake.chmod(0o755);du.SYSTEMCTL=str(fake)
   me=du.identity(os.getpid());inv='i'*32;os.environ['INVOCATION_ID']=inv
   ent=lambda r:{'unit':'lyam-durable-held-eng-00000001-%s.service'%r,'invocationID':inv,'pid':os.getpid(),'starttime':me['starttime'],'boot_id':me['boot_id'],'controlGroup':'/system.slice/x'}
   (self.f/'unit-bindings.json').write_text(json.dumps({'kind':'held-update','engagementID':'eng-00000001','worker':ent('worker'),'watchdog':ent('watchdog')}))
-  props={'InvocationID':inv,'MainPID':str(os.getpid()),'ControlGroup':'/system.slice/x','ActiveState':'active','User':'root','UMask':'0077','Restart':'no','KillMode':'control-group','RuntimeMaxUSec':'infinity','TimeoutStartUSec':'infinity','TimeoutStopUSec':'infinity','StandardOutput':'append','StandardError':'append'}
+  props={'InvocationID':inv,'MainPID':str(os.getpid()),'ControlGroup':'/system.slice/x','ActiveState':'active','User':'root','UMask':'0077','Restart':'no','KillMode':'control-group','RuntimeMaxUSec':'infinity','TimeoutStartUSec':'infinity','TimeoutStopUSec':'infinity','StandardOutput':'append','StandardError':'append','SubState':'running','Result':'success','ExecMainPID':str(os.getpid()),'ExecMainCode':'0','ExecMainStatus':'0','ExecMainStartTimestampMonotonic':'1000','ExecMainExitTimestampMonotonic':'0'}
   show=self.d/'show';os.environ['FAKE_SHOW']=str(show)
   def put(p):show.write_text(''.join('%s=%s\n'%kv for kv in p.items()))
   try:
    put(props);du.verify_units(self.f,'worker',self.spec)
-   for k,v in [('InvocationID','z'*32),('MainPID','1'),('Restart','on-failure'),('RuntimeMaxUSec','1h'),('UMask','0022'),('StandardOutput','journal'),('KillMode','process')]:
+   for k,v in [('InvocationID','z'*32),('MainPID','1'),('Restart','on-failure'),('RuntimeMaxUSec','1h'),('UMask','0022'),('StandardOutput','journal'),('KillMode','process'),('SubState','exited')]:
     put({**props,k:v})
     with self.assertRaises(ValueError,msg=k):du.verify_units(self.f,'worker',self.spec)
    put(props);os.environ['INVOCATION_ID']='other'
    with self.assertRaisesRegex(ValueError,'bound unit main process'):du.verify_units(self.f,'worker',self.spec)
   finally:os.environ.pop('INVOCATION_ID',None);du.SYSTEMCTL='/usr/bin/systemctl'
- def test_units_worker_ended_vs_ambiguous(self):
+ def test_units_worker_retained_end_vs_lost_vs_ambiguous(self):
   fake=self.d/'systemctl2';fake.write_text('#!/bin/sh\ncat "$FAKE_DIR/$3"\n');fake.chmod(0o755);du.SYSTEMCTL=str(fake)
   me=du.identity(os.getpid());inv='i'*32;winv='w'*32;os.environ['INVOCATION_ID']=inv
   ch=subprocess.Popen(['sleep','60']);dead=du.identity(ch.pid);ch.kill();ch.wait()
+  cg=self.d/'cg';cgd=cg/'w';cgd.mkdir(parents=True);(cgd/'cgroup.procs').write_text('');du.CGROOT=str(cg)
   wu='lyam-durable-held-eng-00000001-worker.service';du_='lyam-durable-held-eng-00000001-watchdog.service'
-  def bind(wid):
-   (self.f/'unit-bindings.json').write_text(json.dumps({'kind':'held-update','engagementID':'eng-00000001','worker':{'unit':wu,'invocationID':winv,'pid':dead['pid'],'starttime':dead['starttime'],'boot_id':dead['boot_id'],'controlGroup':'/w'},'watchdog':{'unit':du_,'invocationID':inv,'pid':os.getpid(),'starttime':me['starttime'],'boot_id':me['boot_id'],'controlGroup':'/d'}}))
+  def bind(pid=None):
+   w=dict(dead) if pid is None else pid
+   (self.f/'unit-bindings.json').write_text(json.dumps({'kind':'held-update','engagementID':'eng-00000001','worker':{'unit':wu,'invocationID':winv,'pid':w['pid'],'starttime':w['starttime'],'boot_id':w['boot_id'],'controlGroup':'/w'},'watchdog':{'unit':du_,'invocationID':inv,'pid':os.getpid(),'starttime':me['starttime'],'boot_id':me['boot_id'],'controlGroup':'/d'}}))
   base={'User':'root','UMask':'0077','Restart':'no','KillMode':'control-group','RuntimeMaxUSec':'infinity','TimeoutStartUSec':'infinity','TimeoutStopUSec':'infinity','StandardOutput':'append','StandardError':'append'}
-  wd={**base,'InvocationID':inv,'MainPID':str(os.getpid()),'ControlGroup':'/d','ActiveState':'active'}
-  wk={**base,'InvocationID':winv,'MainPID':'0','ControlGroup':'/w','ActiveState':'inactive'}
+  wd={**base,'InvocationID':inv,'MainPID':str(os.getpid()),'ControlGroup':'/d','ActiveState':'active','SubState':'running','RemainAfterExit':'no','Result':'success','ExecMainPID':str(os.getpid()),'ExecMainCode':'0','ExecMainStatus':'0','ExecMainStartTimestampMonotonic':'500','ExecMainExitTimestampMonotonic':'0'}
+  ex={**base,'InvocationID':winv,'MainPID':'0','ControlGroup':'/w','ActiveState':'active','SubState':'exited','RemainAfterExit':'yes','Result':'success','ExecMainPID':str(dead['pid']),'ExecMainCode':'1','ExecMainStatus':'0','ExecMainStartTimestampMonotonic':'1000','ExecMainExitTimestampMonotonic':'2000'}
   dd=self.d/'show';dd.mkdir();os.environ['FAKE_DIR']=str(dd)
   def put(w,k):
    (dd/wu).write_text(''.join('%s=%s\n'%kv for kv in w.items()));(dd/du_).write_text(''.join('%s=%s\n'%kv for kv in k.items()))
+  V=lambda role='watchdog':du.verify_units(self.f,role,self.spec)
   try:
-   bind(0);put(wk,wd)
-   self.assertEqual(du.verify_units(self.f,'watchdog',self.spec)['_worker_status'],'ended')       # nominal end
-   put({**wk,'ActiveState':'failed'},wd);self.assertEqual(du.verify_units(self.f,'watchdog',self.spec)['_worker_status'],'ended')   # killed
-   for name,w,k in [('other invocation',{**wk,'InvocationID':'x'*32},wd),('ended but MainPID set',{**wk,'MainPID':'5'},wd),('inactive watchdog',wk,{**wd,'ActiveState':'inactive','MainPID':'0'}),('props drift on ended worker',{**wk,'Restart':'always'},wd),('active worker not matching pid',{**wk,'ActiveState':'active','MainPID':'1'},wd)]:
+   bind();put(ex,wd)
+   with self.assertRaises(ValueError,msg='retained end without a recorded start stamp is unknown'):V()
+   ent_w=json.loads((self.f/'unit-bindings.json').read_text())['worker'];du.worker_start_stamp(self.f,'1000',ent_w,'eng-00000001')   # the earlier running sighting, published for exactly this worker identity
+   for k,v in (('pid',dead['pid']+1),('invocationID','q'*32),('boot_id','other'),('starttime','1'),('controlGroup','/other'),('unit','x')):   # a record bound to another identity does not authorise this end
+    other=dict(ent_w);other[k]=v;(self.f/'worker-unit-start.json').rename(self.f/'keep.json');du.worker_start_stamp(self.f,'1000',other,'eng-00000001')
+    with self.assertRaises(ValueError,msg='record for other '+k):V()
+    (self.f/'worker-unit-start.json').unlink();(self.f/'keep.json').rename(self.f/'worker-unit-start.json')
+   rr=json.loads((self.f/'worker-unit-start.json').read_text());rr['engagementID']='other';(self.f/'worker-unit-start.json').write_text(json.dumps(rr))
+   with self.assertRaises(ValueError,msg='record for other engagement'):V()
+   (self.f/'worker-unit-start.json').unlink();du.worker_start_stamp(self.f,'1000',ent_w,'eng-00000001')
+   bind();put(ex,wd)
+   for name,w in (('other start stamp',{**ex,'ExecMainStartTimestampMonotonic':'999'}),('exit before start',{**ex,'ExecMainExitTimestampMonotonic':'999'}),('exit stamp zero',{**ex,'ExecMainExitTimestampMonotonic':'0'}),('exit stamp empty',{**ex,'ExecMainExitTimestampMonotonic':''})):
+    put(w,wd)
+    with self.assertRaises(ValueError,msg=name):V()
+   put(ex,wd)
+   r=V();self.assertEqual((r['_worker_status'],r['_worker_exit']),('exited',0))                         # nominal end, retained record: RemainAfterExit
+   put({**ex,'ExecMainStatus':'7'},wd);self.assertEqual(V()['_worker_exit'],7)
+   put({**ex,'ActiveState':'failed','SubState':'failed','Result':'exit-code','ExecMainStatus':'1'},wd);self.assertEqual(V()['_worker_status'],'failed')   # failed, retained
+   put({**ex,'ActiveState':'failed','SubState':'failed','Result':'signal','ExecMainCode':'2','ExecMainStatus':'9'},wd);self.assertEqual(V()['_worker_status'],'failed')   # killed, retained
+   put({**ex,'ActiveState':'failed','SubState':'failed','Result':'core-dump','ExecMainCode':'3','ExecMainStatus':'11'},wd);self.assertEqual(V()['_worker_status'],'failed')
+   # THE REAL DEFECT: the manager forgot the unit after exit (no retention): empty InvocationID/ControlGroup/inactive/MainPID 0. Distinct category, never ended.
+   put({**ex,'InvocationID':'','ControlGroup':'','ActiveState':'inactive','SubState':'dead','ExecMainPID':'0'},wd)
+   with self.assertRaises(du.UnitRecordLost):V()
+   for name,w,k in [('other invocation',{**ex,'InvocationID':'x'*32},wd),('ended but MainPID set',{**ex,'MainPID':'5'},wd),('inactive watchdog',ex,{**wd,'ActiveState':'inactive','SubState':'dead','MainPID':'0'}),
+     ('props drift on retained worker',{**ex,'Restart':'always'},wd),('active worker not matching pid',{**ex,'SubState':'running','MainPID':'1'},wd),
+     ('inactive but not lost (invocation kept)',{**ex,'ActiveState':'inactive','SubState':'dead'},wd),('no retention contract',{**ex,'RemainAfterExit':'no'},wd),
+     ('other control group',{**ex,'ControlGroup':'/other'},wd),('ExecMainPID differs from bound',{**ex,'ExecMainPID':'1'},wd),('success result with failed state',{**ex,'Result':'exit-code'},wd),
+     ('success result but ExecMainCode not exited',{**ex,'ExecMainCode':'2'},wd),('unknown failure result',{**ex,'ActiveState':'failed','SubState':'failed','Result':'weird'},wd),*[('failed tuple '+n,{**ex,'ActiveState':'failed','SubState':'failed','Result':rs,'ExecMainCode':c,'ExecMainStatus':st},wd) for n,rs,c,st in (('exit-code code0 status0','exit-code','0','0'),('exit-code status0','exit-code','1','0'),('exit-code status256','exit-code','1','256'),('signal with CLD_EXITED','signal','1','9'),('signal 0','signal','2','0'),('signal 65','signal','2','65'),('core-dump with CLD_KILLED','core-dump','2','11'),('timeout code0','timeout','0','0'),('timeout coherent-looking','timeout','1','1'),('watchdog','watchdog','2','6'),('resources','resources','1','1'))],('exited without status',{**ex,'ExecMainStatus':''},wd)]:
     put(w,k)
-    with self.assertRaises(ValueError,msg=name):du.verify_units(self.f,'watchdog',self.spec)
-   put(wk,wd);ent=json.loads((self.f/'unit-bindings.json').read_text());ent['worker']['pid']=os.getpid();ent['worker']['starttime']=me['starttime'];ent['worker']['boot_id']=me['boot_id']
-   (self.f/'unit-bindings.json').write_text(json.dumps(ent))
-   with self.assertRaises(ValueError,msg='bound pid still alive while unit inactive'):du.verify_units(self.f,'watchdog',self.spec)
-   bind(0);put(wk,wd)
-   with self.assertRaises(ValueError,msg='worker role never accepts ended'):du.verify_units(self.f,'worker',self.spec)
-  finally:os.environ.pop('INVOCATION_ID',None);os.environ.pop('FAKE_DIR',None);du.SYSTEMCTL='/usr/bin/systemctl'
+    with self.assertRaises(ValueError,msg=name):V()
+   put(ex,wd);(cgd/'cgroup.procs').write_text('4242\n')
+   with self.assertRaises(ValueError,msg='bound cgroup still populated'):V()
+   (cgd/'cgroup.procs').write_text('');child=cgd/'child'/'grand';child.mkdir(parents=True);(cgd/'child'/'cgroup.procs').write_text('');(child/'cgroup.procs').write_text('77\n')
+   with self.assertRaises(ValueError,msg='root empty but a descendant cgroup is populated'):V()
+   (child/'cgroup.procs').write_text('');self.assertEqual(V()['_worker_status'],'exited')               # empty recursively
+   (cgd/'cgroup.events').write_text('populated 1\nfrozen 0\n')
+   with self.assertRaises(ValueError,msg='cgroup.events says populated'):V()
+   (cgd/'cgroup.events').write_text('populated 0\nfrozen 0\n');self.assertEqual(V()['_worker_status'],'exited')
+   (child/'cgroup.procs').unlink()
+   with self.assertRaises(ValueError,msg='unreadable/missing procs in a descendant is unknown, not ended'):V()
+   import shutil as _sh;_sh.rmtree(cgd/'child');(cgd/'cgroup.events').unlink()
+   (cgd/'cgroup.procs').write_text('');import shutil;shutil.rmtree(cgd);self.assertEqual(V()['_worker_status'],'exited')   # cgroup gone: accepted only with the retained manager record
+   cgd.mkdir();(cgd/'cgroup.procs').write_text('')
+   bind({'pid':os.getpid(),'starttime':me['starttime'],'boot_id':me['boot_id']});put(ex,wd)
+   with self.assertRaises(ValueError,msg='bound pid still alive while unit says exited'):V()
+   bind();put(ex,wd)
+   with self.assertRaises(ValueError,msg='worker role never accepts a retained end'):V('worker')
+  finally:os.environ.pop('INVOCATION_ID',None);os.environ.pop('FAKE_DIR',None);du.SYSTEMCTL='/usr/bin/systemctl';du.CGROOT='/sys/fs/cgroup'
+ def test_start_record_publication_is_atomic_complete_and_concurrent_safe(self):
+  import multiprocessing,os as _os
+  ent={'unit':'lyam-durable-held-eng-00000001-worker.service','invocationID':'i'*32,'pid':4242,'starttime':'99','boot_id':'b','controlGroup':'/w'}
+  d=self.d/'pub';d.mkdir()
+  du.worker_start_stamp(d,'1000',ent,'eng-00000001');rec=json.loads((d/'worker-unit-start.json').read_text())
+  self.assertEqual(rec,du.worker_record('1000',ent,'eng-00000001'));self.assertEqual(du.worker_start_stamp(d,'1000',ent,'eng-00000001'),1000)
+  self.assertEqual(sorted(p.name for p in d.iterdir()),['worker-unit-start.json'])                            # no temp leftovers
+  with self.assertRaises(ValueError):du.worker_start_stamp(d,'1001',ent,'eng-00000001')                       # another stamp, same record name
+  with self.assertRaises(ValueError):du.worker_start_stamp(d,'1000',{**ent,'pid':1},'eng-00000001')
+  with self.assertRaises(ValueError):du.worker_start_stamp(d,'0',ent,'eng-00000001')
+  # concurrent publishers with a barrier between temp write and link: every reader sees either no final file or a COMPLETE one
+  e2=self.d/'pub2';e2.mkdir();ready=multiprocessing.Barrier(4);bad=multiprocessing.Value('i',0)
+  def runner(k):
+   real=_os.link
+   def slow(a,b):ready.wait(10);return real(a,b)       # all publishers hold a complete private temp file, then race to link
+   _os.link=slow
+   try:du.worker_start_stamp(e2,'1000',ent,'eng-00000001')
+   except Exception:bad.value+=1
+  ps=[multiprocessing.get_context('fork').Process(target=runner,args=(k,)) for k in range(4)]
+  watcher_ok=[True]
+  [p.start() for p in ps]
+  import time as _t
+  end=_t.time()+15
+  while any(p.is_alive() for p in ps) and _t.time()<end:
+   f=e2/'worker-unit-start.json'
+   if f.exists():
+    try:json.loads(f.read_text())
+    except Exception:watcher_ok[0]=False
+  [p.join(20) for p in ps]
+  self.assertTrue(watcher_ok[0]);self.assertEqual(bad.value,0);self.assertEqual([p.exitcode for p in ps],[0]*4)
+  self.assertEqual(json.loads((e2/'worker-unit-start.json').read_text()),du.worker_record('1000',ent,'eng-00000001'))
+  self.assertEqual(sorted(p.name for p in e2.iterdir()),['worker-unit-start.json'])
+ def test_watchdog_categories_from_unit_record(self):
+  saved=(du.REQUIRE_UNITS,du.await_units,du.verify_units,du.decision)
+  def run(vu,dec):
+   for n in ('watchdog-identity.json','watchdog-events.jsonl','watchdog-result.json','STOP_WATCHDOG','WATCH_READY','heartbeat.json'):(self.f/n).unlink(missing_ok=True)
+   rec=[];du.REQUIRE_UNITS=True;du.await_units=lambda *a,**k:None;du.verify_units=vu;du.decision=lambda f,sp,st:dec
+   du.watchdog(self.f,self.spec,recover=lambda f,sp:rec.append(1) or {'kind':'x'},poll=1)
+   return json.loads((self.f/'watchdog-result.json').read_text()),rec
+  def ret(status,code):
+   return lambda f,r,s:{'_worker_status':status,'_worker_exit':code}
+  def lost(f,r,s):raise du.UnitRecordLost('x')
+  try:
+   res,rec=run(lost,'completed');self.assertEqual(res['action'],'terminal-gc-observed-report-only');self.assertTrue(res['report_only']);self.assertEqual(rec,[])   # GC observed: never completed, never rearm
+   res,rec=run(lost,'interrupted-rearm-permitted');self.assertEqual((res['action'],rec),('terminal-gc-observed-report-only',[]))
+   self.assertEqual(run(ret('exited',0),'completed')[0]['action'],'completed')
+   for st,code in (('exited',3),('failed',None)):self.assertEqual(run(ret(st,code),'completed')[0]['action'],'completed-unit-result-mismatch-report-only')
+   res,rec=run(ret('active',None),'interrupted-rearm-permitted');self.assertEqual((res['action'],rec),('identity-unknown-report-only',[]))   # worker unit still running: no rearm
+   res,rec=run(ret('failed',None),'interrupted-rearm-permitted');self.assertEqual((res['action'],rec),('interrupted-rearm-permitted',[1]))
+   # race: result written before process exit => completed + active waits (non-terminal), then retained exited 0 completes; kill/unknown during the wait is report-only
+   seq=[ret('active',None),ret('active',None),ret('exited',0)];n=[0]
+   def vs(f,r,s):v=seq[min(n[0],len(seq)-1)];n[0]+=1;return v(f,r,s)
+   res,rec=run(vs,'completed');self.assertEqual(res['action'],'completed');self.assertGreaterEqual(n[0],3)
+   seq=[ret('active',None),lost];n[0]=0;res,rec=run(vs,'completed');self.assertEqual(res['action'],'terminal-gc-observed-report-only')
+   def bad(f,r,s):raise ValueError('unknown')
+   seq=[ret('active',None),bad];n[0]=0;res,rec=run(vs,'completed');self.assertEqual(res['action'],'identity-unknown-report-only')
+   seq=[ret('active',None),ret('failed',None)];n[0]=0;res,rec=run(vs,'completed');self.assertEqual(res['action'],'completed-unit-result-mismatch-report-only')
+   seq=[ret('active',None),ret('exited',5)];n[0]=0;res,rec=run(vs,'completed');self.assertEqual(res['action'],'completed-unit-result-mismatch-report-only')
+   du.END_WAIT=0.0;seq=[ret('active',None)];n[0]=0;res,rec=run(vs,'completed');self.assertEqual(res['action'],'completed-worker-end-timeout-report-only');self.assertTrue(res['report_only'])
+  finally:du.REQUIRE_UNITS,du.await_units,du.verify_units,du.decision=saved;du.END_WAIT=120.0
  def test_units_revalidated_at_second_tick_before_the_single_attempt(self):
   saved=(du.REQUIRE_UNITS,du.await_units,du.verify_units,du.decision)
   try:
@@ -144,6 +243,7 @@ class D(unittest.TestCase):
     def vu(folder,role,spec):
      calls.append(role)
      if drift and len(calls)>=2:raise ValueError('unit binding drifted')
+     return {'_worker_status':'exited','_worker_exit':1}
     du.REQUIRE_UNITS=True;du.await_units=lambda *a,**k:None;du.verify_units=vu;du.decision=lambda f,sp,st:'interrupted-rearm-permitted'
     du.watchdog(self.f,self.spec,recover=lambda f,sp:rec.append(1) or {'kind':'x'},poll=1)
     res=json.loads((self.f/'watchdog-result.json').read_text())
@@ -172,7 +272,7 @@ class D(unittest.TestCase):
   c=du.launcher_commands('/f','eng-00000001','/usr/bin/python3.12','/x/held-update-durable.py')
   self.assertEqual([x[1] for x in c],['--unit=lyam-durable-held-eng-00000001-watchdog.service','--unit=lyam-durable-held-eng-00000001-worker.service'])
   for x in c:
-   s=' '.join(x);self.assertIn('RuntimeMaxSec=infinity',s);self.assertIn('Restart=no',s);self.assertNotIn('BindsTo',s);self.assertNotIn('PartOf',s);self.assertIn('StandardOutput=append:/f/',s)
+   s=' '.join(x);self.assertIn('RuntimeMaxSec=infinity',s);self.assertIn('Restart=no',s);self.assertEqual('RemainAfterExit=yes' in s,'-worker.service' in s);self.assertNotIn('BindsTo',s);self.assertNotIn('PartOf',s);self.assertIn('StandardOutput=append:/f/',s)
  def test_heartbeat_requires_wall_and_monotonic_advance(self):
   hb=self.f/'heartbeat.json';n=[0]
   def w(m,wl):hb.write_text(json.dumps({'alive':True,'monotone':m,'wall':wl}))
