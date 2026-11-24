@@ -11,6 +11,10 @@ class PostApp(unittest.TestCase):
     self.assertEqual(f.companions_ready('fixture-pg','fixture-bao',diagnostics),expected)
     self.assertEqual(diagnostics,{'pgIsReadyRC':pgcode,'baoStatusRC':baocode})
     self.assertEqual(call.call_args_list[1].args,(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200','fixture-bao','bao','status'],False))
+ def test_failure_code_allowlist(self):
+  with patch.object(f,'HELPER_ERRORS',{'ValueError: ledger changed from reviewed source'}):
+   self.assertEqual(f.failure_code('trace\nValueError: ledger changed from reviewed source\n'),'ValueError: ledger changed from reviewed source')
+   self.assertEqual(f.failure_code('ValueError: private arbitrary content'),'unclassified-subprocess-failure')
  def test_postapp(self):
   launch={'policy4Exact':'four','policy6Exact':'six'};summary={'pid1Status':['CapEff: 0000000000000000','CapBnd: 0000000000000000','NoNewPrivs: 1']};f.assert_postapp('four','six',launch,summary)
   for a,b in [('changed','six'),('four','changed')]:self.assertRaises(ValueError,f.assert_postapp,a,b,launch,summary)

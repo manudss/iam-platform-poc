@@ -4,11 +4,21 @@ Requires exact pushed GHCR digest, helper and both wrappers as input files.
 Creates only prefixed disposable containers/network and private synthetic bind data.
 Runs complete unmodified helper, then checks real AppModule held and policy stable.
 """
-import argparse,hashlib,json,os,pathlib,re,shutil,subprocess,tempfile,time
+import argparse,ast,hashlib,json,os,pathlib,re,shutil,subprocess,tempfile,time
+
+COMMAND_DIAGNOSTIC={}
+HELPER_ERRORS=set()
+def failure_code(stderr):
+ # Only exact exception literals from the reviewed helper source may be emitted.
+ for line in reversed(stderr.splitlines()):
+  if line in HELPER_ERRORS:return line
+ return 'unclassified-subprocess-failure'
 
 def call(args,check=True):
  p=subprocess.run(args,text=True,capture_output=True,timeout=300)
- if check and p.returncode:raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
+ if check and p.returncode:
+  COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,reason=failure_code(p.stderr))
+  raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
  return p
 
 def d(*args):return call(['docker',*args]).stdout
@@ -41,6 +51,7 @@ def main():
  p.add_argument('--bao-image',default='openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315')
  p.add_argument('--ipv6-mode',choices=['active','inactive'],default='active')
  a=p.parse_args()
+ HELPER_ERRORS.update(n.exc.func.id+': '+n.exc.args[0].value for n in ast.walk(ast.parse(pathlib.Path(a.helper).read_text())) if isinstance(n,ast.Raise) and isinstance(n.exc,ast.Call) and isinstance(n.exc.func,ast.Name) and n.exc.func.id in ['ValueError','RuntimeError'] and len(n.exc.args)==1 and isinstance(n.exc.args[0],ast.Constant) and isinstance(n.exc.args[0].value,str))
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or not os.environ.get('GITHUB_RUN_ID','').isdigit():raise ValueError('disposable GitHub hosted Actions root runner required')
  if pathlib.Path('/opt/lyam').exists() or 'lyam-net' in d('network','ls','--format','{{.Name}}').splitlines() or any(x.startswith('lyam') for x in d('ps','-a','--format','{{.Names}}').splitlines()):raise ValueError('production marker present; fixture forbidden')
  if not re.fullmatch(r'ghcr\.io/manudss/iam-platform-poc@sha256:[0-9a-f]{64}',a.image):raise ValueError('pushed exact digest required, never local tag alias')
@@ -48,7 +59,7 @@ def main():
  out=pathlib.Path(a.out).resolve();out.mkdir(parents=True,exist_ok=True)
  prefix='closed-ci-'+str(os.getpid());network=prefix+'-net';pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app'
  root=pathlib.Path('/opt')/prefix;root.mkdir(mode=0o700);data=root/'data';data.mkdir(mode=0o700)
- containers=[];created_network=False;stage='setup';readiness={}
+ containers=[];created_network=False;stage='setup';readiness={};negative={}
  try:
   # Checked-in helper is copied, not changed. Wrappers are rebound only to this fixture root.
   impl=root/'closed-recovery-helper.py';shutil.copyfile(a.helper,impl);impl.chmod(0o700)
@@ -85,8 +96,10 @@ def main():
   stage='negative-ledger'
   goodconfig=conf.read_text();wrong={**config,'ledgerSHA256':'0'*64};conf.write_text(json.dumps(wrong))
   refused=call([str(wrappers['preflight']),*args],False)
-  if refused.returncode==0 or call(['docker','inspect',app],False).returncode==0:raise ValueError('bad ledger did not refuse before candidate creation')
+  negative['ledger']={'returnCode':refused.returncode,'reason':failure_code(refused.stderr)}
+  if refused.returncode==0 or failure_code(refused.stderr)!='ValueError: ledger changed from reviewed source' or call(['docker','inspect',app],False).returncode==0:raise ValueError('bad ledger did not refuse before candidate creation')
   conf.write_text(goodconfig)
+  stage='positive-preflight'
   pre=json.loads(call([str(wrappers['preflight']),*args]).stdout)
   containers.append(app)
   stage='negative-policy'
@@ -95,8 +108,9 @@ def main():
   impl.write_text(original_impl.replace(needle,'for ip,port in []:pass'));impl.chmod(0o700)
   config['implementationSHA256']=sha(impl.read_bytes());conf.write_text(json.dumps(config))
   badlaunch=call([str(wrappers['launcher']),*args],False)
+  negative['policy']={'returnCode':badlaunch.returncode,'reason':failure_code(badlaunch.stderr)}
   failed=inspect(app)
-  if badlaunch.returncode==0 or failed['State']['Running'] or failed['Config']['Entrypoint']!=['sh']:raise ValueError('incomplete policy did not stop before release')
+  if badlaunch.returncode==0 or failure_code(badlaunch.stderr)!='ValueError: network probe mismatch' or failed['State']['Running'] or failed['Config']['Entrypoint']!=['sh']:raise ValueError('incomplete policy did not stop before release')
   # Explicit fixture-owned failed candidate cleanup only, never a production retry policy.
   d('rm',app);impl.write_text(original_impl);impl.chmod(0o700);config['implementationSHA256']=sha(impl.read_bytes());conf.write_text(json.dumps(config))
   stage='complete-helper'
@@ -130,7 +144,7 @@ def main():
     state=inspect(name)['State']
     states.append({'running':state['Running'],'exitCode':state['ExitCode'],'status':state['Status'],'oomKilled':state.get('OOMKilled')})
    except Exception:states.append({'unavailable':True})
-  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'readiness':readiness,'syntheticContainerStates':states},indent=2))
+  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
   raise
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)
