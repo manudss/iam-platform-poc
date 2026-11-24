@@ -118,6 +118,11 @@ export function substituteStepOutputs(node, outputs) {
     };
     return {...node,config:Object.fromEntries(Object.entries(node.config).map(([k,v])=>[k,visit(v)]))};
 }
+/** Read-only presentation: decode event literals without resolving any step references. */
+export function eventConfigForDisplay(node) {
+ const visit=(v,depth=0)=>typeof v==='string'?(node.eventInterpolationEscaped&&(depth===0||node.type?.startsWith('google-sheets-ap-'))?v.replace(/\uE000([01])/g,(_m,k)=>k==='0'?'\uE000':'{{'):v):Array.isArray(v)?v.map(x=>visit(x,depth+1)):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,visit(x,depth+1)])):v;
+ return Object.fromEntries(Object.entries(node.config).map(([k,v])=>[k,visit(v)]));
+}
 /** Save-time check: every {{steps.<id>.<key>}} must reference a step that comes EARLIER in the execution order. */
 export function validateStepPlaceholders(graph, order) {
     const position = new Map(order.map((id, i) => [id, i]));

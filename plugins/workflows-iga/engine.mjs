@@ -434,7 +434,9 @@ export function createWorkflowEngine(deps) {
     const outputs = {};
     for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
     const priorInput = (await store.step(run.id, node.id))?.input;
-    const resolved = substituteStepOutputs(node, outputs);
+    // runStep already resolved this node exactly once. A second pass would
+    // reinterpret event/provider strings as executable placeholders.
+    const resolved = node;
     // Derived from the stored graph, never a user-editable bypass flag. A generic create/temporary
     // workflow without the badge correlation is not made dependent on mail configuration.
     const graphNodes = run.graph?.nodes ?? [];
