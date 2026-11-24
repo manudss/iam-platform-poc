@@ -159,17 +159,20 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 21);
+    assert.equal(routes.length, 22);
+    assert.ok(routes.includes('connectorFile'), 'native export download stays behind the same controller guard chain');
   });
 
   it('tenant binding and PII minimization on the REAL API (guard chain + response projections)', async () => {
     // (a) The bearer token's tenant is bound to the route :tenant: a token of another tenant is refused
     // on every surface, EVEN with a valid admin token (the identity binding wins over the capability).
     const foreign = 'other-tenant:demo-alice';
-    for (const [m, p, b] of [['GET', '/workflows', undefined], ['POST', '/workflows', { name: 'x', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }], edges: [] } }], ['GET', '/workflow-tasks?scope=all', undefined], ['GET', '/versioning/tables', undefined], ['GET', '/versioning/tables/identities?ref=main', undefined]] as const)
+    for (const [m, p, b] of [['GET', '/workflow-runs/foreign/connector-files/file', undefined], ['GET', '/workflows', undefined], ['POST', '/workflows', { name: 'x', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }], edges: [] } }], ['GET', '/workflow-tasks?scope=all', undefined], ['GET', '/versioning/tables', undefined], ['GET', '/versioning/tables/identities?ref=main', undefined]] as const)
       assert.equal((await call(m, p, b as object | undefined, { token: foreign })).status, 403, `${m} ${p} must refuse another tenant's token`);
     // (b) No token at all is refused; a malformed one too.
     assert.equal((await call('GET', '/workflows', undefined, { token: null })).status, 401);
+    assert.equal((await call('GET', '/workflow-runs/foreign/connector-files/file', undefined, { token: null })).status, 401);
+    assert.equal((await call('GET', '/workflow-runs/foreign/connector-files/file', undefined, { admin: null })).status, 403);
     assert.equal((await call('GET', '/workflows', undefined, { token: 'garbage' })).status, 401);
     // (c) The raw table browser returns FULL rows (every column a schema adds): it stays behind the
     // admin capability - unlike the workflow/IGA surfaces which project minimal fields (asserted below
@@ -667,8 +670,99 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   // campaign scope placeholder is parameterized with the fictional identities, so a template drift breaks them.
   const templateGraph = (users: string) => {
     const t = OFFICIAL_TEMPLATES.find((x) => x.id === 'recertification-denial-remediation')!;
-    return JSON.parse(JSON.stringify({ nodes: t.nodes, edges: t.edges }).replaceAll('replace-with-user-id', users)) as { nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string; label?: string }[] };
+    const legacy = JSON.parse(JSON.stringify({ nodes: t.nodes, edges: t.edges }));
+    legacy.nodes.find((n: any) => n.id === 'campaign').config.granularity = 'person'; // historical person-level journeys stay pinned; access-level mixed role journey is tested separately
+    return JSON.parse(JSON.stringify(legacy).replaceAll('replace-with-user-id', users)) as { nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string; label?: string }[] };
   };
+
+  it('recertification access-level: two denied roles and one kept role of the SAME identity in a single publication with real publication', async () => {
+    // Isolated fixture: bob MUST hold at least one role, whatever the suite order, so the denial below
+    // can never pass without a real revocation and a real publication. Granted through the normal path.
+    const held0 = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows.filter((r) => r.identity_id === 'demo-bob').map((r) => r.role_id);
+    const fixtureRole = ['accountant', 'payment-approver'].find((r) => !held0.includes(r) && !(r === 'payment-approver' && held0.includes('payment-creator')));
+    assert.ok(fixtureRole, `no SoD-safe fixture role available (bob holds ${held0.join(',')})`);
+    const grantDef = (await ok('POST', '/workflows', { name: 'Mixed fixture grant', graph: { nodes: [
+      { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: fixtureRole } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Mixed fixture' } },
+    ], edges: [{ from: 'grant', to: 'publish' }] } })) as { definition: { id: string } };
+    const grantRun = (await ok('POST', `/workflows/${grantDef.definition.id}/runs`)) as RunView;
+    const gApproval = await waitTask(grantRun.run.id, 'publish-approval');
+    const gPr = Number((gApproval.detail.pr as Record<string, unknown>).id);
+    assert.ok((await call('POST', `/workflow-tasks/${gApproval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+    const gWatch = await waitTask(grantRun.run.id, 'publish-merge-watch');
+    assert.ok((await call('POST', `/versioning/pulls/${gPr}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+    assert.ok((await call('POST', `/workflow-tasks/${gWatch.id}/decision`, { decision: 'merged', justification: 'merged' }, { token: `${T}:admin-two` })).status < 300);
+    await waitRun(grantRun.run.id, ['completed'], 30000);
+    const before = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
+    const bobRoles = before.filter((r) => r.identity_id === 'demo-bob').map((r) => r.role_id).sort();
+    assert.ok(bobRoles.length >= 1, 'the denied identity holds at least one role: the journey must revoke and publish for real');
+    const aliceRoles = before.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort();
+    assert.ok(aliceRoles.length >= 3, 'alice still holds her seeded roles at this point of the suite');
+    const def = (await ok('POST', '/workflows', { name: 'Recert mixed', graph: (() => { const g = templateGraph('demo-bob,demo-alice'); g.nodes.find(n => n.id === 'campaign')!.config.granularity = 'access'; return g; })() })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const inbox = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null; detail: Record<string, unknown> }[] };
+    const reviews = inbox.tasks.filter((t) => t.run_id === started.run.id && t.kind === 'iga-review');
+    assert.equal(reviews.length, bobRoles.length + aliceRoles.length);
+    for (const r of reviews) {
+      const access = r.detail.access as { role: string; provenance: { type: string } };
+      assert.equal(access.provenance.type, 'direct');
+      const approvedOne = !(r.detail.identity === 'demo-alice' && aliceRoles.slice(0, 2).includes(access.role));
+      const d = await call('POST', `/workflow-tasks/${r.id}/decision`, { decision: approvedOne ? 'approved' : 'denied', justification: approvedOne ? 'still needed' : 'no longer needed' }, { token: `${T}:iga-reviewer` });
+      assert.ok(d.status < 300, JSON.stringify(d.body).slice(0, 200));
+    }
+    // If the denied identity holds no role (suite-order dependent), there is nothing to publish:
+    // the publish step must SKIP explicitly; otherwise a real approval + merge drives the publication.
+    const deadline = Date.now() + 30000;
+    let published = false;
+    for (;;) {
+      const inboxNow = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] };
+      const approval = inboxNow.tasks.find((t) => t.run_id === started.run.id && t.kind === 'publish-approval' && true);
+      if (approval) {
+        const prId = Number(((approval as { detail?: Record<string, unknown> }).detail!.pr as Record<string, unknown>).id);
+        assert.ok((await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+        const watch = await waitTask(started.run.id, 'publish-merge-watch');
+        assert.ok((await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+        assert.ok((await call('POST', `/workflow-tasks/${watch.id}/decision`, { decision: 'merged', justification: 'merged after review' }, { token: `${T}:admin-two` })).status < 300);
+        published = true;
+        break;
+      }
+      const cur = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+      const pub = cur.steps.find((x) => x.node_id === 'publish');
+      if (pub?.status === 'done' && (pub.output as Record<string, unknown>).skipped) break; // nothing to publish: legitimate
+      if (Date.now() > deadline) throw new Error('neither a publish-approval task nor a skipped publish step');
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    await waitRun(started.run.id, ['completed'], 30000);
+    assert.equal(published, true, 'denied Alice roles require one real publication, no silent skip');
+    const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    assert.equal(((v.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).skipped ?? false), !published, 'publish happened exactly when there was something to publish');
+    const evidence = (v.steps.find((x) => x.node_id === 'close')!.output as Record<string, unknown>).evidence as Record<string, unknown>;
+    assert.equal((evidence.totals as Record<string, unknown>).remediated, 2, 'both denied access items were remediated after one publication');
+    const after = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
+    assert.deepEqual(after.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort(), aliceRoles.slice(2), 'same identity keeps its approved roles and loses exactly its two denied roles');
+    assert.deepEqual(after.filter(r => r.identity_id === 'demo-bob').map(r => r.role_id).sort(), bobRoles, 'the other identity keeps every approved role');
+    assert.equal((evidence.accessReviews as unknown[]).length, reviews.length);
+    const proofs = (evidence.accessReviews as { identity: string; access: { role: string; provenance: { type: string } }; state: string }[]).filter(i => i.identity === 'demo-alice' && i.state === 'remediated');
+    assert.deepEqual(proofs.map(i => i.access.role).sort(), aliceRoles.slice(0, 2));
+    assert.ok(proofs.every(i => i.access.provenance.type === 'direct'));
+    const publishTasks = (await ok('GET', '/workflow-tasks?scope=all&status=all') as { tasks: { kind: string; run_id: string }[] }).tasks.filter(t => t.run_id === started.run.id && t.kind === 'publish-approval');
+    assert.equal(publishTasks.length, 1, 'both denied roles share a single publication approval');
+    const restoreDef = (await ok('POST', '/workflows', { name: 'Restore access review fixture', graph: { nodes: [
+      { id: 'grant', type: 'lyam-grant-assignment', name: 'restore', config: { identity: 'demo-alice', role: aliceRoles[0] } },
+      { id: 'grant2', type: 'lyam-grant-assignment', name: 'restore second', config: { identity: 'demo-alice', role: aliceRoles[1] } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Restore reviewed test fixture roles' } },
+    ], edges: [{ from: 'grant', to: 'grant2' }, { from: 'grant2', to: 'publish' }] } })) as { definition: { id: string } };
+    const restoreRun = await ok('POST', `/workflows/${restoreDef.definition.id}/runs`) as RunView;
+    const restoreApproval = await waitTask(restoreRun.run.id, 'publish-approval');
+    await call('POST', `/workflow-tasks/${restoreApproval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    const restoreWatch = await waitTask(restoreRun.run.id, 'publish-merge-watch');
+    const restorePr = Number((restoreApproval.detail.pr as any).id);
+    assert.ok((await call('POST', `/versioning/pulls/${restorePr}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+    await call('POST', `/workflow-tasks/${restoreWatch.id}/decision`, { decision: 'merged', justification: 'restore isolated fixture' }, { token: `${T}:admin-two` });
+    await waitRun(restoreRun.run.id, ['completed']);
+
+  });
 
   it('recertification mixed: the APPROVED identity keeps every right, only the denied one is remediated', async () => {
     // Isolated fixture: bob MUST hold at least one role, whatever the suite order, so the denial below
@@ -727,7 +821,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       await new Promise((r) => setTimeout(r, 500));
     }
     await waitRun(started.run.id, ['completed'], 30000);
-    assert.equal(published, true, 'bob held a role: the publication MUST have happened (no silent skip)');
+    assert.equal(published, true, 'denied Alice roles require one real publication, no silent skip');
     const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
     assert.equal(((v.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).skipped ?? false), !published, 'publish happened exactly when there was something to publish');
     const evidence = (v.steps.find((x) => x.node_id === 'close')!.output as Record<string, unknown>).evidence as Record<string, unknown>;

@@ -197,6 +197,13 @@ describe('workflow blocks: IGA recertification socle', () => {
     assert.deepEqual(iga.calls, ['create', 'list', 'open', 'prepare', 'close']);
     assert.equal((await run1('iga-create-campaign', mk({ test: true, iga: iga as never, config: { name: 'Q4', kind: 'user-access', ref: 'main', scope: {} } }).c as never)).status, 'test');
   });
+  it('prepare passes an explicit batch bound and rejects malformed bounds', async () => {
+    let input: unknown;
+    const iga = { ...fakeIga(), prepareRemediation: async (_t: string, _a: string, _id: string, options: unknown) => { input = options; throw Error('batch refused before item preparation'); } };
+    await assert.rejects(run1('iga-prepare-remediation', mk({ iga: iga as never, config: { campaignId: 'iga-1', maxActions: 50 } }).c as never), /batch refused/);
+    assert.deepEqual(input, { maxActions: 50 });
+    for (const maxActions of [0, 201, 1.5, 'bad']) assert.throws(() => externalBlock('iga-prepare-remediation')!.validate({ campaignId: 'iga-1', maxActions }), /maxActions/);
+  });
   it('iga-await-decisions suspends while a review is open, records once all decided, refuses with no task', async () => {
     const openTask: Record<string, unknown> = { id: 'task-1', kind: 'iga-review', status: 'open', detail: { campaignId: 'iga-1' } };
     const iga = { ...fakeIga(), reviewTasks: async () => ({ tasks: [openTask] }) };

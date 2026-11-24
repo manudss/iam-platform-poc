@@ -1,0 +1,107 @@
+import 'reflect-metadata';
+import{describe,it,afterEach}from'node:test';import assert from'node:assert/strict';import nock from'nock';import{loadPluginModule}from'../plugins/v1/loader.js';import{externalBlock,validateGraph,validateTrigger,substituteEventPayload,substituteStepOutputs}from'./model.js';
+const full=loadPluginModule('workflow-connectors','jira-cloud-full.mjs')as any,adapter=loadPluginModule('workflow-connectors','adapter.mjs')as any;const auth={props:{instanceUrl:'https://fictional.atlassian.net',email:'fixture@example.test',apiToken:'FICTIONAL'}};const settings={jiraInstanceUrl:auth.props.instanceUrl,jiraEmail:auth.props.email,jiraApiToken:auth.props.apiToken};
+const cfg=(a:any)=>Object.fromEntries(Object.entries(a.props).filter(([,p]:any)=>p.type!=='MARKDOWN').map(([k,p]:any)=>[k,p.defaultValue??(p.type==='CHECKBOX'?false:p.type==='NUMBER'?1:['JSON','OBJECT','DYNAMIC','FILE'].includes(p.type)?'{}':p.type.includes('MULTI_SELECT')||p.type==='ARRAY'?'[]':p.options?.options?.[0]?.value??'fictional')]));
+afterEach(()=>{nock.cleanAll();nock.enableNetConnect();});
+describe('installed Jira Cloud catalogue, no live Jira',()=>{
+ it('exposes all77actions and9triggers preserving prop keys and simulation zero calls',async()=>{const p=adapter.piece('@activepieces/piece-jira-cloud');assert.equal(full.JIRA_BLOCKS.length,77);assert.equal(Object.keys(full.JIRA_EVENTS).length,9);for(const[key,a]of Object.entries(p._actions)as any){const b=externalBlock(full.jiraBlockType(key))!;assert.deepEqual(b.fields.map(x=>x.key),Object.entries(a.props).filter(([,p]:any)=>p.type!=='MARKDOWN').map(([k])=>k));const config=b.validate(cfg(a));assert.deepEqual(await b.run({config,dryRun:true,settings:new Proxy({},{get(){throw Error('no settings');}})}as any),{confirmed:false,dryRun:true});validateGraph({nodes:[{id:'n',name:'Native',type:b.type,config}],edges:[]});}for(const[key,e]of Object.entries(full.JIRA_EVENTS)as any)assert.equal(validateTrigger({event:key,config:{connectionId:'conn-fixture',...cfg(p._triggers[e.activepiecesTrigger])}})!.event,key);});
+ it('dispatches every action under lock with exact auth/props and durable effect intent',async()=>{let count=0;for(const[key,a]of Object.entries(full.JIRA_ACTIONS)as any){const old=a.run;let locked=false,seen:any;a.run=async(c:any)=>{assert.equal(locked,true);seen=c;return{key};};try{const config=cfg(a);if(key==='custom_api_call')config.url='{"url":"/rest/api/3/myself"}';const b=externalBlock(full.jiraBlockType(key))!;const r=await b.run({config,settings,markEffectPending:async()=>{},pieceRuntime:{withLock:async(fn:any)=>{locked=true;try{return await fn();}finally{locked=false;}},store:{get:async()=>null,put:async()=>{},delete:async()=>{}},files:{write:async()=>'/private/fixture'}}}as any);assert.equal(r!.confirmed,true);assert.equal(seen.auth.props.apiToken,'FICTIONAL');assert.ok(seen.propsValue);count++;}finally{a.run=old;}}assert.equal(count,77);});
+ it('lifecycle dispatch preserves runtime and fails unknown stages without calls',async()=>{for(const[key,t]of Object.entries(full.JIRA_TRIGGERS)as any)for(const stage of ['onEnable','onDisable','onRenew','run','test']){const old=t[stage];let seen:any;t[stage]=async(c:any)=>{seen=c;return[];};try{await full.runJiraTrigger(key,stage,{settings,config:cfg(t),runtime:{store:{fixture:true}}});assert.equal(seen.store.fixture,true);assert.equal(seen.auth.props.instanceUrl,auth.props.instanceUrl);}finally{t[stage]=old;}}await assert.rejects(()=>full.runJiraTrigger('updated_issue_status','invalid',{settings,config:{},runtime:{}}));});
+ it('native status polling baselines enable, emits current issue only on new category epoch, and dedups resume',async()=>{
+  nock.disableNetConnect();const memory=new Map<string,any>(),runtime={store:{get:async(k:string)=>memory.get(k),put:async(k:string,v:any)=>{memory.set(k,structuredClone(v));},delete:async(k:string)=>{memory.delete(k);}}};const t=full.JIRA_TRIGGERS.updated_issue_status;
+  await t.onEnable({auth,propsValue:{},...runtime});const floor=memory.get('pollingState').floor;let issue:any={id:'100',key:'KAN-12',fields:{project:{key:'KAN'},labels:['badge-demo'],status:{name:'Done',id:'3',statusCategory:{key:'done'}},updated:new Date(floor+2000).toISOString(),statuscategorychangedate:new Date(floor-1000).toISOString()}};let last:any;
+  nock(auth.props.instanceUrl).persist().post('/rest/api/3/search/jql').reply((_uri:string,body:any)=>{last=body;return[200,{issues:[issue],isLast:true}];});
+  const run=()=>t.run({auth,propsValue:{jql:'project = KAN AND labels = badge-demo AND status = Done ORDER BY key DESC',sanitizeJql:false},...runtime});assert.deepEqual(await run(),[]);issue.fields.statuscategorychangedate=new Date(floor+1000).toISOString();const events=await run();assert.equal(events.length,1);assert.equal(events[0].key,'KAN-12');assert.equal(events[0].fields.status.name,'Done');assert.equal(events[0]._dedupe_key,'100:'+(floor+1000));assert.equal('oldStatus'in events[0],false);assert.match(last.jql,/project = KAN/);assert.match(last.jql,/updated > '-/);assert.match(last.jql,/ORDER BY updated ASC$/);assert.equal(last.jql.includes('ORDER BY key'),false);assert.deepEqual(await run(),[]);
+  issue.fields.updated=new Date(floor+3000).toISOString();assert.deepEqual(await run(),[]);issue.fields.status={name:'In Progress',id:'2',statusCategory:{key:'indeterminate'}};issue.fields.statuscategorychangedate=new Date(floor+2000).toISOString();assert.equal((await run()).length,1);
+ });
+ it('native CreateIssue uses project/type metadata, wraps description ADF and preserves returned key',async()=>{
+  nock.disableNetConnect();const fields=[{key:'summary',name:'Summary',schema:{type:'string'}},{key:'description',name:'Description',schema:{type:'string'}},{key:'labels',name:'Labels',schema:{type:'array',items:'string'}}];let body:any;
+  nock(auth.props.instanceUrl).get('/rest/api/3/issue/createmeta/10/issuetypes/20').query(true).reply(200,{fields,isLast:true});nock(auth.props.instanceUrl).post('/rest/api/3/issue').reply((_u:string,b:any)=>{body=b;return[201,{id:'100',key:'KAN-12'}];});nock(auth.props.instanceUrl).get('/rest/api/3/issue/100').reply(200,{id:'100',key:'KAN-12',self:auth.props.instanceUrl+'/rest/api/3/issue/100',fields:{summary:'Badge',labels:['badge-demo']}});
+  const r=await adapter.runPieceAction('@activepieces/piece-jira-cloud','create_issue',{auth,propsValue:{projectId:'10',issueTypeId:'20',issueFields:{summary:'Badge',description:'Requested badge',labels:['badge-demo']},adfFields:[]}});assert.equal(r.key,'KAN-12');assert.deepEqual(body.fields.labels,['badge-demo']);assert.equal(body.fields.description.type,'doc');assert.equal(body.fields.description.content[0].content[0].text,'Requested badge');
+ });
+ it('status trigger sanitizes the filter before time/order clauses and reads paginated results',async()=>{
+  nock.disableNetConnect();const floor=Date.now()-60000,memory=new Map<string,any>([['pollingState',{windowStart:floor,floor,entries:[]}]]),store={get:async(k:string)=>memory.get(k),put:async(k:string,v:any)=>{memory.set(k,v);},delete:async()=>{}};let sanitizeBody:any,searchBody:any;
+  nock(auth.props.instanceUrl).post('/rest/api/3/jql/sanitize').reply((_u:string,b:any)=>{sanitizeBody=b;return[200,{queries:[{sanitizedQuery:'project = 10 AND labels = badge-demo AND status = 9'}]}];});
+  const make=(id:string)=>({id,key:'KAN-'+id,fields:{project:{key:'KAN'},labels:['badge-demo'],status:{name:'Done'},updated:new Date(floor+2000).toISOString(),statuscategorychangedate:new Date(floor+1000).toISOString()}});
+  nock(auth.props.instanceUrl).post('/rest/api/3/search/jql').reply((_u:string,b:any)=>{searchBody=b;return[200,{issues:[make('1')],nextPageToken:'page2'}];});nock(auth.props.instanceUrl).post('/rest/api/3/search/jql',(b:any)=>b.nextPageToken==='page2').reply(200,{issues:[make('2')],isLast:true});const events=await full.JIRA_TRIGGERS.updated_issue_status.run({auth,propsValue:{jql:'project = KAN AND labels = badge-demo AND status = Done ORDER BY key DESC',sanitizeJql:true},store});assert.equal(events.length,2);assert.equal(sanitizeBody.queries[0].query,'project = KAN AND labels = badge-demo AND status = Done');assert.match(searchBody.jql,/^\(project = 10/);assert.match(searchBody.jql,/ORDER BY updated ASC$/);assert.deepEqual(searchBody.fields,['*navigable']);
+ });
+ it('native metadata schema exposes summary description labels and transition IDs without assumptions',async()=>{
+  nock.disableNetConnect();const fields=[{key:'summary',fieldId:'summary',name:'Summary',required:true,schema:{type:'string'}},{key:'description',fieldId:'description',name:'Description',required:false,schema:{type:'string'}},{key:'labels',fieldId:'labels',name:'Labels',required:false,schema:{type:'array',items:'string'}}];nock(auth.props.instanceUrl).get('/rest/api/3/issue/createmeta/10/issuetypes/20').query(true).reply(200,{fields,isLast:true});const schema=await full.resolveJiraProperty('create_issue','issueFields',{settings,config:{projectId:'10',issueTypeId:'20'}});assert.deepEqual(Object.keys(schema).sort(),['description','labels','summary']);assert.equal(schema.summary.required,true);
+  nock(auth.props.instanceUrl).get('/rest/api/3/issue/KAN-12/transitions').query(true).reply(200,{transitions:[{id:'47',name:'Finish',to:{name:'Done',id:'9'}}]});const r=await adapter.runPieceAction('@activepieces/piece-jira-cloud','get_issue_transitions',{auth,propsValue:{issueIdOrKey:'KAN-12',includeFields:true}});assert.ok(JSON.stringify(r).includes('47'));assert.ok(JSON.stringify(r).includes('Done'));
+ });
+ it('native transition sends the selected real ID once, then fails if readback is uncertain',async()=>{
+  nock.disableNetConnect();const request=nock(auth.props.instanceUrl).post('/rest/api/3/issue/KAN-12/transitions',{transition:{id:'47'}}).once().reply(204);nock(auth.props.instanceUrl).get('/rest/api/3/issue/KAN-12').reply(503,{error:'unavailable'});await assert.rejects(()=>adapter.runPieceAction('@activepieces/piece-jira-cloud','transition_issue',{auth,propsValue:{projectId:'10',issueId:'KAN-12',transitionId:'47'}}));assert.ok(request.isDone());
+ });
+ it('custom calls cannot move credentials off their bound Jira API or override method',()=>{for(const props of [{url:{url:'https://elsewhere.invalid/rest/api/3/myself'}},{url:{url:'/rest/api/3/myself'},headers:{'X-HTTP-Method-Override':'DELETE'}},{url:{url:'/rest/api/3/myself'},followRedirects:true},{url:{url:'/rest/api/3/myself?access_token=x'}}])assert.throws(()=>full.validateJiraCustomCall(props,settings));const p={url:{url:'/rest/api/3/myself'}};full.validateJiraCustomCall(p,settings);assert.equal(p.url.url,auth.props.instanceUrl+'/rest/api/3/myself');});
+ it('native typed config keeps event text literal through validation/persistence',()=>{const a=full.JIRA_ACTIONS.create_issue,graph:any={nodes:[{id:'n',name:'Issue',type:full.jiraBlockType('create_issue'),config:{...cfg(a),issueFields:'{"summary":"{{event.data}}"}'}}],edges:[]};const saved=JSON.parse(JSON.stringify(validateGraph(substituteEventPayload(graph,{data:'literal{{steps.secret.result}}\uE000'})).graph));const result=substituteStepOutputs(saved.nodes[0],{secret:{result:'BAD'}});assert.equal(JSON.parse(String(result.config.issueFields)).summary,'literal{{steps.secret.result}}\uE000');});
+});
+
+import{ActivepiecesSheetsService}from'./activepieces-sheets.js';
+describe('shared provider scheduler durable fixture',()=>{
+ it('polls Jira, persists native cursor/envelope and blocks changed provider without draining old events',async()=>{
+  const memory=new Map<string,any>(),d:any={id:'wf-jira',tenant:'t',active:true,trigger:{event:'jira.ap-updated-issue-status',config:{connectionId:'conn-jira',sanitizeJql:false}}};const memoryKey=(t:string,s:string,k:string)=>t+'|'+s+'|'+k;const store:any={liveRef:'main',pieceHasTriggerState:async(t:string,s:string)=>[...memory.keys()].some(k=>k.startsWith(t+'|'+s+'|')&&k!==memoryKey(t,s,'lyam:lock')),pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(memoryKey(t,s,k))??null,piecePut:async(t:string,s:string,k:string,v:any)=>{memory.set(memoryKey(t,s,k),structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(memoryKey(t,s,k));},prunePieceFiles:async()=>{},listAllDefinitions:async()=>[d],pieceSubscriptions:async()=>[]};const calls:any[]=[],runs:any[]=[];const service:any=new ActivepiecesSheetsService(store,{resolve:async(_t:any,_r:any,_id:any,provider:any)=>{calls.push(provider);return{settings};}}as any,{start:async(...args:any[])=>runs.push(args)}as any,{isActive:()=>true}as any,{}as any);const t=full.JIRA_TRIGGERS.updated_issue_status,old={onEnable:t.onEnable,onDisable:t.onDisable,run:t.run};let enabled=0,disabled=0,collected=0;
+  t.onEnable=async(ctx:any)=>{enabled++;await ctx.store.put('pollingState',{floor:1});};t.onDisable=async()=>{disabled++;};t.run=async(ctx:any)=>{collected++;assert.deepEqual(await ctx.store.get('pollingState'),{floor:1});await ctx.store.put('pollingState',{floor:2});return[{id:'100',key:'KAN-12',fields:{status:{name:'Done'}}}];};
+  try{await service.tick();assert.equal(enabled,1);assert.equal(collected,1);assert.deepEqual(calls,['jira','jira']);assert.equal(runs.length,1);assert.equal(runs[0][2],'activepieces-jira');assert.equal(JSON.parse(runs[0][3].payload.data).key,'KAN-12');assert.equal((await store.pieceGet('t','trigger:wf-jira','lyam:subscription')).provider,'jira');assert.deepEqual(await store.pieceGet('t','trigger:wf-jira','pollingState'),{floor:2});assert.deepEqual(await store.pieceGet('t','trigger:wf-jira','lyam:pending'),[]);
+   // Change to a valid Sheets definition; teardown still belongs to old Jira subscription.
+   await store.piecePut('t','trigger:wf-jira','lyam:pending',[{id:'old-event',data:{key:'KAN-OLD'}}]);
+   await store.piecePut('t','trigger:wf-jira','lyam:batch-envelope',{batch:2,staged:{pollingState:{floor:3}},pending:[{id:'old-envelope',data:{key:'KAN-OLD'}}]});
+   d.trigger={event:'google-sheets.ap-new-worksheet',config:{connectionId:'conn-sheet'}};await service.tick();await service.tick();assert.equal(disabled,0);assert.equal(collected,1);assert.equal(runs.length,1,'never deliver Jira pending into changed Sheets graph');assert.equal((await store.pieceGet('t','trigger:wf-jira','lyam:subscription')).status,'review');assert.equal((await store.pieceGet('t','trigger:wf-jira','lyam:subscription')).provider,'jira');assert.equal((await store.pieceGet('t','trigger:wf-jira','lyam:pending'))[0].id,'old-event');assert.equal((await store.pieceGet('t','trigger:wf-jira','lyam:batch-envelope')).pending[0].id,'old-envelope');assert.deepEqual(await store.pieceGet('t','trigger:wf-jira','pollingState'),{floor:2});
+  }finally{Object.assign(t,old);}
+ });
+});
+
+describe('scoped Jira transport, no network beyond interceptors',()=>{
+ it('custom API remains API3-only while native transport permits API2 and agile',()=>{
+  for(const path of ['/rest/api/2/issue/KAN-1','/rest/agile/1.0/board'])assert.throws(()=>full.validateJiraCustomCall({url:{url:auth.props.instanceUrl+path}},settings),/destination refused/);
+ });
+ it('base validation is independent from fetch destination validation',()=>{
+  const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
+  for(const base of ['http://fictional.atlassian.net','https://foreign.invalid','https://api.atlassian.com/ex/jira/other','https://fictional.atlassian.net/path','https://fictional.atlassian.net:8443','https://user:pass@fictional.atlassian.net'])assert.throws(()=>transport.jiraTransportRoot({...settings,jiraInstanceUrl:base}),/connection destination refused/);
+  assert.equal(transport.jiraTransportRoot(settings).origin,auth.props.instanceUrl);
+ });
+ it('fetch always receives redirect manual, independent from 3xx response rejection',async()=>{
+  const{mkdtempSync,readFileSync,writeFileSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join,resolve}=await import('node:path'),{pathToFileURL}=await import('node:url'),{spawnSync}=await import('node:child_process');
+  const dir=mkdtempSync(join(tmpdir(),'jira-redirect-options-'));
+  try{
+   let source=readFileSync(resolve('../../plugins/workflow-connectors/jira-transport.mjs'),'utf8');
+   source=source.replace("from'./jira-api.mjs'","from "+JSON.stringify(pathToFileURL(resolve('../../plugins/workflow-connectors/jira-api.mjs')).href));
+   const file=join(dir,'transport.mjs');writeFileSync(file,source);
+   const code=`import assert from'node:assert/strict';let count=0;globalThis.fetch=async(input,init)=>{count++;assert.equal(init.redirect,'manual');return{status:200};};const{withJiraTransport}=await import(${JSON.stringify(pathToFileURL(file).href)});await withJiraTransport(${JSON.stringify(settings)},()=>fetch('${auth.props.instanceUrl}/rest/api/3/myself',{redirect:'follow'}));assert.equal(count,1);`;
+   const child=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8'});assert.equal(child.status,0,child.stderr);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+ });
+
+ it('refuses same-path foreign host, port, HTTP, gateway cloud drift and encoded separators before fetch',async()=>{
+  nock.disableNetConnect();
+  const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
+  const base='https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000001',gw={...settings,jiraInstanceUrl:base};
+  const cases=[
+   [settings,'https://foreign.invalid/rest/api/3/myself'],
+   [settings,'https://fictional.atlassian.net:8443/rest/api/3/myself'],
+   [settings,'http://fictional.atlassian.net/rest/api/3/myself'],
+   [settings,auth.props.instanceUrl+'/rest/api/3evil/myself'],
+   [settings,auth.props.instanceUrl+'/rest/api/3/%252e%252e%252fsecret'],
+   [settings,auth.props.instanceUrl+'/rest/api/3/%2fsecret'],
+   [gw,'https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000002/rest/api/3/myself'],
+   [gw,'https://api.atlassian.com/rest/api/3/myself'],
+   [gw,base+'/rest/api/3/%5csecret'],
+  ]as const;
+  for(const[bound,url]of cases){const u=new URL(url),hit=nock(u.origin).get(u.pathname).reply(200,{leaked:true});await assert.rejects(()=>transport.withJiraTransport(bound,()=>fetch(url,{headers:{Authorization:'FICTIONAL'}})),/destination refused/);assert.equal(hit.isDone(),false,url);}
+  for(const bad of ['http://fictional.atlassian.net','https://foreign.invalid','https://api.atlassian.com/ex/jira/other','https://fictional.atlassian.net/path','https://fictional.atlassian.net:8443'])await assert.rejects(()=>transport.withJiraTransport({...settings,jiraInstanceUrl:bad},()=>fetch(bad)),/destination refused/);
+ });
+ it('allows only the exact bound gateway plus native API3 API2 and agile roots',async()=>{
+  nock.disableNetConnect();const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
+  for(const base of [auth.props.instanceUrl,'https://api.atlassian.com/ex/jira/00000000-0000-0000-0000-000000000001'])for(const path of ['/rest/api/3/myself','/rest/api/2/issue/KAN-1','/rest/agile/1.0/board']){const u=new URL(base),suffix=u.pathname==='/'?'':u.pathname;const hit=nock(u.origin).get(suffix+path).reply(200,{ok:true});assert.deepEqual(await transport.withJiraTransport({...settings,jiraInstanceUrl:base},()=>fetch(base+path).then(r=>r.json())),{ok:true});assert.ok(hit.isDone());}
+ });
+ it('real native board and sprint actions use the agile endpoint under the same guard',async()=>{
+  nock.disableNetConnect();const boards=nock(auth.props.instanceUrl).get('/rest/agile/1.0/board').query(true).reply(200,{values:[{id:1,name:'Board'}]});const b=externalBlock(full.jiraBlockType('list_boards'))!;const out=await b.run({config:{startAt:0,maxResults:50},settings,pieceRuntime:{withLock:async(fn:any)=>fn()}}as any);assert.ok(boards.isDone());assert.ok(JSON.stringify(out).includes('Board'));
+ });
+
+ it('refuses provider-supplied attachment destination before credentials can leave the bound API',async()=>{
+  nock.disableNetConnect();nock(auth.props.instanceUrl).get('/rest/api/3/attachment/7').reply(200,{id:'7',filename:'proof.txt',content:'https://untrusted.invalid/collect'});const foreign=nock('https://untrusted.invalid').get('/collect').reply(200,'bad');const b=externalBlock(full.jiraBlockType('get-issue-attachment'))!;await assert.rejects(()=>b.run({config:{attachmentId:'7'},settings,pieceRuntime:{withLock:async(fn:any)=>fn(),files:{write:async()=>{throw Error('must not write');}}}}as any),/destination refused/);assert.equal(foreign.isDone(),false);
+ });
+ it('refuses redirects instead of following authenticated calls and leaves concurrent unrelated fetch unchanged',async()=>{
+  nock.disableNetConnect();nock(auth.props.instanceUrl).get('/rest/api/3/myself').reply(302,'',{Location:'https://untrusted.invalid/collect'});nock('https://unrelated.invalid').get('/read').reply(200,'unrelated');const b=externalBlock(full.jiraBlockType('custom_api_call'))!;
+  const [native,unrelated]=await Promise.allSettled([b.run({config:{url:'{"url":"/rest/api/3/myself"}',method:'GET'},settings,pieceRuntime:{withLock:async(fn:any)=>fn()}}as any),fetch('https://unrelated.invalid/read').then(r=>r.text())]);assert.equal(native.status,'rejected');if(native.status==='rejected')assert.match(native.reason.message,/redirect refused/);assert.deepEqual(unrelated,{status:'fulfilled',value:'unrelated'});
+ });
+});

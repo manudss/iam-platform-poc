@@ -4,7 +4,7 @@
 // Usage: DOLT_BIN=... CHROME_BIN=... node scripts/ui-e2e.mjs [outDir]
 import { spawn, spawnSync } from 'node:child_process';
 import { connect } from 'node:net';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, openSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +26,13 @@ assert.equal(spawnSync(dolt, ['sql'], { cwd: data, env, input: readFileSync(join
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const procs = [];
 // Each child starts in its OWN process group (detached) so the whole tree (npx -> ng serve, node, ...) can be stopped by group, never by a name pattern.
-const run = (cmd, args, opts) => procs.push(spawn(cmd, args, { stdio: 'ignore', detached: true, ...opts }));
+const serverLogs = [];
+const run = (cmd, args, opts) => {
+  const path = join(dir, `server-${procs.length}.log`), fd = openSync(path, 'a');
+  serverLogs.push({ name: cmd.split('/').pop() + ' ' + args[0], path });
+  try { procs.push(spawn(cmd, args, { stdio: ['ignore', fd, fd], detached: true, ...opts })); }
+  finally { closeSync(fd); }
+};
 const portOpen = (port) => new Promise((ok) => { const c = connect(port, '127.0.0.1'); c.once('connect', () => { c.destroy(); ok(true); }); c.once('error', () => ok(false)); });
 // Descendants of the children we started, snapshotted BEFORE stopping anything (`ng serve` moves its server into its own session, so a group kill alone misses it).
 const descendants = (roots) => {
@@ -58,7 +64,12 @@ run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.e
 if (!process.env.WEB_ALREADY_SERVED) run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 let browser;
 try {
-  for (let i = 0; i < 120; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
+  let ready = false;
+  for (let i = 0; i < 120; i++) {
+    try { if ((await fetch('http://127.0.0.1:4200/', { signal: AbortSignal.timeout(1500) })).ok && (await fetch('http://127.0.0.1:4200/api/health', { signal: AbortSignal.timeout(1500) })).ok) { ready = true; break; } } catch {}
+    await sleep(500);
+  }
+  assert.ok(ready, 'UI fixture never became ready (web and proxied API health required)');
   browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1, MAP *picsum.photos ~NOTFOUND'] });
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
@@ -68,6 +79,8 @@ try {
     new MutationObserver(rec).observe(document, { subtree: true, childList: true, characterData: true });
   });
   page.on('dialog', (d) => d.accept());
+  // Only endpoint/status diagnostics, never auth headers, URL queries or response bodies.
+  page.on('response', (r) => { const p = new URL(r.url()).pathname; if (p.startsWith('/api/') && (r.status() >= 400 || p.endsWith('/auth/me/admin-assurance'))) console.log('DIAG-HTTP', r.status(), p); });
   // Lifecycle diagnostics: log the exact grants payload and answer of every plugin enable/disable call, so a
   // grant refusal in CI shows what the console actually sent instead of only the server note.
   page.on('response', (r) => {
@@ -558,12 +571,24 @@ try {
       detail = ` (viewport ${await page.evaluate(() => window.innerWidth)}px, scrollWidth ${await page.evaluate(() => document.documentElement.scrollWidth)}px; wider than viewport: ${offenders.join(' | ') || 'none found'})`;
     }
     assert.ok(over <= 2, `${p}: horizontal overflow of ${over}px at 390px${detail}`);
+    if (p === '/plugins') await page.screenshot({ path: join(out, '9-mobile-plugins.png'), fullPage: true });
   }
   await page.click('button.burger'); await page.waitForSelector('.layout.open nav a'); await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-menu.png') });
   await page.click('nav a[data-nav="/overview"]'); await page.waitForFunction(() => !document.querySelector('.layout.open'));
   await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-overview.png') });
   assert.deepEqual(errors, [], 'no page errors');
   console.log('UI E2E PASSED; screenshots in ' + out);
+} catch (error) {
+  // Child stdout/stderr used to be discarded, making an API error indistinguishable from a UI race.
+  // The fixture is fictional/local. Print only bounded error lines, not full request logs or credentials.
+  for (const entry of serverLogs) {
+    try {
+      const lines = readFileSync(entry.path, 'utf8').split('\n').filter(line => /ERROR|Error:|ECONN|ETIMEDOUT|panic|error occurred while proxying/i.test(line));
+      const codes = [...new Set(lines.flatMap(line => line.match(/\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|EADDRINUSE|ENOENT|ER_[A-Z_]+)\b/g) ?? []))];
+      console.log('DIAG-SERVER', entry.name, JSON.stringify({ errorLineCount: lines.length, codes }));
+    } catch { console.log('DIAG-SERVER', entry.name, 'diagnostic unavailable'); }
+  }
+  throw error;
 } finally {
   await browser?.close(); await stopAll(); rmSync(dir, { recursive: true, force: true });
 }

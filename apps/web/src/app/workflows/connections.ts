@@ -54,6 +54,10 @@ export function probeFor(c: WorkflowConnection, probes: Record<string, Connectio
   </section>
 } @empty { @if (!loading()) {<p class="hint">{{query() ? 'No connection matches your search.' : 'No connections yet. Add Google Sheets, Jira or HTTP to get started.'}}</p>} }
 </div>
+<section class="wfc-info" aria-labelledby="native-runtime-title"><h3 id="native-runtime-title">Native connector runtime</h3><button class="secondary" (click)="loadNativeStatus()">Refresh runtime status</button>
+@if(nativeStatusError()){<p class="hint" role="status">{{nativeStatusError()}}</p>}
+@for(entry of nativeStatus();track entry.scope){<p class="hint"><b>{{entry.scope}}</b> · {{entry.subscription?.status || 'Action state'}} · {{entry.locked ? 'Locked: running or needs crash reconciliation' : 'No retained lock'}} · {{entry.pending}} pending deliveries · {{entry.inbox}} queued notification batches</p>@if(entry.subscription?.reason){<p class="hint">{{entry.subscription.reason}}</p>}}
+<p class="hint">Trigger edits, retirement, deletion and disable/re-enable, including tenant plugin disable/re-enable, retain state for operator review. No automatic reactivation or state purge is available. For a stranded lock or uncertain subscription, stop the former worker and reconcile external effects and provider subscriptions with your operator. Never clear a lock or retry automatically. Refresh is read-only; it does not poll Google or run workflows.</p></section>
 <p class="hint">A connection test reads service access only. It does not create a ticket, append a row or send a workflow action.</p>
 <div class="wfc-info"><b>Write-only credentials</b><p class="hint">Secret revisions live in OpenBao. Dolt versions connection metadata and references, never credentials. Without a secret store, credential storage and authenticated live use are blocked.</p>@if (!secretStoreConfigured()) {<p class="hint">OpenBao is not configured. Ask your operator to connect the secret store.</p>}</div>
 @if(formOpen()) {
@@ -62,7 +66,7 @@ export function probeFor(c: WorkflowConnection, probes: Record<string, Connectio
 <fieldset [disabled]="busy()" style="border:0;padding:0;margin:0">
 <label>Name<input autofocus name="connectionName" [(ngModel)]="formName" (ngModelChange)="changed()" maxlength="80" /></label>
 <label>Provider<select name="connectionProvider" [(ngModel)]="formProvider" (ngModelChange)="providerChanged()" [disabled]="!!editing()"><option value="jira">Jira</option><option value="google-sheets">Google Sheets</option><option value="http">HTTP</option></select></label>
-@for(f of fields();track f.key) {<label>{{f.label}}<input [name]="'connection-' + f.key" [(ngModel)]="formConfig[f.key]" (ngModelChange)="changed()" [placeholder]="f.placeholder" maxlength="300" /></label>}
+@for(f of fields();track f.key) {<label>{{f.label}}@if(f.key==='googleScope'){<select name="connection-googleScope" [ngModel]="formConfig[f.key] || 'spreadsheet'" (ngModelChange)="formConfig[f.key]=$event;changed()"><option value="spreadsheet">Legacy spreadsheet configuration</option><option value="account">Full native catalogue (account scope)</option></select><span class="hint">Account scope permits actions across spreadsheets accessible to this credential. Changing scope requires entering the credential again.</span>}@else{<input [name]="'connection-' + f.key" [(ngModel)]="formConfig[f.key]" (ngModelChange)="changed()" [placeholder]="f.placeholder" maxlength="300" />}</label>}
 <label>{{editing() ? 'Replace ' : ''}}{{secretLabel()}}
 @if(formProvider === 'google-sheets') {<textarea name="connectionSecret" [(ngModel)]="formSecret" (ngModelChange)="changed()" autocomplete="off" spellcheck="false" maxlength="20000" placeholder="Paste service account JSON"></textarea>}
 @else {<input type="password" name="connectionSecret" [(ngModel)]="formSecret" (ngModelChange)="changed()" autocomplete="new-password" maxlength="20000" placeholder="Enter a new credential" />}
@@ -85,13 +89,16 @@ export class WorkflowConnectionsPage  {
   protected visible = computed(() => visibleConnections(this.rows(), this.query()));
   private epoch = 0;
   private readonly dialog = viewChild<ElementRef<HTMLDialogElement>>('connectionDialog');
-  constructor() { effect(() => { this.s.branchEpoch(); this.closeForm(); this.probes.set({}); void this.load(); }); effect(() => { const dialog=this.dialog()?.nativeElement; if(dialog && !dialog.open) dialog.showModal(); }); }
+  constructor() { effect(() => { this.s.branchEpoch(); this.closeForm(); this.probes.set({}); this.nativeStatus.set([]);this.nativeStatusError.set('');void this.load(); }); effect(() => { const dialog=this.dialog()?.nativeElement; if(dialog && !dialog.open) dialog.showModal(); }); }
   protected async load() {
     const epoch = ++this.epoch; this.loading.set(true); this.rows.set([]); this.note.set('');
     try { const r = await clientOf(this.s).connections(); if (epoch !== this.epoch) return; this.rows.set(r.connections); this.secretStoreConfigured.set(r.secretStoreConfigured); }
     catch { if (epoch === this.epoch) this.note.set('Connections could not be loaded. Check your access and try again.'); }
     finally { if (epoch === this.epoch) this.loading.set(false); }
   }
+  protected nativeStatus=signal<{scope:string;subscription:{status?:string;reason?:string}|null;locked:boolean;pending:number;inbox:number}[]>([]);
+  protected nativeStatusError=signal('');
+  protected async loadNativeStatus(){const epoch=this.epoch;this.nativeStatusError.set('Loading runtime status...');try{const r=await this.s.api.raw<any>('GET','/activepieces-runtime-status');if(epoch!==this.epoch)return;if(r.status>=400)throw Error();this.nativeStatus.set(r.data.entries);this.nativeStatusError.set(r.data.entries.length?'':'No native runtime state yet.');}catch{if(epoch!==this.epoch)return;this.nativeStatusError.set('Runtime status unavailable. Check administrator access and retry.');}}
   protected probe(c: WorkflowConnection) { return probeFor(c, this.probes()); }
   protected status(c: WorkflowConnection) { return this.probe(c)?.status ?? c.status; }
   protected provider(c: WorkflowConnection) { return c.provider === 'google-sheets' ? 'Google Sheets' : c.provider === 'jira' ? 'Jira' : 'HTTP'; }
@@ -101,7 +108,7 @@ export class WorkflowConnectionsPage  {
   protected formError = signal('');
   protected formResult = signal<{status: string; checkedAt: string; message?: string} | null>(null);
   private formVersion = 0;
-  protected fields() { return this.formProvider === 'jira' ? [{key:'instanceUrl',label:'Jira site URL',placeholder:'https://team.atlassian.net'},{key:'email',label:'Account email',placeholder:'support@example.invalid'}] : this.formProvider === 'http' ? [{key:'baseUrl',label:'HTTPS base URL',placeholder:'https://api.example.com/v1/'}] : [{key:'spreadsheetId',label:'Spreadsheet ID (for read-only test)',placeholder:''},{key:'sheetId',label:'Sheet ID',placeholder:'0'},{key:'userEmail',label:'Delegated user email (optional)',placeholder:''}]; }
+  protected fields() { return this.formProvider === 'jira' ? [{key:'instanceUrl',label:'Jira site URL',placeholder:'https://team.atlassian.net'},{key:'email',label:'Account email',placeholder:'support@example.invalid'}] : this.formProvider === 'http' ? [{key:'baseUrl',label:'HTTPS base URL',placeholder:'https://api.example.com/v1/'}] : [{key:'googleScope',label:'Google scope: spreadsheet (legacy) or account (full catalogue)',placeholder:'spreadsheet'},{key:'spreadsheetId',label:'Spreadsheet ID (for read-only test)',placeholder:''},{key:'sheetId',label:'Sheet ID',placeholder:'0'},{key:'userEmail',label:'Delegated user email (optional)',placeholder:''}]; }
   protected secretLabel() { return this.formProvider === 'jira' ? 'API token' : this.formProvider === 'google-sheets' ? 'Service account JSON' : 'Bearer token (optional)'; }
   protected trapFocus(event: KeyboardEvent) {
     if(event.key !== 'Tab') return;

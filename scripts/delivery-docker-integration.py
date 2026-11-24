@@ -50,6 +50,88 @@ def health(app):
     raise RuntimeError('candidate-edge-health-timeout')
 
 
+def verify_held_queue_refusals(qmodule,root,bindir,guarded_state,plan,wrapper):
+    held=root/'held-queue.json'
+    held_state=json.loads(json.dumps(guarded_state));held_state['format']=3
+    held_state['history'][-1]['mode']='ui-open-automation-held'
+    held.write_text(json.dumps(held_state));held_original=held.read_bytes()
+    if qmodule.load(held)!=held_state:raise RuntimeError('held-fixture-invalid')
+    attempted=[]
+    try:qmodule.deploy(held,plan,str(wrapper),runner=lambda *a,**k:attempted.append(True))
+    except ValueError as error:
+        if str(error)!='prior deployment unresolved, operator review required':raise
+    else:raise RuntimeError('held-deploy-not-refused')
+    resume={'format':1,'kind':'reviewed-resume','state_fingerprint':qmodule.fingerprint(held_state),
+            'expected_delivered':{k:held_state['history'][-1][k] for k in ['sha','digest']},
+            'authorization_ref':'synthetic-refusal-only','evidence_refs':['synthetic-fixture']}
+    try:qmodule.resume_reviewed(held,resume,'fixture',observe=lambda *a:attempted.append(True))
+    except ValueError as error:
+        if str(error)!='held UI is not full automation delivery; generic resume forbidden':raise
+    else:raise RuntimeError('held-resume-not-refused')
+    held_status=run(['python3',str(bindir/'ordered-queue.py'),'status','--state',str(held),'--pause-file',str(root/'absent-pause')],False)
+    if held_status.returncode==0 or 'deployment queue blocked or paused' not in held_status.stderr:raise RuntimeError('held-status-not-refused')
+    if attempted or held.read_bytes()!=held_original:raise RuntimeError('held-queue-mutated')
+    unsupported=root/'unsupported-queue.json'
+    unsupported.write_text(json.dumps({**guarded_state,'format':4}))
+    try:qmodule.load(unsupported)
+    except ValueError as error:
+        if str(error)!='uninitialized or corrupt deployment history':raise
+    else:raise RuntimeError('unknown-format-not-refused')
+def queue_failure_diagnostic(stderr, state):
+    # Fixed enums only. Never export stderr, paths, environment, SQL, or credentials.
+    vocabulary = {
+        'pre-update preservation capture failed': 'preservation-before-refused',
+        'pre-update hook failed': 'pre-update-hook-refused',
+        'front gate could not be proven': 'front-closure-not-proved',
+        'another update is running': 'update-lock-busy',
+        'does not support IAM_DEMO_SEED_MODE=never': 'seednever-label-missing',
+        'no Dolt dataset': 'baseline-dataset-missing',
+        'must be immutable': 'mutable-image-refused',
+        'new version is healthy BUT': 'final-front-open-not-proved',
+        'rolled back to': 'rolled-back',
+        'post-update qualification failed': 'qualification-after-refused',
+        'the pg dump is corrupt': 'pg-backup-corrupt',
+        'the pg dump header is missing': 'pg-backup-header-missing',
+        'pre-opening qualification failed': 'qualification-before-open-refused',
+        'pg state capture failed': 'pg-state-capture-refused',
+        'pg backup failed': 'pg-backup-refused',
+        'data backup failed': 'data-backup-refused',
+        'OpenBao did not become ready/unsealed': 'bao-readiness-refused',
+        'bao backup failed': 'bao-backup-refused',
+        'recovery bundle failed': 'recovery-bundle-refused',
+        'preservation changed': 'preservation-diff',
+        'expected origin/form refused': 'oidc-form-refused',
+        'real OIDC login failed': 'oidc-login-refused',
+        'journal schema invalid': 'journal-contract-mismatch',
+    }
+    markers=sorted({code for needle,code in vocabulary.items() if needle in stderr})
+    # Bound numeric code from queue journal, not a parsed arbitrary external string.
+    code=state.get('failed',{}).get('exit')
+    diag=[]
+    import re
+    for raw in re.findall(r'^QUALIFICATION_DIAG_V1 (\{[^\n]{1,600}\})$',stderr,re.M):
+        try:
+            v=json.loads(raw)
+            if set(v)=={'exceptionType','sourceLines'} and v['exceptionType'] in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError','Other'} and isinstance(v['sourceLines'],list) and len(v['sourceLines'])<=8 and all(type(n) is int and 0<n<1000000 for n in v['sourceLines']):diag.append(v)
+        except (ValueError,TypeError):pass
+    result={'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
+    if diag:result['qualificationDiagnostics']=diag[-4:]
+    allowed={'dolt','bao','credentials','postgres-schema','postgres-tables','postgres-append-preservation','postgres-rows','postgres-sequences','postgres-sequence-rewind'}
+    for raw in re.findall(r'^PRESERVATION_DIAG_V1 (\{[^\n]{1,600}\})$',stderr,re.M):
+        try:
+            v=json.loads(raw)
+            if set(v)=={'categories'} and isinstance(v['categories'],list) and 0<len(v['categories'])<=len(allowed) and all(type(c) is str and c in allowed for c in v['categories']):result['preservationCategories']=sorted(set(v['categories']))
+        except (ValueError,TypeError):pass
+    refused=re.findall(r'^TRANSFORM_DIAG_V1 ([a-z][a-z-]{0,63})$',stderr,re.M)
+    if refused:result['transformationRefusal']=refused[-1]
+    for raw in re.findall(r'^DOLT_STATUS_DIAG_V1 (\{[^\n]{1,400}\})$',stderr,re.M)[-1:]:
+        try:
+            v=json.loads(raw)
+            if set(v)=={'before','after'} and all(isinstance(v[k],list) and len(v[k])==20 and all(type(n) is int and 0<=n<=1000000 for n in v[k]) for k in v):result['doltStatusCounts']=v
+        except (ValueError,TypeError):pass
+    return result
+
+
 def main():
     if os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise RuntimeError('disposable-runner-required')
@@ -161,6 +243,11 @@ raise SystemExit(r.returncode)
                   'credentialFiles': ['core-state/credentials.json', 'core-state/iam-poc-account-blocks.json',
                                       'core-state/iam-poc-authn-enrollments.json', 'core-state/iam-poc-password-history.json'],
                   'appendOnlyTables': ['public.activations', 'public.decision_audit'], 'transformationVerifiers': {}}
+        verifier=bindir/'qualification-dolt-piece-storage-verifier.py'
+        if verifier.is_file():
+            if not os.access(verifier,os.X_OK):raise RuntimeError('transformation-verifier-not-executable')
+            policy['transformationVerifiers'][c['image']]={'path':str(verifier),'interface':'categories-v1'}
+            result['transformationVerifier']={'image':c['image'],'sha256':sha(verifier),'scope':'only-empty-piece-storage-table'}
         pol = owned / 'qualification.json'
         pol.write_text(json.dumps(policy))
         pol.chmod(0o600)
@@ -249,23 +336,19 @@ raise SystemExit(r.returncode)
             except ValueError as error:refusal=str(error)
             if refusal!='prior deployment unresolved, operator review required':raise RuntimeError('wrong-queue-guard-refusal')
             if attempted or guarded.read_bytes()!=original:raise RuntimeError('guarded-queue-mutated')
-            unsupported=root/'unsupported-queue.json'
-            unsupported.write_text(json.dumps({**guarded_state,'format':3}))
-            try:qmodule.load(unsupported)
-            except ValueError as error:
-                if str(error)!='uninitialized or corrupt deployment history':raise
-            else:raise RuntimeError('format3-support-needs-explicit-scenario')
+            verify_held_queue_refusals(qmodule,root,bindir,guarded_state,plan,wrapper)
             pause=root/'PAUSE';pause.write_text('synthetic-guard\n')
             paused=run(['python3',str(bindir/'ordered-queue.py'),'drain','--state',str(queue),'--pause-file',str(pause),'--updater',str(wrapper)],False,input=json.dumps(plan))
             if paused.returncode==0 or 'deployment paused; no pending entry written' not in paused.stderr or json.loads(queue.read_text())!=state:raise RuntimeError('paused-queue-was-not-refused')
             pause.unlink() # Fixture-owned pause scenario finished; normal scenario has separate state.
             result['checks']['guardedQueueRefusal']=True
-            result['guardedQueueCoverage']={'format2ResumeRequiredRefusal':refusal,'format3Status':'unsupported-format-rejected-not-resume-proof','pauseExit':paused.returncode,'queueUnchanged':json.loads(queue.read_text())==state,'productionStateNotReplayed':True}
+            result['guardedQueueCoverage']={'format2ResumeRequiredRefusal':refusal,'format3Status':'ui-held-deploy-resume-status-refused-state-unchanged','pauseExit':paused.returncode,'queueUnchanged':json.loads(queue.read_text())==state,'productionStateNotReplayed':True}
             q = run(['python3', str(bindir / 'ordered-queue.py'), 'drain', '--state', str(queue),
                      '--pause-file', str(root / 'PAUSE'), '--updater', str(wrapper)], False, input=json.dumps(plan))
             result['queueExit'] = q.returncode
             result['evidence']['queueState'] = sha(queue)
             if q.returncode:
+                result['queueFailure']=queue_failure_diagnostic(q.stdout+'\n'+q.stderr,json.loads(queue.read_text()))
                 raise RuntimeError('real-queue-update-refused')
             delivered = json.loads(queue.read_text())
             if delivered['history'][-1]['sha'] != result['sha'] or delivered.get('pending') or delivered.get('failed'):
@@ -280,7 +363,11 @@ raise SystemExit(r.returncode)
             after=json.loads(after_paths[0].read_text());smoke=json.loads(smoke_paths[0].read_text())
             qualifier=load_module(bindir/'qualification.py','candidate_qualifier')
             changes=qualifier.compare(before,after,policy)
-            if changes:raise RuntimeError('measured-preservation-diff')
+            if changes:
+                declared=policy['transformationVerifiers'].get(c['image'])
+                if not declared or declared.get('interface')!='categories-v1':raise RuntimeError('measured-preservation-diff')
+                run([declared['path'],str(evidence_dir/'before.json'),str(after_paths[0]),','.join(sorted({k.split(':',1)[0] for k in changes}))])
+                result['declaredTransformationVerified']=True
             if not after.get('migrationLedger') or not smoke:raise RuntimeError('missing-ledger-or-smoke-proof')
             if urllib.request.urlopen(origin+'/healthz',timeout=10).status!=200 or (gates/'MAINTENANCE').exists():raise RuntimeError('measured-final-front-not-open')
             result['measurements']={'preservationChanges':changes,'beforeSHA256':sha(evidence_dir/'before.json'),
@@ -339,7 +426,7 @@ raise SystemExit(r.returncode)
             result['incidentReceiptConsumer'] = {'applicable':consumer.is_file()}
             if consumer.is_file():
                 parser = load_module(consumer, 'candidate_receipt_consumer')
-                parser.receipt_fields(receipt.read_text())
+                parser.receipt_fields(receipt.read_bytes())
                 result['incidentReceiptConsumer']['passed']=True
         result['passed'] = True
     except Exception as error:
@@ -348,7 +435,9 @@ raise SystemExit(r.returncode)
         result['errorType'] = type(error).__name__
         result['commandFailure']=COMMAND_FAILURE
         if str(error) in {'candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
-                          'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused'}:
+                          'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused',
+                          'held-fixture-invalid', 'held-deploy-not-refused', 'held-resume-not-refused',
+                          'held-status-not-refused', 'held-queue-mutated', 'unknown-format-not-refused'}:
             result['reason'] = str(error)
         raise
     finally:

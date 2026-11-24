@@ -176,3 +176,12 @@ test('a front that never comes up stops the boot before the app', () => {
 });
 
 test('host boot refuses closed recovery flag before starting companions',()=>{for(const args of [['--closed-recovery'],['a','b','--closed-recovery']]){const r=spawnSync('sh',[boot,...args],{encoding:'utf8'});assert.notEqual(r.status,0);assert.match(r.stderr,/manual/);}});
+
+test('persistent automation hold refuses boot start or recreate', () => {
+  const { env } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + 'IAM_AUTOMATION_HOLD=1\n');
+  const r = run(env);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /manual reviewed recovery required/);
+  assert.doesNotMatch(r.calls, /docker start|update.sh/);
+});

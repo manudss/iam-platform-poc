@@ -13,11 +13,13 @@ on:
       sha:
         required: true
         type: string
+  merge_group:
+    types: [checks_requested]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}-${{ inputs.sha || github.sha }}
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event_name == 'merge_group' && github.ref || github.run_id }}-${{ github.event_name == 'pull_request' && 'current' || inputs.sha || github.sha }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -53,8 +55,29 @@ jobs:
           name: ci-control-plan-${{ inputs.sha || github.sha }}
           path: ${{ runner.temp }}/ci-control-plan.json
           retention-days: 7
+  deployment_preflight:
+    # Fast controller contracts run before builds/integration, on PRs and main alike.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-automation
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Deployment controller unit contracts
+        working-directory: .ci-automation
+        run: |
+          python3 deploy/oci/ordered-queue.test.py
+          python3 deploy/oci/qualification.test.py
+          node --check deploy/oci/qualification-container.mjs
+          node --test scripts/oci-plan.test.mjs deploy/oci/pr-ci-contract.test.mjs
+      - name: Host guards without host access (stubbed docker)
+        working-directory: .ci-automation
+        run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
   core:
-    needs: control_policy
+    needs: [control_policy, deployment_preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -77,7 +100,7 @@ jobs:
         run: cargo test --locked -p iam-decision -p iam-core schema
         working-directory: core
   api:
-    needs: control_policy
+    needs: [control_policy, deployment_preflight]
     # Integration job: installs the real service binaries from their GitHub releases (free, no Docker) so the real-service suites RUN
     # instead of skipping: Dolt, PostgreSQL (embedded-postgres npm package), NATS JetStream, OpenBao, Temporal dev server, plus the
     # Rust core and a headless-Chrome UI run. If a download fails the step prints the release assets and fails the job.
@@ -199,7 +222,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
   web:
-    needs: control_policy
+    needs: [control_policy, deployment_preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -225,7 +248,10 @@ jobs:
         working-directory: .ci-automation
         run: |
           python3 deploy/oci/ordered-queue.test.py
+          python3 deploy/oci/reviewed-ui-held.test.py
+          python3 deploy/oci/reviewed-ui-controller.test.py
           python3 deploy/oci/qualification.test.py
+          python3 deploy/oci/qualification-dolt-piece-storage-verifier.test.py
           python3 deploy/oci/closed-recovery-integrity.test.py
           python3 deploy/oci/closed-recovery-helper.test.py
           python3 deploy/oci/closed-launcher.test.py
@@ -320,7 +346,7 @@ jobs:
         run: pwsh -NoProfile -File scripts/dev-startup-diagnostic.test.ps1
 
   compose:
-    needs: control_policy
+    needs: [control_policy, deployment_preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -362,7 +388,7 @@ jobs:
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
   demo-docker:
-    needs: control_policy
+    needs: [control_policy, deployment_preflight]
     # Step 7: every PR proves the all-in-one demo image still builds and boots (docs/demo.md).
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -435,3 +461,24 @@ jobs:
       - name: Stop
         if: always()
         run: docker rm -f iam-demo-ci || true
+
+  premerge:
+    # Stable required-check candidate. A skipped dependency is NOT a pass.
+    if: always()
+    needs: [control_policy, deployment_preflight, core, api, web, compose, demo-docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every qualification job to succeed
+        env:
+          QUALIFICATION_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node - <<'NODE'
+          const results = JSON.parse(process.env.QUALIFICATION_RESULTS);
+          const expected = ['control_policy', 'deployment_preflight', 'core', 'api', 'web', 'compose', 'demo-docker'];
+          if (Object.keys(results).length !== expected.length || expected.some(k => results[k]?.result !== 'success')) {
+            console.error('Qualification refused:', Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.result])));
+            process.exit(1);
+          }
+          console.log('All required qualification jobs succeeded. Deployment checks remain mandatory.');
+          NODE

@@ -471,13 +471,14 @@ const lyamRevokeAssignment = writeBlock('lyam-revoke-assignment', 'Revoke a role
 });
 
 const igaCreateCampaign = writeBlock('iga-create-campaign', 'IGA: create a recertification campaign', 'REAL: snapshots the scope on a ref (users in scope with their current roles) and creates the campaign. Durable operational state in the meta store. A test run only logs it.', [
+    { key: 'granularity', label: 'Review item granularity', type: 'select', options: ['person', 'access'], default: 'person' },
     { key: 'name', label: 'Campaign name', type: 'string', required: true },
     { key: 'kind', label: 'Kind', type: 'select', options: ['user-access', 'role-membership', 'application-access'], default: 'user-access' },
     { key: 'department', label: 'Scope: department', type: 'string' },
     { key: 'role', label: 'Scope: role id', type: 'string' },
     { key: 'users', label: 'Scope: user ids (comma-separated)', type: 'string' },
     { key: 'ref', label: 'Snapshot ref', type: 'string', default: 'main' },
-], (cfg) => ({ name: str(cfg.name, 'iga-create-campaign.name', 120), kind: str(cfg.kind, 'iga-create-campaign.kind', 24, false) || 'user-access', department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) || undefined, ref: str(cfg.ref, 'iga-create-campaign.ref', 80, false) || 'main', scope: { department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) ? str(cfg.users, 'users', 2000).split(',').map((x) => x.trim()).filter(Boolean) : undefined } }), async (ctx) => {
+], (cfg) => ({ granularity: str(cfg.granularity, 'granularity', 10, false) || 'person', name: str(cfg.name, 'iga-create-campaign.name', 120), kind: str(cfg.kind, 'iga-create-campaign.kind', 24, false) || 'user-access', department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) || undefined, ref: str(cfg.ref, 'iga-create-campaign.ref', 80, false) || 'main', scope: { department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) ? str(cfg.users, 'users', 2000).split(',').map((x) => x.trim()).filter(Boolean) : undefined } }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would snapshot the campaign "${c.name}" on ${c.ref}`); return { id: 'test', name: c.name, status: 'test' }; }
     const camp = await need(ctx.iga, 'iga-create-campaign').createCampaign(ctx.tenant, `workflow:${ctx.runId}`, c);
@@ -536,14 +537,15 @@ const igaAwaitDecisions = {
 
 const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepare the remediation', 'REAL: for every denied item, prepares the remediation actions (revoke the reviewed roles) after a FRESH snapshot check: roles changed since the campaign = conflict, nothing prepared for that item.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
-], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-prepare-remediation.campaignId', 48) }), async (ctx) => {
+    { key: 'maxActions', label: 'Optional complete-batch limit (1 to 200)', type: 'number' },
+], (cfg) => { const max = cfg.maxActions === undefined || cfg.maxActions === '' ? undefined : Number(cfg.maxActions); if (max !== undefined && (!Number.isInteger(max) || max < 1 || max > 200)) bad('maxActions: 1 to 200'); return { campaignId: str(cfg.campaignId, 'iga-prepare-remediation.campaignId', 48), ...(max === undefined ? {} : { maxActions: max }) }; }, async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would prepare the remediation of campaign ${c.campaignId}`); return { campaign: c.campaignId, remediation: [] }; }
-    const r = await need(ctx.iga, 'iga-prepare-remediation').prepareRemediation(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, {});
+    const r = await need(ctx.iga, 'iga-prepare-remediation').prepareRemediation(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { maxActions: c.maxActions });
     const prepared = r.remediation.filter((x) => x.actions && !x.conflict);
-    // Loop-ready flat forms: one entry per revoke action, one per denied identity (mark-remediated loops over it).
+    // Loop-ready flat forms: one entry per revoke action, one per denied review item (mark-remediated loops over it).
     const actions = prepared.flatMap((x) => (x.actions ?? []).filter((a) => a.type === 'revoke-role').map((a) => ({ campaignId: c.campaignId, item: x.item, identity: a.identity ?? x.identity, role: a.role })));
-    const deniedItems = prepared.map((x) => x.identity);
+    const deniedItems = prepared.map((x) => x.item);
     ctx.log(`${prepared.length} item(s) prepared (${actions.length} revoke action(s)), ${r.remediation.filter((x) => x.conflict).length} conflict(s)`);
     const conflictItems = r.remediation.filter((x) => x.conflict);
     return { ...r, actions, actionCount: actions.length, deniedItems, conflicts: conflictItems.length, conflictItems };

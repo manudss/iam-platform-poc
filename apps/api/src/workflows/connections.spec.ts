@@ -208,3 +208,14 @@ describe('failed checks leak nothing sensitive', () => {
     noLeak(JSON.stringify(r)); assert.ok(!JSON.stringify(r).includes('iam/workflow-connections'));
   });
 });
+
+
+describe('explicit full-catalogue Google scope',()=>{
+ it('requires resubmitted secret when broadening a connection and preserves legacy seals',async()=>{
+  const h=setup();const secret=JSON.stringify({type:'service_account',client_email:'fixture@fictional.iam.gserviceaccount.com',private_key:'-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----',token_uri:'https://oauth2.googleapis.com/token'});
+  const saved=await h.service.save('t',undefined,{name:'Google',provider:'google-sheets',config:{spreadsheetId:'fictional',sheetId:'0'},secret});
+  assert.equal((await h.service.resolve('t','main',saved.connection.id,'google-sheets')).settings.googleScope,'spreadsheet');
+  await assert.rejects(()=>h.service.save('t',saved.connection.id,{name:'Google',provider:'google-sheets',config:{spreadsheetId:'fictional',sheetId:'0',googleScope:'account'}}),/credential entered again/);
+  await h.service.save('t',saved.connection.id,{name:'Google',provider:'google-sheets',config:{spreadsheetId:'fictional',sheetId:'0',googleScope:'account'},secret});assert.equal((await h.service.resolve('t','main',saved.connection.id,'google-sheets')).settings.googleScope,'account');
+ });
+});

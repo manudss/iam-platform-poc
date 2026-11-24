@@ -39,6 +39,19 @@ describe('persistent application migration journal', () => {
   }
   const j=fresh();j.adopt(hash('backup'));writeFileSync(j.file,'broken');assert.throws(()=>j.read(),/unreadable/);
  });
+ it('Docker runtime migration-source copies satisfy the complete manifest',()=>{
+  const root=resolve('../..'), image=mkdtempSync(join(tmpdir(),'migration-image-'));
+  try {
+   const docker=readFileSync(join(root,'demo/Dockerfile'),'utf8');
+   const copies=[...docker.matchAll(/^COPY ([^ ]+) (\/app\/migration-source\/[^ ]+)$/gm)];
+   assert.ok(copies.length>0,'runtime migration sources must be copied');
+   for(const [,from,to] of copies) cpSync(join(root,from),join(image,to.slice('/app/migration-source/'.length)),{recursive:true});
+   const manifest=readManifest(image);
+   assert.equal(manifest.versions.length,readManifest(root).versions.length);
+   rmSync(join(image,'apps/api/src/migrations/v0003'),{recursive:true});
+   assert.throws(()=>readManifest(image),/ENOENT/,'missing runtime source must refuse boot');
+  }finally{rmSync(image,{recursive:true,force:true});}
+ });
  it('manifest verifies all initial frozen source files, SQL and dispatcher',()=>{
   const root=resolve('../..');const m=readManifest(root);assert.equal(m.versions[0].id,'0001');
   assert.ok(Object.keys(m.versions[0].files).includes('apps/api/src/migrations/v0001/run.ts'));
