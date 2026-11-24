@@ -186,7 +186,7 @@ def run(x):
         (folder / 'supervision-spec.json').write_text(json.dumps(spec)); os.chmod(folder / 'supervision-spec.json', 0o600)
         def unit(role):
             code = "import sys,importlib.util;s=importlib.util.spec_from_file_location('du',%r);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);m.REQUIRE_UNITS=False;sys.exit(m.main(['%s','--folder',%r,'--poll','2']))" % (str(du_path), role, str(folder))
-            return subprocess.Popen([py, '-c', code], stdout=open(folder / (role + '.log'), 'xb'), stderr=subprocess.STDOUT)
+            return subprocess.Popen([py, '-c', code], stdout=open(folder / (role + '.launcher.log'), 'xb'), stderr=subprocess.STDOUT)
         sampler = Sampler(origin); sampler.start()
         wd = unit('watchdog'); wk = unit('worker')
         t0 = time.monotonic()
