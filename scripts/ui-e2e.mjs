@@ -571,6 +571,7 @@ try {
       detail = ` (viewport ${await page.evaluate(() => window.innerWidth)}px, scrollWidth ${await page.evaluate(() => document.documentElement.scrollWidth)}px; wider than viewport: ${offenders.join(' | ') || 'none found'})`;
     }
     assert.ok(over <= 2, `${p}: horizontal overflow of ${over}px at 390px${detail}`);
+    if (p === '/plugins') await page.screenshot({ path: join(out, '9-mobile-plugins.png'), fullPage: true });
   }
   await page.click('button.burger'); await page.waitForSelector('.layout.open nav a'); await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-menu.png') });
   await page.click('nav a[data-nav="/overview"]'); await page.waitForFunction(() => !document.querySelector('.layout.open'));
