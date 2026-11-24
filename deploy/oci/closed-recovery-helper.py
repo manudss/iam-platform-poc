@@ -7,9 +7,21 @@ Preflight never starts an image. Launch never starts app until namespace probes 
 from urllib.parse import urlsplit
 import argparse, hashlib, ipaddress, json, os, pathlib, re, shutil, stat, subprocess, tempfile, time
 
+def command_failure(args,rc,stderr):
+    # Finite diagnostic vocabulary only. Never echo arguments, endpoints or output.
+    category='OTHER'
+    if args[:2]==['docker','exec']:category='DOCKER_EXEC'
+    elif args and args[0]=='nsenter':
+        category={'iptables':'NS_IPTABLES','ip6tables':'NS_IP6TABLES','iptables-save':'NS_IPTABLES_SAVE','ip6tables-save':'NS_IP6TABLES_SAVE','/usr/bin/python3':'NS_PYTHON'}.get(args[4] if len(args)>4 else '', 'NS_OTHER')
+    elif args and args[0]=='docker':category='DOCKER_OTHER'
+    reason='UNCLASSIFIED'
+    for needle,code in [('Permission denied','PERMISSION'),('Operation not permitted','PERMISSION'),('No chain/target/match','MISSING_MATCH'),('unknown option','UNKNOWN_OPTION'),('No route to host','NO_ROUTE'),('Network is unreachable','NO_ROUTE'),('Cannot find device','NO_DEVICE')]:
+        if needle.lower() in stderr.lower():reason=code;break
+    return 'HELPER_COMMAND_FAILURE '+category+' '+str(rc)+' '+reason
+
 def call(args, *, data=None):
     p=subprocess.run(args,input=data,text=True,capture_output=True,timeout=60)
-    if p.returncode: raise RuntimeError('command failed: '+args[0]+' '+args[1]+' (output withheld)')
+    if p.returncode: raise RuntimeError(command_failure(args,p.returncode,p.stderr))
     return p.stdout
 
 def digest(data):return hashlib.sha256(data).hexdigest()

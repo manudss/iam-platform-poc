@@ -21,6 +21,13 @@ class PostApp(unittest.TestCase):
    with patch('pathlib.Path.stat',return_value=SimpleNamespace(st_uid=uid,st_mode=mode)):
     if ok:f.assert_fixture_ancestry(root)
     else:self.assertRaises(ValueError,f.assert_fixture_ancestry,root)
+ def test_failure_details_never_copies_source_or_paths(self):
+  sample='  File \"/root/private/closed-recovery-helper.py\", line 183, in launch\n    private_source()\n  File \"/private/arbitrary.py\", line 99, in secret\nRuntimeError: private output'
+  self.assertEqual(f.failure_details(sample),{'reason':'unclassified-subprocess-failure','helperLineNumbers':[183],'exceptionType':'RuntimeError'})
+ def test_fixed_command_failure(self):
+  result=f.failure_details('RuntimeError: HELPER_COMMAND_FAILURE NS_IP6TABLES 2 UNKNOWN_OPTION')
+  self.assertEqual(result['commandFailure'],{'category':'NS_IP6TABLES','returnCode':2,'reason':'UNKNOWN_OPTION'})
+  self.assertNotIn('commandFailure',f.failure_details('RuntimeError: HELPER_COMMAND_FAILURE PRIVATE 2 private'))
  def test_postapp(self):
   launch={'policy4Exact':'four','policy6Exact':'six'};summary={'pid1Status':['CapEff: 0000000000000000','CapBnd: 0000000000000000','NoNewPrivs: 1']};f.assert_postapp('four','six',launch,summary)
   for a,b in [('changed','six'),('four','changed')]:self.assertRaises(ValueError,f.assert_postapp,a,b,launch,summary)

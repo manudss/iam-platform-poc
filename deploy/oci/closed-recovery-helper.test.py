@@ -20,6 +20,9 @@ class Tests(unittest.TestCase):
   h.assert_probe_result(expected)
   for key in expected:
    bad={**expected,key:not expected[key]};self.assertRaises(ValueError,h.assert_probe_result,bad)
+ def test_command_failure_sanitized(self):
+  self.assertEqual(h.command_failure(['nsenter','-t','123','-n','ip6tables','private'],2,'private unknown option private'),'HELPER_COMMAND_FAILURE NS_IP6TABLES 2 UNKNOWN_OPTION')
+  self.assertEqual(h.command_failure(['docker','exec','private'],1,'private'),'HELPER_COMMAND_FAILURE DOCKER_EXEC 1 UNCLASSIFIED')
  def test_matching(self):self.assertTrue(self.invoke()['preflight'])
  def test_changed_ledger(self):self.path.write_text(json.dumps(self.ledger,indent=2));self.assertRaises(ValueError,self.invoke)
  def test_changed_manifest(self):self.config['manifestSHA256']='0'*64;self.assertRaises(ValueError,self.invoke)

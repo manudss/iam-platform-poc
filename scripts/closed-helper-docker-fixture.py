@@ -14,10 +14,20 @@ def failure_code(stderr):
   if line in HELPER_ERRORS:return line
  return 'unclassified-subprocess-failure'
 
+def failure_details(stderr):
+ # Traceback paths, source text, arguments and exception messages remain private.
+ # Only line numbers for this known helper basename and a fixed type can leave.
+ frames=[int(n) for n in re.findall(r'File "[^"\n]*/closed-recovery-helper\.py", line ([0-9]{1,6}), in [A-Za-z_][A-Za-z_0-9]*',stderr)]
+ types=re.findall(r'^(ValueError|RuntimeError|TimeoutExpired|FileNotFoundError|PermissionError|KeyError|IndexError|TypeError|AttributeError|JSONDecodeError|subprocess\.TimeoutExpired):',stderr,re.M)
+ result={'reason':failure_code(stderr),'helperLineNumbers':frames[-12:],'exceptionType':types[-1].split('.')[-1] if types else 'unclassified'}
+ code=re.search(r'^RuntimeError: HELPER_COMMAND_FAILURE (OTHER|DOCKER_EXEC|DOCKER_OTHER|NS_IPTABLES|NS_IP6TABLES|NS_IPTABLES_SAVE|NS_IP6TABLES_SAVE|NS_PYTHON|NS_OTHER) (-?[0-9]{1,4}) (UNCLASSIFIED|PERMISSION|MISSING_MATCH|UNKNOWN_OPTION|NO_ROUTE|NO_DEVICE)$',stderr,re.M)
+ if code:result['commandFailure']={'category':code[1],'returnCode':int(code[2]),'reason':code[3]}
+ return result
+
 def call(args,check=True):
  p=subprocess.run(args,text=True,capture_output=True,timeout=300)
  if check and p.returncode:
-  COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,reason=failure_code(p.stderr))
+  COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,**failure_details(p.stderr))
   raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
  return p
 
@@ -103,7 +113,7 @@ def main():
   stage='negative-ledger'
   goodconfig=conf.read_text();wrong={**config,'ledgerSHA256':'0'*64};conf.write_text(json.dumps(wrong))
   refused=call([str(wrappers['preflight']),*args],False)
-  negative['ledger']={'returnCode':refused.returncode,'reason':failure_code(refused.stderr)}
+  negative['ledger']={'returnCode':refused.returncode,**failure_details(refused.stderr)}
   if refused.returncode==0 or failure_code(refused.stderr)!='ValueError: ledger changed from reviewed source' or call(['docker','inspect',app],False).returncode==0:raise ValueError('bad ledger did not refuse before candidate creation')
   conf.write_text(goodconfig)
   stage='positive-preflight'
@@ -115,7 +125,7 @@ def main():
   impl.write_text(original_impl.replace(needle,'for ip,port in []:pass'));impl.chmod(0o700)
   config['implementationSHA256']=sha(impl.read_bytes());conf.write_text(json.dumps(config))
   badlaunch=call([str(wrappers['launcher']),*args],False)
-  negative['policy']={'returnCode':badlaunch.returncode,'reason':failure_code(badlaunch.stderr)}
+  negative['policy']={'returnCode':badlaunch.returncode,**failure_details(badlaunch.stderr)}
   failed=inspect(app)
   if badlaunch.returncode==0 or failure_code(badlaunch.stderr)!='ValueError: network probe mismatch' or failed['State']['Running'] or failed['Config']['Entrypoint']!=['sh']:raise ValueError('incomplete policy did not stop before release')
   # Explicit fixture-owned failed candidate cleanup only, never a production retry policy.
