@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import https from 'node:https';
 
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
@@ -114,7 +115,32 @@ export async function assertPublicResolution(hostname, resolve = (h) => lookup(h
   let answers;
   try { answers = await resolve(hostname); } catch (e) { throw new ModelCallError(`the model host does not resolve: ${e.code ?? e.message}`, 502); }
   if (!answers?.length || answers.some((a) => privateAddress(a.address))) throw new ModelCallError('the model host resolves to a private or loopback address: refused', 400);
+  return answers;
 }
+
+/**
+ * POST over https to the ALREADY CHECKED addresses: the socket connects to the address that passed the check (not to a second DNS
+ * answer), TLS still validates the certificate for the host name. No redirect is followed. Returns a minimal Response.
+ */
+export function pinnedFetch(answers) {
+  return (url, init) => new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const pick = answers[0];
+    const req = https.request({
+      protocol: 'https:', hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: init.method, headers: init.headers, servername: u.hostname,
+      lookup: (_h, opts, cb) => (opts?.all ? cb(null, [{ address: pick.address, family: pick.family ?? isIP(pick.address) }]) : cb(null, pick.address, pick.family ?? isIP(pick.address))),
+      signal: init.signal,
+    }, (r) => {
+      const chunks = []; let size = 0;
+      r.on('data', (c) => { size += c.length; if (size > 4_000_000) { req.destroy(new Error('response too large')); return; } chunks.push(c); });
+      r.on('end', () => resolve(new Response([204, 205, 304].includes(r.statusCode) ? null : Buffer.concat(chunks), { status: r.statusCode, headers: Object.fromEntries(Object.entries(r.headers).filter(([, v]) => typeof v === 'string')) })));
+      r.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end(init.body);
+  });
+}
+
 export const redact = (msg, key) => (key ? String(msg).split(key).join('[redacted]') : String(msg));
 
 export class ModelCallError extends Error {
@@ -174,14 +200,18 @@ function parseAnthropic(j) {
  * One model turn. `model`: { kind, baseUrl, model, maxTokens }. `apiKey`: string | null (opened by the adapter).
  * `fetchImpl` is injectable for the tests. Errors never carry the key.
  */
-export async function callModel({ model, apiKey, system, messages, tools, fetchImpl = fetch, timeoutMs = 90_000, resolveImpl }) {
+export async function callModel({ model, apiKey, system, messages, tools, fetchImpl, timeoutMs = 90_000, resolveImpl }) {
   const anthropic = model.kind === 'anthropic';
   const url = anthropic ? `${model.baseUrl}/v1/messages` : `${model.baseUrl}/chat/completions`;
   const headers = { 'content-type': 'application/json' };
   if (anthropic) { headers['anthropic-version'] = '2023-06-01'; if (apiKey) headers['x-api-key'] = apiKey; } else if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   const body = anthropic ? anthropicBody(model, system, messages, tools) : openaiBody(model, system, messages, tools);
   const target = new URL(url);
-  if (!isLocalEndpoint(target)) await assertPublicResolution(target.hostname.toLowerCase(), resolveImpl);
+  if (!isLocalEndpoint(target)) {
+    const answers = await assertPublicResolution(target.hostname.toLowerCase(), resolveImpl);
+    fetchImpl ??= pinnedFetch(answers); // connect to the checked address, not to a second DNS answer
+  }
+  fetchImpl ??= fetch;
   let res;
   try { res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), redirect: 'error' }); } catch (e) { throw new ModelCallError(redact(`the model endpoint is unreachable: ${e.message}`, apiKey), 502); }
   const text = await res.text();

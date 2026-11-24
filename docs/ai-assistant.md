@@ -30,7 +30,7 @@ The injection test exists before the plugin can be enabled.
 
 ## Limits
 
-No streaming. Sessions last 8h. Reserved ranges (multicast, 198.18/15, 192.0.0/24, NAT64, 6to4) are refused too. Remote hosts are resolved before each call and refused if any answer is private, loopback, link-local or mapped; the connection itself is not pinned to the checked address, so a DNS answer changing between the check and the connect is a residual risk (use `IAM_AI_ALLOWED_HOSTS` and an egress rule in production). The per-turn limits reset with each user message, so a conversation is also capped (80 tool calls, 400 messages). Key sealing is POC grade (AES-GCM with one shared secret, no rotation). The MCP spec version is not upgraded here.
+No streaming. Sessions last 8h. Reserved ranges (multicast, 198.18/15, 192.0.0/24, NAT64, 6to4) are refused too. Remote hosts are resolved before each call and refused if any answer is private, loopback, link-local or mapped; the connection then goes to the address that passed the check (pinned lookup, TLS still verifies the host name, no redirect), so a DNS answer changing between check and connect is not followed. `IAM_AI_ALLOWED_HOSTS` plus an egress rule remain advisable in production. The per-turn limits reset with each user message, so a conversation is also capped (80 tool calls, 400 messages). Key sealing is POC grade (AES-GCM with one shared secret, no rotation). The MCP spec version is not upgraded here.
 
 ## Option studied, not enabled: GitHub Copilot SDK
 

@@ -2,6 +2,11 @@
 // (allowlist, confirmation, untrusted tool output, limits). No Dolt, no network beyond 127.0.0.1.
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import https, { createServer as httpsServer } from 'node:https';
 import { createServer, IncomingMessage, Server } from 'node:http';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 process.env.IAM_AI_KEY_SECRET ??= 'test-only-secret-0123456789abcdef';
@@ -188,5 +193,21 @@ describe('agent loop', () => {
       assert.throws(() => p.validateModelUrl('http://gpu1.corp.lan:9000/v1'), /https/);
       for (const a of ['198.18.0.1', '224.0.0.1', '192.0.0.8', '64:ff9b::7f00:1', '2002:7f00:1::1', 'ff02::1']) assert.equal(p.privateAddress(a), true, a);
     } finally { process.env.IAM_AI_LOCAL_ENDPOINTS = saved; }
+  });
+  it('pinned transport: connects to the checked address while TLS validates the host name', async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'pin-'));
+    const gen = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem'), '-days', '1', '-subj', '/CN=models.example.org', '-addext', 'subjectAltName=DNS:models.example.org'], { encoding: 'utf8' });
+    if (gen.status !== 0) return t.skip('openssl unavailable');
+    const cert = readFileSync(join(dir, 'c.pem'));
+    const srv = httpsServer({ key: readFileSync(join(dir, 'k.pem')), cert }, (_q, r) => { r.setHeader('content-type', 'application/json'); r.end('{"ok":true}'); });
+    await new Promise<void>((ok) => srv.listen(0, '127.0.0.1', ok)); servers.push(srv as never);
+    const port = (srv.address() as { port: number }).port;
+    const agent = https.globalAgent as unknown as { options: { ca?: Buffer } }; const prev = agent.options.ca; agent.options.ca = cert;
+    try {
+      // models.example.org does not resolve: only the pinned address can answer, and the certificate must match the name.
+      const res = await p.pinnedFetch([{ address: '127.0.0.1', family: 4 }])(`https://models.example.org:${port}/x`, { method: 'POST', headers: {}, body: '{}', signal: AbortSignal.timeout(5000) });
+      assert.equal(res.status, 200); assert.deepEqual(await res.json(), { ok: true });
+      await assert.rejects(p.pinnedFetch([{ address: '127.0.0.1', family: 4 }])(`https://wrong-name.example.org:${port}/x`, { method: 'POST', headers: {}, body: '{}', signal: AbortSignal.timeout(5000) }), /altname|certificate|hostname/i);
+    } finally { agent.options.ca = prev; }
   });
 });
