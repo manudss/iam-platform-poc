@@ -129,6 +129,11 @@ def main():
    if command(['docker','exec',c['app'],'node','-e',"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],False).returncode==0:break
    time.sleep(2)
   else:raise RuntimeError('held app health timeout')
+  # The public activation GET may create its SQL schema on first access. Warm the
+  # complete real synthetic smoke before baseline, never ignore schema differences.
+  stage='synthetic-prebaseline-warm-smoke'
+  warm=subprocess.run(['docker','exec','-i',c['app'],'node','--input-type=module','-e',(binroot/'qualification-container.mjs').read_text(),'smoke'],input=json.dumps({**policy,'auth':json.loads(auth.read_text())}),capture_output=True,text=True,timeout=180)
+  if warm.returncode:raise RuntimeError('prebaseline synthetic smoke refused')
   # Establish cold baseline with same exact image and current synthetic PG/Bao.
   stage='qualification-before';docker('stop',c['app'])
   evidence=root/'evidence'
