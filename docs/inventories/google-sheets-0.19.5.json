@@ -1,0 +1,864 @@
+{
+  "version": "0.19.5",
+  "actions": [
+    {
+      "key": "insert_row",
+      "name": "Add Row",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "first_row_headers",
+        "as_string",
+        "values"
+      ]
+    },
+    {
+      "key": "insert-row-at-top",
+      "name": "Add Row at Top",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "first_row_headers",
+        "as_string",
+        "insertAfterRow",
+        "values"
+      ]
+    },
+    {
+      "key": "google-sheets-insert-multiple-rows",
+      "name": "Add Multiple Rows",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "input_type",
+        "values",
+        "overwrite",
+        "check_for_duplicate",
+        "check_for_duplicate_column",
+        "as_string",
+        "headerRow"
+      ]
+    },
+    {
+      "key": "update_row",
+      "name": "Update Row",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "row_id",
+        "empty_fields_info",
+        "first_row_headers",
+        "values"
+      ]
+    },
+    {
+      "key": "update-multiple-rows",
+      "name": "Update Multiple Rows",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "empty_fields_info",
+        "values",
+        "as_string",
+        "headerRow"
+      ]
+    },
+    {
+      "key": "delete_row",
+      "name": "Delete Row",
+      "audience": "human",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "rowId"
+      ]
+    },
+    {
+      "key": "delete-multiple-rows",
+      "name": "Delete Multiple Rows",
+      "audience": "human",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "mode",
+        "startingRow",
+        "endingRow",
+        "rowNumbers"
+      ]
+    },
+    {
+      "key": "find_rows",
+      "name": "Find Rows",
+      "audience": "human",
+      "classification": "SEARCH",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "columnName",
+        "searchValue",
+        "matchCase",
+        "startingRow",
+        "numberOfRows",
+        "headerRow",
+        "useHeaderNames"
+      ]
+    },
+    {
+      "key": "find-or-create-row",
+      "name": "Find or Create Row",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "columnName",
+        "searchValue",
+        "matchCase",
+        "headerRow",
+        "useHeaderNames",
+        "first_row_headers",
+        "as_string",
+        "values"
+      ]
+    },
+    {
+      "key": "create-spreadsheet",
+      "name": "Create Spreadsheet",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "title",
+        "includeTeamDrives",
+        "folder"
+      ]
+    },
+    {
+      "key": "create-worksheet",
+      "name": "Create Worksheet",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId",
+        "title",
+        "headers"
+      ]
+    },
+    {
+      "key": "find-or-create-worksheet",
+      "name": "Find or Create Worksheet",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId",
+        "title",
+        "headers"
+      ]
+    },
+    {
+      "key": "clear_sheet",
+      "name": "Clear Sheet",
+      "audience": "human",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "is_first_row_headers",
+        "headerRow"
+      ]
+    },
+    {
+      "key": "clear-rows",
+      "name": "Clear Row(s)",
+      "audience": "human",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "startingRow",
+        "endingRow"
+      ]
+    },
+    {
+      "key": "delete-worksheet",
+      "name": "Delete Worksheet",
+      "audience": "human",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId",
+        "sheetId"
+      ]
+    },
+    {
+      "key": "rename-worksheet",
+      "name": "Rename Worksheet",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId",
+        "sheetId",
+        "newName"
+      ]
+    },
+    {
+      "key": "format-row",
+      "name": "Format Row(s)",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "startingRow",
+        "endingRow",
+        "bgColor",
+        "textColor",
+        "bold",
+        "italic",
+        "strikethrough"
+      ]
+    },
+    {
+      "key": "find_row_by_num",
+      "name": "Get Row by Number",
+      "audience": "human",
+      "classification": "READ",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "rowNumber",
+        "headerRow",
+        "useHeaderNames"
+      ]
+    },
+    {
+      "key": "get_next_rows",
+      "name": "Get Next Rows",
+      "audience": "human",
+      "classification": "READ",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "startRow",
+        "headerRow",
+        "useHeaderNames",
+        "markdown",
+        "memKey",
+        "groupSize"
+      ]
+    },
+    {
+      "key": "get-many-rows",
+      "name": "Get All Rows",
+      "audience": "human",
+      "classification": "SEARCH",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "first_row_headers"
+      ]
+    },
+    {
+      "key": "read-data-range",
+      "name": "Read Data Range",
+      "audience": "human",
+      "classification": "READ",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "range",
+        "majorDimension",
+        "valueRenderOption"
+      ]
+    },
+    {
+      "key": "find_spreadsheets",
+      "name": "Find Spreadsheet(s)",
+      "audience": "human",
+      "classification": "SEARCH",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheet_name",
+        "exact_match"
+      ]
+    },
+    {
+      "key": "find-worksheet",
+      "name": "Find Worksheet(s)",
+      "audience": "human",
+      "classification": "SEARCH",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId",
+        "title",
+        "exact_match"
+      ]
+    },
+    {
+      "key": "copy-worksheet",
+      "name": "Copy Worksheet",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId",
+        "sheetId",
+        "desinationSpeadsheetId"
+      ]
+    },
+    {
+      "key": "create-column",
+      "name": "Create Column",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "columnName",
+        "columnIndex"
+      ]
+    },
+    {
+      "key": "export_sheet",
+      "name": "Export Worksheet",
+      "audience": "human",
+      "classification": "READ",
+      "props": [
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "format",
+        "returnAsText"
+      ]
+    },
+    {
+      "key": "sheets_add_column",
+      "name": "Add Column",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "column_name",
+        "column_index"
+      ]
+    },
+    {
+      "key": "sheets_add_multiple_rows",
+      "name": "Add Multiple Rows",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "input_type",
+        "values",
+        "overwrite",
+        "check_for_duplicate",
+        "duplicate_column",
+        "as_string",
+        "header_row"
+      ]
+    },
+    {
+      "key": "sheets_add_row_at_top",
+      "name": "Add Row at Top",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "first_row_headers",
+        "as_string",
+        "insert_after_row",
+        "values"
+      ]
+    },
+    {
+      "key": "sheets_add_row",
+      "name": "Add Row",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "first_row_headers",
+        "as_string",
+        "values"
+      ]
+    },
+    {
+      "key": "sheets_add_worksheet",
+      "name": "Add Worksheet",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "title",
+        "headers"
+      ]
+    },
+    {
+      "key": "sheets_append_dimension",
+      "name": "Append Rows/Columns",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "dimension",
+        "length"
+      ]
+    },
+    {
+      "key": "sheets_append_values",
+      "name": "Append Values (Raw)",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "worksheet_title",
+        "range",
+        "values",
+        "value_input_option"
+      ]
+    },
+    {
+      "key": "sheets_auto_resize_dimensions",
+      "name": "Auto-Resize Columns/Rows",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "dimension",
+        "start_index",
+        "end_index"
+      ]
+    },
+    {
+      "key": "sheets_clear_values",
+      "name": "Clear Cell Range",
+      "audience": "ai",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "starting_row",
+        "ending_row"
+      ]
+    },
+    {
+      "key": "sheets_copy_worksheet",
+      "name": "Copy Worksheet",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "destination_spreadsheet_id"
+      ]
+    },
+    {
+      "key": "sheets_create_spreadsheet",
+      "name": "Create Spreadsheet",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_title",
+        "parent_folder_id"
+      ]
+    },
+    {
+      "key": "sheets_delete_dimension",
+      "name": "Delete Rows/Columns",
+      "audience": "ai",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "dimension",
+        "start_index",
+        "end_index"
+      ]
+    },
+    {
+      "key": "sheets_delete_multiple_rows",
+      "name": "Delete Multiple Rows",
+      "audience": "ai",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "mode",
+        "starting_row",
+        "ending_row",
+        "row_numbers"
+      ]
+    },
+    {
+      "key": "sheets_delete_row",
+      "name": "Delete Row",
+      "audience": "ai",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "row_id"
+      ]
+    },
+    {
+      "key": "sheets_delete_worksheet",
+      "name": "Delete Worksheet",
+      "audience": "ai",
+      "classification": "DESTRUCTIVE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id"
+      ]
+    },
+    {
+      "key": "sheets_export_worksheet",
+      "name": "Export Worksheet (CSV/TSV)",
+      "audience": "ai",
+      "classification": "READ",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "format",
+        "return_as_text"
+      ]
+    },
+    {
+      "key": "sheets_find_or_create_row",
+      "name": "Find or Create Row",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "column_name",
+        "search_value",
+        "match_case",
+        "header_row",
+        "use_header_names",
+        "first_row_headers",
+        "as_string",
+        "values"
+      ]
+    },
+    {
+      "key": "sheets_find_or_create_worksheet",
+      "name": "Find or Create Worksheet",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "title",
+        "headers"
+      ]
+    },
+    {
+      "key": "sheets_find_rows",
+      "name": "Find Rows",
+      "audience": "ai",
+      "classification": "SEARCH",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "column_name",
+        "search_value",
+        "match_case",
+        "starting_row",
+        "number_of_rows",
+        "header_row",
+        "use_header_names"
+      ]
+    },
+    {
+      "key": "sheets_find_worksheet",
+      "name": "Find Worksheets",
+      "audience": "ai",
+      "classification": "SEARCH",
+      "props": [
+        "spreadsheet_id",
+        "title",
+        "exact_match"
+      ]
+    },
+    {
+      "key": "sheets_format_cells",
+      "name": "Format Cells",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "starting_row",
+        "ending_row",
+        "bg_color",
+        "text_color",
+        "bold",
+        "italic",
+        "strikethrough"
+      ]
+    },
+    {
+      "key": "sheets_get_all_rows",
+      "name": "Get All Rows",
+      "audience": "ai",
+      "classification": "SEARCH",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "first_row_headers"
+      ]
+    },
+    {
+      "key": "sheets_get_next_rows",
+      "name": "Get Next Rows (Paginated)",
+      "audience": "ai",
+      "classification": "READ",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "start_row",
+        "header_row",
+        "use_header_names",
+        "mem_key",
+        "group_size"
+      ]
+    },
+    {
+      "key": "sheets_get_row",
+      "name": "Get Row by Number",
+      "audience": "ai",
+      "classification": "READ",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "row_number",
+        "header_row",
+        "use_header_names"
+      ]
+    },
+    {
+      "key": "sheets_get_spreadsheet",
+      "name": "Get Spreadsheet Info",
+      "audience": "ai",
+      "classification": "READ",
+      "props": [
+        "spreadsheet_id",
+        "include_grid_data"
+      ]
+    },
+    {
+      "key": "sheets_get_values",
+      "name": "Read Cell Range",
+      "audience": "ai",
+      "classification": "READ",
+      "props": [
+        "spreadsheet_id",
+        "worksheet_title",
+        "range",
+        "major_dimension",
+        "value_render_option"
+      ]
+    },
+    {
+      "key": "sheets_insert_dimension",
+      "name": "Insert Rows/Columns",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "dimension",
+        "start_index",
+        "end_index",
+        "inherit_from_before"
+      ]
+    },
+    {
+      "key": "sheets_rename_worksheet",
+      "name": "Rename Worksheet",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "new_name"
+      ]
+    },
+    {
+      "key": "sheets_search_spreadsheets",
+      "name": "Find Spreadsheets",
+      "audience": "ai",
+      "classification": "SEARCH",
+      "props": [
+        "spreadsheet_name",
+        "exact_match"
+      ]
+    },
+    {
+      "key": "sheets_update_dimension_properties",
+      "name": "Resize / Hide Rows or Columns",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "dimension",
+        "start_index",
+        "end_index",
+        "pixel_size",
+        "hidden"
+      ]
+    },
+    {
+      "key": "sheets_update_multiple_rows",
+      "name": "Update Multiple Rows",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "header_row",
+        "values",
+        "as_string"
+      ]
+    },
+    {
+      "key": "sheets_update_row",
+      "name": "Update Row",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "row_id",
+        "first_row_headers",
+        "values"
+      ]
+    },
+    {
+      "key": "sheets_update_sheet_properties",
+      "name": "Update Worksheet Properties",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "sheet_id",
+        "frozen_row_count",
+        "frozen_column_count",
+        "tab_color",
+        "hidden"
+      ]
+    },
+    {
+      "key": "sheets_update_values",
+      "name": "Write Cell Range",
+      "audience": "ai",
+      "classification": "WRITE",
+      "props": [
+        "spreadsheet_id",
+        "worksheet_title",
+        "range",
+        "values",
+        "value_input_option",
+        "major_dimension"
+      ]
+    },
+    {
+      "key": "custom_api_call",
+      "name": "Custom API Call",
+      "audience": "human",
+      "classification": "WRITE",
+      "props": [
+        "url",
+        "method",
+        "headers",
+        "queryParams",
+        "body_type",
+        "body",
+        "response_is_binary",
+        "failsafe",
+        "timeout",
+        "followRedirects"
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "key": "google-sheets-new-or-updated-row",
+      "name": "New or Updated Row",
+      "type": "WEBHOOK",
+      "props": [
+        "info",
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives",
+        "trigger_column"
+      ]
+    },
+    {
+      "key": "googlesheets_new_row_added",
+      "name": "New Row Added",
+      "type": "WEBHOOK",
+      "props": [
+        "info",
+        "spreadsheetId",
+        "sheetId",
+        "includeTeamDrives"
+      ]
+    },
+    {
+      "key": "new-spreadsheet",
+      "name": "New Spreadsheet",
+      "type": "POLLING",
+      "props": [
+        "includeTeamDrives"
+      ]
+    },
+    {
+      "key": "new-worksheet",
+      "name": "New Worksheet",
+      "type": "POLLING",
+      "props": [
+        "includeTeamDrives",
+        "spreadsheetId"
+      ]
+    }
+  ]
+}

@@ -1,8 +1,11 @@
 import { WorkflowsEnabledGuard } from './workflows-enabled.guard.js';
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { WorkflowsService } from './workflows.service.js';
+import { WorkflowStore } from './store.js';
+import {NotFoundException} from '@nestjs/common';
+import type {Response} from 'express';
 import { WF_EVENTS } from './model.js';
 
 interface Req_ { user?: { sub?: string } }
@@ -14,7 +17,14 @@ interface Req_ { user?: { sub?: string } }
 @UseGuards(AuthGuard, AdminGuard, WorkflowsEnabledGuard)
 @Controller('tenants/:tenant')
 export class WorkflowsController {
-  constructor(private readonly wf: WorkflowsService) {}
+  constructor(private readonly wf: WorkflowsService,private readonly store:WorkflowStore) {}
+
+  @Get('workflow-runs/:runId/connector-files/:id')
+  async connectorFile(@Param('tenant') tenant:string,@Param('runId') run:string,@Param('id') id:string,@Res() res:Response){
+    const r=await this.store.getRunById(run);if(!r||r.tenant!==tenant)throw new NotFoundException();
+    const file=await this.store.pieceGet(tenant,'file:'+run,id) as {name:string,data:string,expiresAt?:number}|null;if(!file||(file.expiresAt!==undefined&&file.expiresAt<Date.now()))throw new NotFoundException();
+    res.setHeader('Content-Type','application/octet-stream');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);res.setHeader('Cache-Control','private, no-store');res.send(Buffer.from(file.data,'base64'));
+  }
 
   @Get('workflow-blocks') blocks(@Param('tenant') t: string) { return this.wf.catalogue(t); }
   @Get('workflows-events') events() { return { events: Object.entries(WF_EVENTS).map(([type, e]) => ({ type, ...e })) }; }

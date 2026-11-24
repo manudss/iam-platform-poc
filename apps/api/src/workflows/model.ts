@@ -28,6 +28,7 @@ export type StepCategory = 'simulated' | 'computed' | 'real';
 /** A workflow block contributed by a plugin on the `workflows.blocks` surface (its manifest entrypoints.blocks). */
 export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
 export interface WfBlockCtx {
+  pieceRuntime?: Record<string,unknown>;
   tenant: string; config: Record<string, unknown>; settings: Record<string, unknown>; dryRun: boolean;
   log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
   /** Test run: blocks with an immediate effect only log what they would do. */
@@ -64,7 +65,7 @@ export interface WfBlock {
   pluginId?: string;
 }
 export interface WfTriggerEvent {
-  label: string; payload: string[]; configFields?: WfBlockField[];
+  label: string; payload: string[]; configFields?: WfBlockField[]; activepiecesTrigger?: string;
   poll?: (config: Record<string, unknown>, deps: { settings: Record<string, unknown>; log?: (m: string) => void }) => Promise<{ rowNumber: number; values: Record<string, unknown> }[]>;
 }
 
@@ -74,6 +75,7 @@ interface WfModelModule {
   LOGIC_FIELDS: Record<string, WfBlockField[]>;
   placeholderKeys: (value: unknown) => string[];
   stepPlaceholderRefs: (value: unknown) => { node: string; key: string }[];
+  eventConfigForDisplay: (node: WfNode) => WfNode['config'];
   substituteStepOutputs: (node: WfNode, outputs: Record<string, Record<string, unknown>>) => WfNode;
   validateStepPlaceholders: (graph: WfGraph, order: string[]) => void;
   validateTrigger: (input: unknown) => WfTrigger | null;
@@ -107,6 +109,7 @@ export const STEP_TYPES = plugin.STEP_TYPES;
 export const WF_EVENTS = plugin.WF_EVENTS;
 export const placeholderKeys = plugin.placeholderKeys;
 export const stepPlaceholderRefs = plugin.stepPlaceholderRefs;
+export const eventConfigForDisplay = plugin.eventConfigForDisplay;
 export const substituteStepOutputs = plugin.substituteStepOutputs;
 export const validateStepPlaceholders = plugin.validateStepPlaceholders;
 export const validateTrigger = plugin.validateTrigger;

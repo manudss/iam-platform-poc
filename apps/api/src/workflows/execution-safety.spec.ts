@@ -225,3 +225,29 @@ describe('Jira writes and Sheets column creation stop on uncertain external effe
     } finally { stub.mock.restore(); }
   });
 });
+
+
+describe('generic checked sheet update effect boundary (engine with block double)',()=>{
+  const cfg={source:'google',spreadsheetId:'fictional',sheetId:0,checked:true,matchColumn1:'record',matchValue1:'fictional',column:'status',value:'OK',executionMode:'real',connectionId:'conn-test',realConfirmed:true};
+  it('a readonly refusal leaves no uncertain marker; an uncertain write blocks restart and error continuation',async()=>{
+    const block=externalBlock('google-sheets-update')!;let calls=0;
+    const stub=mock.method(block,'run',async(ctx:any)=>{calls++;if(calls===1)throw Error('precheck refused');await ctx.markEffectPending({kind:'sheet-email-initialization'});throw Error('lost write response');});
+    try {
+      const read=await settle(makeHarness({nodes:[node('a',block.type,cfg)],edges:[]}));assert.equal(read.row.status,'failed');assert.notEqual(st(read,'a').error,'EXTERNAL_EFFECT_REVIEW_REQUIRED');
+      const write=await settle(makeHarness({nodes:[node('a',block.type,cfg),node('b','notify',{recipient:'x',message:'never continue'})],edges:[{from:'a',to:'b',label:'error'}]}));
+      assert.equal(st(write,'a').error,'EXTERNAL_EFFECT_REVIEW_REQUIRED');assert.equal(st(write,'b').status,'skipped');write.row.status='queued';await settle(write);assert.equal(calls,2);
+    }finally{stub.mock.restore();}
+  });
+  it('only updated true can complete, including the already-initialized no-write path',async()=>{
+    const block=externalBlock('google-sheets-update')!;
+    for(const updated of [false,true]){
+      const stub=mock.method(block,'run',async(ctx:any)=>{if(!updated)await ctx.markEffectPending({kind:'sheet-email-initialization'});return {value:cfg.value,updated,written:false};});
+      try{const h=await settle(makeHarness({nodes:[node('a',block.type,cfg)],edges:[]}));assert.equal(h.row.status,updated?'completed':'failed');assert.equal(st(h,'a').error,updated?null:'EXTERNAL_EFFECT_REVIEW_REQUIRED');}finally{stub.mock.restore();}
+    }
+  });
+  it('test runs cannot initialize a source row even for a confirmed real graph',async()=>{
+    const block=externalBlock('google-sheets-update')!;let called=false;
+    const stub=mock.method(block,'run',async(ctx:any)=>{called=true;assert.equal(ctx.dryRun,true);return {updated:false,written:false};});
+    try{const h=await settle(makeHarness({nodes:[node('a',block.type,cfg)],edges:[]},{test:true}));assert.equal(h.row.status,'completed');assert.equal(h.reads,0);assert.ok(called);}finally{stub.mock.restore();}
+  });
+});

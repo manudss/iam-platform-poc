@@ -6,7 +6,7 @@ import { ModuleRef } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { MailTemplatesService } from '../mail/mail-templates.js';
 import { WorkflowTasksService } from './tasks.js';
-import { blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { eventConfigForDisplay, blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { isFrozenApprovedReset, RESET_FROZEN } from './reset-freeze.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -233,7 +233,7 @@ export class WorkflowsService {
       const simulated = STEP_TYPES[n.type].simulated;
       const category = stepCategoryOf(n.type);
       return {
-        step: n.id, type: n.type, name: n.name, simulated, category, config: n.config,
+        step: n.id, type: n.type, name: n.name, simulated, category, config: eventConfigForDisplay(n),
         would: externalBlockProvider(n.type)
           ? category === 'computed'
             ? `a computed block from the "${externalBlockProvider(n.type)}" plugin (really runs, no external effect) - NOT executed in this test`
