@@ -104,16 +104,17 @@ export function stepPlaceholderRefs(value) {
 export function substituteStepOutputs(node, outputs) {
     const forbidden=new Set(['__proto__','prototype','constructor']);
     const resolve=(id,path)=>{let value=outputs[id];for(const key of path.split('.')){if(forbidden.has(key)||value===null||value===undefined||!Object.prototype.hasOwnProperty.call(Object(value),key))throw new BadRequestException(`step "${node.id}": upstream path cannot resolve: no key "${path}" in the output`);value=value[key];}if(value===undefined)throw new BadRequestException(`step "${node.id}": upstream value missing`);return value;};
-    const visit=(value,typed=false)=>{
-      if(Array.isArray(value))return value.map(x=>visit(x,true));
-      if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>{if(forbidden.has(k))throw new BadRequestException('unsafe config property');return[k,visit(v,true)];}));
+    const decode=(value,depth)=>node.eventInterpolationEscaped&&(depth===0||node.type?.startsWith('google-sheets-ap-'))?value.replace(/\uE000([01])/g,(_m,k)=>k==='0'?'\uE000':'{{'):value;
+    const visit=(value,typed=false,depth=0)=>{
+      if(Array.isArray(value))return value.map(x=>visit(x,true,depth+1));
+      if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>{if(forbidden.has(k))throw new BadRequestException('unsafe config property');return[k,visit(v,true,depth+1)];}));
       if(typeof value!=='string')return value;
       // Valid JSON containers are parsed before interpolation, so quotes and native
       // object/array/boolean/number values cannot corrupt or inject JSON syntax.
       if(!typed&&node.type?.startsWith('google-sheets-ap-')&&value.includes('{{steps.')&&!value.trim().startsWith('{{')&&/^[\[{]/.test(value.trim())){try{const parsed=JSON.parse(value);return JSON.stringify(visit(parsed,true));}catch(e){if(e instanceof BadRequestException)throw e;throw new BadRequestException('Native JSON placeholders require valid quoted JSON values');}}
       const match=[...value.matchAll(new RegExp(STEP_PLACEHOLDER.source,'g'))];
       if(typed&&match.length===1&&match[0][0]===value)return resolve(match[0][1],match[0][2]);
-      return value.replace(new RegExp(STEP_PLACEHOLDER.source,'g'),(_m,id,path)=>{const val=resolve(id,path);return typeof val==='object'?JSON.stringify(val):String(val);}).replaceAll('\uE000','{{');
+      let end=0,result='';for(const m of match){result+=decode(value.slice(end,m.index),depth);const val=resolve(m[1],m[2]);result+=typeof val==='object'?JSON.stringify(val):String(val);end=m.index+m[0].length;}return result+decode(value.slice(end),depth);
     };
     return {...node,config:Object.fromEntries(Object.entries(node.config).map(([k,v])=>[k,visit(v)]))};
 }
@@ -323,18 +324,20 @@ export const TRIGGER_KEYS = ['event', 'match', 'config', 'cron'];
 /** Resolves {{event.<key>}} placeholders in every config string of the graph. Unknown keys refuse the run start. */
 export function substituteEventPayload(graph, payload) {
     const nodes=graph.nodes.map(n=>{
+      const protect=value=>typeof value==='string'?value.replaceAll('\uE000','\uE0000').replaceAll('{{','\uE0001'):Array.isArray(value)?value.map(protect):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,protect(v)])):value;
+      const escapeLiteral=value=>typeof value==='string'?value.replaceAll('\uE000','\uE0000'):Array.isArray(value)?value.map(escapeLiteral):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,escapeLiteral(v)])):value;
       const visit=(value,typed=false)=>{
        if(Array.isArray(value))return n.type?.startsWith('google-sheets-ap-')?value.map(x=>visit(x,true)):value;
        if(value&&typeof value==='object'&&!n.type?.startsWith('google-sheets-ap-'))return value;
        if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,visit(v,true)]));
        if(typeof value!=='string')return value;
        if(!typed&&n.type?.startsWith('google-sheets-ap-')&&value.includes('{{event.')&&!value.trim().startsWith('{{')&&/^[\[{]/.test(value.trim())){try{return JSON.stringify(visit(JSON.parse(value),true));}catch(e){if(e instanceof BadRequestException)throw e;throw new BadRequestException('Native JSON placeholders require valid quoted JSON values');}}
-       const get=key=>{if(!Object.prototype.hasOwnProperty.call(payload,key)||payload[key]===undefined)throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);const value=payload[key];if(typeof value==='string'){if(value.includes('\uE000'))throw new BadRequestException('Reserved placeholder escape');return value.replaceAll('{{','\uE000');}return value;};
+       const get=key=>{if(!Object.prototype.hasOwnProperty.call(payload,key)||payload[key]===undefined)throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);return protect(payload[key]);};
        const matches=[...value.matchAll(new RegExp(PLACEHOLDER.source,'g'))];
        if(typed&&matches.length===1&&matches[0][0]===value)return get(matches[0][1]);
        return value.replace(new RegExp(PLACEHOLDER.source,'g'),(_m,key)=>String(get(key)));
       };
-      return {...n,config:Object.fromEntries(Object.entries(n.config).map(([k,v])=>[k,visit(v)]))};
+      return {...n,eventInterpolationEscaped:true,config:Object.fromEntries(Object.entries(n.config).map(([k,v])=>[k,visit(typeof v==='string'||n.type?.startsWith('google-sheets-ap-')?escapeLiteral(v):v)]))};
     });
     return {nodes,edges:graph.edges.map(e=>({...e}))};
 }

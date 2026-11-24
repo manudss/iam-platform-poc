@@ -101,12 +101,12 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   const watch=await this.kv(tenant,id).get(state.key) as any;
   if(!watch||watch.id!==headers['x-goog-channel-id']||watch.resourceId!==headers['x-goog-resource-id'])throw Error('Unknown notification channel');
   const safeHeaders=Object.fromEntries(['x-goog-channel-id','x-goog-resource-id','x-goog-resource-state','x-goog-changed','x-goog-message-number'].map(k=>[k,String(headers[k]??'').slice(0,500)]));
-  // Durable individual inbox entry before ACK. A busy worker never drops a valid
+  // Durable coalesced inbox slot before ACK. A busy worker never drops a valid
   // notification. The scheduler refetches provider state under the same mutex.
   const message=String(headers['x-goog-message-number']??'');if(!/^[0-9]{1,30}$/.test(message))throw Error('Invalid notification number');
   // One deterministic coalescing slot per reviewed subscription/channel. Each
   // notification triggers a full provider refetch, so no assumed message order.
-  await this.store.pieceEnqueue(tenant,this.scope(id),{fingerprint,headers:safeHeaders});
+  try{await this.store.pieceEnqueue(tenant,this.scope(id),{fingerprint,headers:safeHeaders});}catch(e){await this.kv(tenant,id).put('lyam:delivery-status',{status:'review',reason:'Inbox storage failed; notification not accepted'});throw e;}
   return {received:true,queued:true};
  });}
 }

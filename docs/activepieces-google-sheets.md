@@ -81,18 +81,30 @@ workflow activation or Google changes performed by the development task.
 
 Migration0003 creates workflow_piece_state in the operational meta DB before
 native runtime writes. Runtime writes no longer create this table lazily.
-Existing migration0001/0002 files/checksums are unchanged. Rollback must retain
-this additive operational table, exports and uncertain-effect state, never drop
-or reset it. A prior binary ignores the extra table, but rolling back while a
-new worker owns a mutex/subscription is unsafe: stop/reconcile the worker first.
-Qualification must explicitly review this intended additive Dolt metadata
-change, not accept a generic preservation exception.
+Existing migration0001/0002 files/checksums are unchanged. An old image refuses
+an advanced migration journal: image-only rollback is NOT supported. Before
+migration the operator must take and verify a complete coherent backup of the
+business DB, operational meta DB including the journal, exports and operational
+state. Qualification must explicitly review the additive Dolt metadata delta;
+no deployment is allowed without that qualification and backup.
+
+If boot stops with migration0003 pending, stop all workers and provider callbacks,
+inspect the journal and table/primary key, and preserve uncertain-effect state.
+The operator must either complete and verify this same migration under the new
+image or restore the complete pre-migration backup and matching old image.
+Never delete just the journal entry or table to force boot. A full restoration
+can rewind cursors/effects, so reconcile provider effects/subscriptions before
+reactivation. Never clear a mutex or auto-resume the queue as rollback cleanup.
 
 Verified webhooks are durably coalesced to one notification slot per definition
 before acknowledgement; the slot carries channel/resource/message-number and
 allowed change headers, no body/token. At most1000 slots per tenant, guarded by
 a shared per-tenant quota-row write in the same Dolt transaction. Conflicts or
-quota exhaustion fail rather than acknowledge lost work. Under its mutex the
+quota exhaustion fail rather than acknowledge acceptance. At quota a new
+notification is NOT durably stored and may be lost if Google does not retry.
+A persistent per-definition review status records rejection when storage is available. An HTTP failure is not a delivery guarantee. Operators must monitor callback
+errors, drain/reconcile retained slots, then explicitly refetch affected sheets;
+do not assume replay of intermediate changes. Under its mutex the
 scheduler performs at most one full native refetch per pass and deletes only
 the exact slot value read before collection. A replacement during collection
 survives. Native cursors and pending event envelope preserve delivery recovery.
@@ -111,3 +123,8 @@ and uncertain subscriptions have no automatic expiry: an operator must reconcile
 them, never purge a lock as retention housekeeping. Account scope is an explicit
 user-intent/configuration gate, not a narrower Google OAuth permission boundary.
 The service account's actual grants remain authoritative.
+
+Proof scope: the crash test injects an exception between collection and inbox
+delete using doubles. It is not an operating-system process kill or live Google
+crash/restart test. Native event recursion is limited to Sheets configs; other
+blocks retain top-level-only event substitution (nested objects are unchanged).
