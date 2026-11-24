@@ -11,7 +11,11 @@ export async function inspectProduction({key=process.env.RENDER_API_KEY,fetcher=
  const rows=await read('/services?name=iam-poc&limit=20');
  const matches=rows.map(x=>x.service??x).filter(x=>x.name==='iam-poc');
  if(matches.length!==1)throw Error('UNKNOWN: expected one exact service');
- const s=matches[0],details=s.serviceDetails??{},image=s.image?.imagePath??details.image?.imagePath??null;
+ const listing=matches[0];
+ const response=await read('/services/'+encodeURIComponent(listing.id));
+ const s=response.service??response;
+ if(s.id!==listing.id||s.name!=='iam-poc')throw Error('UNKNOWN: service detail identity mismatch');
+ const details=s.serviceDetails??{},image=s.image?.imagePath??details.image?.imagePath??null;
  const deployments=await read('/services/'+encodeURIComponent(s.id)+'/deploys?limit=20');
  const active=deployments.map(x=>x.deploy??x).filter(x=>!['live','build_failed','update_failed','canceled','deactivated'].includes(x.status)).map(x=>({status:x.status}));
  // Only these explicit known parameters leave the process. Never stringify the service itself.

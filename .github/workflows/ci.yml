@@ -32,6 +32,7 @@ jobs:
       dev_stack_check_required: ${{ steps.plan.outputs.dev_stack_check_required }}
       dev_ui_browser_check_required: ${{ steps.plan.outputs.dev_ui_browser_check_required }}
       automation_hold_required: ${{ steps.plan.outputs.automation_hold_required }}
+      render_state_required: ${{ steps.plan.outputs.render_state_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,7 +200,8 @@ jobs:
           if-no-files-found: ignore
   render_state:
     name: Read-only Render recovery state
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/closed-recovery-qualification' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: control_policy
+    if: needs.control_policy.outputs.render_state_required == 'true' && github.event_name == 'pull_request' && github.head_ref == 'fix/closed-recovery-qualification' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions: { contents: read }
     steps:
@@ -209,6 +211,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Read current production service metadata only
+        if: needs.control_policy.outputs.render_state_required == 'true'
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: node scripts/render-prod-state.mjs

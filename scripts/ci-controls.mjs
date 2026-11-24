@@ -29,6 +29,10 @@ export const CONTROLS = Object.freeze([Object.freeze({
   id: 'automation_hold',
   path: 'scripts/automation-hold-container-check.mjs',
   introducedBy: '4fdd6727518563904c37403168b5116fb86104e9',
+}), Object.freeze({
+  id: 'render_state',
+  path: 'scripts/render-prod-state.mjs',
+  introducedBy: '9782e49dd23e27407204e5acd163348c8ed39ecf',
 })]);
 const SHA = /^[a-f0-9]{40}$/;
 function git(repo, args) {
