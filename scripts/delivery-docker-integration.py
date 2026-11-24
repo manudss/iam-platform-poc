@@ -219,25 +219,29 @@ raise SystemExit(r.returncode)
             # Preserve production-style barriers as refusal scenarios. Never strip
             # a pause/resume fence from an active queue to make deployment proceed.
             qmodule=load_module(bindir/'ordered-queue.py','guarded_candidate_queue')
-            for version in [2,3]:
-                guarded=root/('guarded-queue-'+str(version)+'.json')
-                guarded_state={'format':version,'history':state['history'],
-                               'recovery_fence':base,'resume_required':True,
-                               'recoveries':[{'target':{'sha':base}}],
-                               'syntheticFixture':True,'mode':'ui-open-automation-held'}
-                guarded.write_text(json.dumps(guarded_state))
-                original=guarded.read_bytes()
-                attempted=[]
-                try:qmodule.deploy(guarded,plan,str(wrapper),runner=lambda *a,**k:attempted.append(True))
-                except ValueError:pass
-                else:raise RuntimeError('guarded-queue-was-not-refused')
-                if attempted or guarded.read_bytes()!=original:raise RuntimeError('guarded-queue-mutated')
+            guarded=root/'guarded-queue.json'
+            guarded_state={'format':2,'history':state['history'],
+                           'recovery_fence':base,'resume_required':True,
+                           'recoveries':[{'target':{'sha':base}}]}
+            guarded.write_text(json.dumps(guarded_state))
+            if qmodule.load(guarded)!=guarded_state:raise RuntimeError('guard-fixture-invalid')
+            original=guarded.read_bytes();attempted=[];refusal=None
+            try:qmodule.deploy(guarded,plan,str(wrapper),runner=lambda *a,**k:attempted.append(True))
+            except ValueError as error:refusal=str(error)
+            if refusal!='prior deployment unresolved, operator review required':raise RuntimeError('wrong-queue-guard-refusal')
+            if attempted or guarded.read_bytes()!=original:raise RuntimeError('guarded-queue-mutated')
+            unsupported=root/'unsupported-queue.json'
+            unsupported.write_text(json.dumps({**guarded_state,'format':3}))
+            try:qmodule.load(unsupported)
+            except ValueError as error:
+                if str(error)!='uninitialized or corrupt deployment history':raise
+            else:raise RuntimeError('format3-support-needs-explicit-scenario')
             pause=root/'PAUSE';pause.write_text('synthetic-guard\n')
             paused=run(['python3',str(bindir/'ordered-queue.py'),'drain','--state',str(queue),'--pause-file',str(pause),'--updater',str(wrapper)],False,input=json.dumps(plan))
-            if paused.returncode==0 or json.loads(queue.read_text())!=state:raise RuntimeError('paused-queue-was-not-refused')
+            if paused.returncode==0 or 'deployment paused; no pending entry written' not in paused.stderr or json.loads(queue.read_text())!=state:raise RuntimeError('paused-queue-was-not-refused')
             pause.unlink() # Fixture-owned pause scenario finished; normal scenario has separate state.
             result['checks']['guardedQueueRefusal']=True
-            result['guardedQueueCoverage']={'format2ResumeRequiredRefused':True,'format3UnrecognizedOrGuardedRefused':True,'pauseRefused':True,'productionStateNotReplayed':True}
+            result['guardedQueueCoverage']={'format2ResumeRequiredRefusal':refusal,'format3Status':'unsupported-format-rejected-not-resume-proof','pauseExit':paused.returncode,'queueUnchanged':json.loads(queue.read_text())==state,'productionStateNotReplayed':True}
             q = run(['python3', str(bindir / 'ordered-queue.py'), 'drain', '--state', str(queue),
                      '--pause-file', str(root / 'PAUSE'), '--updater', str(wrapper)], False, input=json.dumps(plan))
             result['queueExit'] = q.returncode

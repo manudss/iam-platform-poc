@@ -64,6 +64,11 @@ def main():
     # Validate uploaded evidence bytes, not merely SHA-shaped strings in a receipt.
     for path in sorted(root.rglob('delivery-receipt.json')):
         record=json.loads(path.read_text())
+        execution=path.parent/'execution-evidence.json'
+        if execution.is_file():
+            measured=json.loads(execution.read_text())
+            if any(record.get(key)!=measured.get(key) for key in ['format','scenario','passed','sha','digest','checks','cleanup']):
+                result['errors'].append('receipt-execution-evidence-mismatch')
         for name, expected in record.get('evidence', {}).items():
             item=path.parent/name
             if Path(name).name!=name or item.is_symlink() or not item.is_file() or hashlib.sha256(item.read_bytes()).hexdigest()!=expected:

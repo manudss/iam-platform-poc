@@ -1,10 +1,12 @@
 # Candidate delivery contract
 
 This work is not ready to merge until the real jobs and independent review pass.
-The stable aggregate check is `Delivery contract`, in Demo image (GHCR).
-On pull_request, the existing image build uses GitHub's merge candidate SHA
+The stable aggregate check is `Delivery contract`, in Candidate delivery.
+On pull_request, a dedicated delivery image build uses GitHub's merge candidate SHA
 (the PR merged with its current base), not the isolated head. It produces one
-exact candidate digest. Both scenarios
+exact candidate digest. The ordinary preview-head image workflow remains
+unchanged; this contract never reassigns its head-SHA tags or moving PR tags.
+Both scenarios
 consume that same digest, with the scripts checked out at its exact source SHA.
 No production account, volume, host or provider secret is used.
 
@@ -56,3 +58,15 @@ is changed. Render quotas are unrelated.
 Branch protection is a separate action after check registration and validation.
 This change never merges a PR, publishes latest, deploys production, unpauses
 updates, or changes production data.
+
+The internal Docker network provides a test-service egress boundary. It is not
+proof that a candidate's own firewall would block egress on an ordinary network.
+The separate helper policy fixture retains its explicit probe assertions; the
+internal-network delivery scenarios cannot establish that distinction alone.
+Host-to-published-port TLS must pass in the actual runner, not be assumed.
+Queue and backup contents remain private; their hashes in privateEvidenceHashes
+are audit fingerprints, not independently downloaded evidence verification.
+The aggregate rehashes the uploaded execution summary and script inventory and
+requires receipt/summary fields to match. This is an anti-omission contract,
+not protection against a malicious PR rewriting both tests and tested code.
+Review and protected checks are still required.
