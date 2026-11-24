@@ -33,12 +33,63 @@ async function bao(){
 function dolt(){
  const dir=p.running?'/data/dolt':mkdtempSync('/tmp/qualification-')+'/dolt';
  if(!p.running)cpSync('/data/dolt',dir,{recursive:true,errorOnExist:true});
- const query=(db,sql)=>{const r=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));if(!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
+ const query=(db,sql)=>{const r0=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));const r=r0&&typeof r0==='object'&&!Array.isArray(r0)&&Object.keys(r0).length===0?{rows:[]}:r0;   // dolt prints {} for a strictly empty result (compat fix shared with the producer)
+ if(!r||!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
  const dbs=query('','SHOW DATABASES').map(r=>Object.values(r)[0]).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
  if(!dbs.includes('iam'))throw Error('business database absent');
- return dbs.flatMap(db=>query(db,'SELECT name, hash FROM dolt_branches ORDER BY name').map(b=>{
-  const rows=query(db+'/'+b.name,"SELECT DOLT_HASHOF_DB('WORKING') AS root");if(!rows[0]?.root)throw Error('Dolt working root unknown');return {database:db,branch:b.name,head:b.hash,root:rows[0].root};
- }));
+ // Per-table evidence, hash/shape only (no row content): exact table inventory with kind, column shape, primary key order, row count and
+ // Dolt's own table hash (schema + data) at the WORKING root of every database/branch. Table names are identifiers, never data.
+ const ident=/^[A-Za-z0-9_]{1,64}$/;
+ const tableEvidence=ref=>query(ref,'SHOW FULL TABLES').map(r=>{const tk=Object.keys(r).filter(k=>/^Tables_in_/.test(k));if(tk.length!==1||typeof r.Table_type!=='string')throw Error('Dolt table listing shape unknown');   // JSON keys are alphabetical: never positional
+  const name=String(r[tk[0]]),kind=r.Table_type;
+  if(!ident.test(name))throw Error('Dolt table identifier unsafe');
+  // Defaults and comments can carry user-chosen text: only NULL-ness plus a sha256 are kept, never the raw value.
+  const columns=query(ref,'SHOW FULL COLUMNS FROM `'+name+'`').map(c=>({name:String(c.Field),type:String(c.Type),nullable:String(c.Null),key:String(c.Key),collation:c.Collation===null||c.Collation===undefined?null:String(c.Collation),defaultIsNull:c.Default===null||c.Default===undefined,defaultHash:hash(JSON.stringify(c.Default===null||c.Default===undefined?{k:'null'}:{k:'value',type:String(c.Type),v:String(c.Default)})),extra:String(c.Extra||''),commentHash:hash(String(c.Comment||''))}));
+  if(kind==='VIEW'){const cv=query(ref,'SHOW CREATE VIEW `'+name+'`');if(typeof cv[0]?.['Create View']!=='string')throw Error('Dolt view DDL unknown');const d=hash(cv[0]['Create View']);return {name,kind,columns,pk:[],indexes:[],rows:null,ddlHash:d,hash:d};}
+  if(kind!=='BASE TABLE')throw Error('Dolt table kind unknown');
+  const keys=query(ref,'SHOW KEYS FROM `'+name+'`');
+  const indexes=keys.map(k=>({name:String(k.Key_name),nonUnique:Number(k.Non_unique),seq:Number(k.Seq_in_index),column:k.Column_name===null||k.Column_name===undefined?null:String(k.Column_name),collation:k.Collation===null||k.Collation===undefined?null:String(k.Collation),subPart:k.Sub_part===null||k.Sub_part===undefined?null:Number(k.Sub_part),type:String(k.Index_type||''),nullable:String(k.Null||''),expressionHash:k.Expression===null||k.Expression===undefined?null:hash(String(k.Expression))})).sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:a.seq-b.seq);
+  const pk=indexes.filter(k=>k.name==='PRIMARY').map(k=>k.column);
+  // Canonical DDL evidence: the whole SHOW CREATE TABLE text (columns, charset/collation, CHECK, FOREIGN KEY, table options) as one sha256.
+  const create=query(ref,'SHOW CREATE TABLE `'+name+'`');const ddl=create[0]&&create[0]['Create Table'];if(typeof ddl!=='string')throw Error('Dolt DDL unknown');
+  const h=query(ref,"SELECT DOLT_HASHOF_TABLE('"+name+"') AS h")[0]?.h;const n=query(ref,'SELECT COUNT(*) AS c FROM `'+name+'`')[0]?.c;
+  if(!h||n===undefined||n===null)throw Error('Dolt table evidence unknown');
+  return {name,kind,columns,pk,indexes,rows:Number(n),ddlHash:hash(ddl),hash:String(h)};
+ }).sort((a,b)=>a.name<b.name?-1:1);
+ // Branch-exact system objects are read separately; SHOW FULL TABLES omits these system tables on Dolt 2.6.1.
+ // Branch-exact object inventory from Dolt's own per-ref system tables (SHOW ... STATUS lists across branches, SHOW CREATE refuses on refs lacking the object).
+ // Real Dolt 2.6.1 columns (confirmed on a fictive fixture by the producer): dolt_schemas(type,name,fragment,extra JSON,sql_mode), dolt_procedures(name,create_stmt,created_at,modified_at,sql_mode).
+ // EVERY column of EVERY row is hashed (sql_mode, full extra canonicalised with sorted keys, timestamps included): nothing is normalised away or presumed exclusive.
+ // These system tables are NOT listed by SHOW FULL TABLES, so their content is hashed directly here. Any other column set is refused.
+ const SYS={dolt_schemas:{cols:['type','name','fragment','extra','sql_mode'],order:['type','name']},dolt_procedures:{cols:['name','create_stmt','created_at','modified_at','sql_mode'],order:['name']}};
+ const canon=v=>Array.isArray(v)?v.map(canon):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canon(v[k])])):v;
+ const sysObjects=(ref,table)=>{
+  const spec=SYS[table];const rows=query(ref,'SELECT * FROM '+table);   // Dolt 2.6.1 returns {} for empty system tables; every error refuses.
+  const out=rows.map(r=>{
+   if(JSON.stringify(Object.keys(r).sort())!==JSON.stringify([...spec.cols].sort()))throw Error('Dolt system table columns unknown');
+   const o={};for(const c of spec.cols){let v=r[c];
+    if(v!==null&&typeof v!=='string'&&typeof v!=='number'&&typeof v!=='boolean'&&!(c==='extra'&&typeof v==='object'))throw Error('Dolt system table value unknown');
+    if(c==='extra'&&typeof v==='string'){try{v=canon(JSON.parse(v));}catch{v={rawText:v};}}else if(c==='extra'&&v&&typeof v==='object')v=canon(v);
+    o[c]=v;}
+   if(!ident.test(String(o.name)))throw Error('Dolt object identifier unsafe');return o;});
+  out.sort((a,b)=>JSON.stringify(spec.order.map(k=>a[k]))<JSON.stringify(spec.order.map(k=>b[k]))?-1:1);return out;
+ };
+ const schemaObjects=ref=>({schemas:hash(JSON.stringify(sysObjects(ref,'dolt_schemas'))),procedures:hash(JSON.stringify(sysObjects(ref,'dolt_procedures')))});
+ // Dolt's own working-set accounting against HEAD (new/modified/dropped tables, staged or not): the root diff the evidence must account for.
+ const workingStatus=ref=>query(ref,'SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, status').map(r=>{if(!ident.test(String(r.table_name)))throw Error('Dolt status identifier unsafe');return {table:String(r.table_name),staged:r.staged===true||r.staged===1||r.staged==='1'||r.staged==='true',status:String(r.status).toLowerCase()};});
+ const inventory=()=>{const d=query('','SHOW DATABASES').map(r=>Object.values(r)[0]).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
+  return d.flatMap(db=>query(db,'SELECT name, hash FROM dolt_branches ORDER BY name').map(b=>({db,name:String(b.name),head:String(b.hash),root:String(query(db+'/'+b.name,"SELECT DOLT_HASHOF_DB('WORKING') AS root")[0]?.root||'')})));};
+ const first=inventory();if(first.some(x=>!x.root||!x.head))throw Error('Dolt inventory incomplete');
+ const entries=first.map(b=>{
+  const ref=b.db+'/'+b.name;
+  // The session must really be on this database/branch: the evidence is bound to the session identity, not to the requested name.
+  if(String(query(ref,'SELECT DATABASE() AS d')[0]?.d)!==ref)throw Error('Dolt session identity mismatch');
+  const tables=tableEvidence(ref),objects=schemaObjects(ref),status=workingStatus(ref);
+  return {evidence:'dolt-tables-v3',database:b.db,branch:b.name,head:b.head,root:b.root,tables,schemaObjects:objects,status};
+ });
+ // Final fresh global pass: the same databases, branches, heads and working roots, or the evidence is one incoherent observation.
+ if(JSON.stringify(inventory())!==JSON.stringify(first))throw Error('Dolt inventory moved during capture');
+ return entries;
 }
 async function workflowHashes(){
  const {createRequire}=await import('node:module');const require=createRequire('/app/api/package.json');const{createConnection}=require('mysql2/promise');

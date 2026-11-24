@@ -151,12 +151,17 @@ def main():
     if changes:
         # Each target digest needs a separate reviewed verifier. It receives hash-only snapshots,
         # and must prove ALL declared transformations, including non-target preservation.
-        verifier=p.get('transformationVerifiers',{}).get(a.image)
+        entry=p.get('transformationVerifiers',{}).get(a.image)
+        # Versioned verifier interface. A plain string is the LEGACY interface (exactly: BEFORE AFTER), unchanged for verify-0002-*.
+        # An object {"path":...,"interface":"categories-v1"} additionally receives the exact change categories as a third argument.
+        if isinstance(entry,str):verifier,extra=entry,None
+        elif isinstance(entry,dict) and set(entry)=={'path','interface'} and entry['interface']=='categories-v1' and isinstance(entry['path'],str):verifier,extra=entry['path'],','.join(sorted({c.split(':',1)[0] for c in changes}))
+        else:verifier,extra=None,None
         if not verifier or not Path(verifier).is_file() or not os.access(verifier,os.X_OK):
             kinds=sorted({c.split(':',1)[0] for c in changes})
             print('PRESERVATION_DIAG_V1 '+json.dumps({'categories':kinds},sort_keys=True),file=sys.stderr)
             raise ValueError('unexpected preservation changes; no digest-specific reviewed verifier')
-        stage('transformation-verifier');cmd([verifier,str(evidence/'before.json'),str(after_file)])
+        stage('transformation-verifier');cmd([verifier,str(evidence/'before.json'),str(after_file)]+([extra] if extra is not None else []))
     print('ISOLATED LOOPBACK ONLY: preservation/OIDC/journal checks passed, NO public TLS qualification, keep production paused' if a.isolated_loopback_test else 'Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
 if __name__=='__main__':
     try:main()

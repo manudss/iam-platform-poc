@@ -236,6 +236,11 @@ raise SystemExit(r.returncode)
                   'credentialFiles': ['core-state/credentials.json', 'core-state/iam-poc-account-blocks.json',
                                       'core-state/iam-poc-authn-enrollments.json', 'core-state/iam-poc-password-history.json'],
                   'appendOnlyTables': ['public.activations', 'public.decision_audit'], 'transformationVerifiers': {}}
+        verifier=bindir/'qualification-dolt-piece-storage-verifier.py'
+        if verifier.is_file():
+            if not os.access(verifier,os.X_OK):raise RuntimeError('transformation-verifier-not-executable')
+            policy['transformationVerifiers'][c['image']]={'path':str(verifier),'interface':'categories-v1'}
+            result['transformationVerifier']={'image':c['image'],'sha256':sha(verifier),'scope':'only-empty-piece-storage-table'}
         pol = owned / 'qualification.json'
         pol.write_text(json.dumps(policy))
         pol.chmod(0o600)
@@ -351,7 +356,11 @@ raise SystemExit(r.returncode)
             after=json.loads(after_paths[0].read_text());smoke=json.loads(smoke_paths[0].read_text())
             qualifier=load_module(bindir/'qualification.py','candidate_qualifier')
             changes=qualifier.compare(before,after,policy)
-            if changes:raise RuntimeError('measured-preservation-diff')
+            if changes:
+                declared=policy['transformationVerifiers'].get(c['image'])
+                if not declared or declared.get('interface')!='categories-v1':raise RuntimeError('measured-preservation-diff')
+                run([declared['path'],str(evidence_dir/'before.json'),str(after_paths[0]),','.join(sorted({k.split(':',1)[0] for k in changes}))])
+                result['checks']['declaredTransformationVerified']=True
             if not after.get('migrationLedger') or not smoke:raise RuntimeError('missing-ledger-or-smoke-proof')
             if urllib.request.urlopen(origin+'/healthz',timeout=10).status!=200 or (gates/'MAINTENANCE').exists():raise RuntimeError('measured-final-front-not-open')
             result['measurements']={'preservationChanges':changes,'beforeSHA256':sha(evidence_dir/'before.json'),
