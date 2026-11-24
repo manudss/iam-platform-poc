@@ -9,7 +9,7 @@
  * Security posture, enforced here server-side:
  *  - only an administrator registers a model endpoint; the assistant (and the model) can never choose a URL;
  *  - a remote endpoint requires https and a public host name (no IP literal in a private range, no metadata
- *    address); http is accepted only towards the local model host(s) (IAM_AI_LOCAL_HOSTS, default localhost, ollama);
+ *    address); http is accepted only towards the local model host(s) (operator list IAM_AI_LOCAL_ENDPOINTS, exact host:port, default the Ollama ports);
  *    IAM_AI_ALLOWED_HOSTS optionally restricts the allowed remote hosts further;
  *  - the API key is stored encrypted (AES-256-GCM, key from IAM_AI_KEY_SECRET - POC grade: a real deployment
  *    injects a KMS key), never returned by any route and redacted from every error text.
@@ -28,11 +28,19 @@ export const LOCAL_MODEL_ID = 'local';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/;
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]{0,99}$/;
 
-export const localHosts = () => (process.env.IAM_AI_LOCAL_HOSTS ?? 'localhost,127.0.0.1,::1,[::1],ollama').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+// Local (non-public, plain http, no DNS check) endpoints are an OPERATOR decision, never an admin one: exact host:port entries in
+// IAM_AI_LOCAL_ENDPOINTS (default: the Ollama ports) plus the origin of IAM_AI_LOCAL_URL. "host:*" allows any port (tests only).
+const hostPort = (u) => `${u.hostname.toLowerCase()}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+export const localEndpoints = () => {
+  const list = (process.env.IAM_AI_LOCAL_ENDPOINTS ?? 'localhost:11434,127.0.0.1:11434,ollama:11434').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  try { if (process.env.IAM_AI_LOCAL_URL) list.push(hostPort(new URL(process.env.IAM_AI_LOCAL_URL))); } catch { /* ignored: validated where used */ }
+  return list;
+};
+export const isLocalEndpoint = (u) => { const hp = hostPort(u); const list = localEndpoints(); return list.includes(hp) || list.includes(`${u.hostname.toLowerCase()}:*`); };
 
 const privateIp = (host) => {
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
-  if (m) { const [a, b] = [Number(m[1]), Number(m[2])]; return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127); }
+  if (m) { const [a, b] = [Number(m[1]), Number(m[2])]; return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 198 && (b === 18 || b === 19)) || (a === 192 && b === 0 && Number(m[3]) === 0) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127); }
   return host.includes(':') || host.startsWith('[') || /\.(internal|local|localdomain)$/.test(host) || !host.includes('.');
 };
 
@@ -45,7 +53,7 @@ export function validateModelUrl(raw) {
   if (u.username || u.password) throw new BadRequestException('credentials in the URL are refused: use the key field');
   if (u.search || u.hash) throw new BadRequestException('baseUrl must not carry a query string or a fragment');
   const host = u.hostname.toLowerCase();
-  const local = localHosts().includes(host);
+  const local = isLocalEndpoint(u);
   if (!local) {
     if (u.protocol !== 'https:') throw new BadRequestException('a remote model endpoint requires https (http is only allowed towards the local model host)');
     if (privateIp(host)) throw new BadRequestException('a remote model endpoint must be a public host name (private, loopback and metadata addresses are refused)');
@@ -97,7 +105,7 @@ export function privateAddress(addr) {
     const a = addr.toLowerCase();
     const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(a);
     if (mapped) return privateIp(mapped[1]);
-    return a === '::' || a === '::1' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a) || a.startsWith('::ffff:');
+    return a === '::' || a === '::1' || a.startsWith('64:ff9b:') || a.startsWith('2002:') || a.startsWith('ff') || /^f[cd]/.test(a) || /^fe[89ab]/.test(a) || a.startsWith('::ffff:');
   }
   return true;
 }
@@ -172,8 +180,8 @@ export async function callModel({ model, apiKey, system, messages, tools, fetchI
   const headers = { 'content-type': 'application/json' };
   if (anthropic) { headers['anthropic-version'] = '2023-06-01'; if (apiKey) headers['x-api-key'] = apiKey; } else if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   const body = anthropic ? anthropicBody(model, system, messages, tools) : openaiBody(model, system, messages, tools);
-  const host = new URL(url).hostname.toLowerCase();
-  if (!localHosts().includes(host)) await assertPublicResolution(host, resolveImpl);
+  const target = new URL(url);
+  if (!isLocalEndpoint(target)) await assertPublicResolution(target.hostname.toLowerCase(), resolveImpl);
   let res;
   try { res = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), redirect: 'error' }); } catch (e) { throw new ModelCallError(redact(`the model endpoint is unreachable: ${e.message}`, apiKey), 502); }
   const text = await res.text();

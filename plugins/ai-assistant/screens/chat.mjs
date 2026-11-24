@@ -29,7 +29,7 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--li
 // Provider presets: the guidance lives here, in the plugin (where to get a key, what the endpoint is).
 const PRESETS = [
   { id: 'ollama', label: 'Local model (Ollama, vLLM or another OpenAI-compatible server on this network)', kind: 'openai-compatible', baseUrl: 'http://ollama:11434/v1', model: 'llama3.1', keyNeeded: false,
-    hint: 'No key and no data leaves your network. Use a model that supports tool calls. The server host must be listed in IAM_AI_LOCAL_HOSTS (default: localhost, ollama).' },
+    hint: 'No key and no data leaves your network. Use a model that supports tool calls. The operator must allow the server (host:port) in IAM_AI_LOCAL_ENDPOINTS (default: Ollama on localhost:11434).' },
   { id: 'openai', label: 'OpenAI', kind: 'openai-compatible', baseUrl: 'https://api.openai.com/v1', model: '', keyNeeded: true, link: 'https://platform.openai.com/api-keys', hint: 'Create an API key in the OpenAI platform and enter the model name you want to use.' },
   { id: 'anthropic', label: 'Anthropic (Claude)', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', model: '', keyNeeded: true, link: 'https://console.anthropic.com/settings/keys', hint: 'Create an API key in the Anthropic console and enter the Claude model name.' },
   { id: 'mistral', label: 'Mistral', kind: 'openai-compatible', baseUrl: 'https://api.mistral.ai/v1', model: '', keyNeeded: true, link: 'https://console.mistral.ai/api-keys', hint: 'OpenAI-compatible endpoint. Choose a model that supports function calling.' },

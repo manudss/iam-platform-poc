@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createServer, IncomingMessage, Server } from 'node:http';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 process.env.IAM_AI_KEY_SECRET ??= 'test-only-secret-0123456789abcdef';
+process.env.IAM_AI_LOCAL_ENDPOINTS = '127.0.0.1:*,localhost:*,ollama:11434'; // fake model servers on random ports (the default list is exact host:port)
 
 type Msg = { role: string; content: string; toolCalls?: { id: string; name: string; args: Record<string, unknown>; badArgs?: boolean }[]; toolCallId?: string; name?: string };
 const p = loadPluginModule('ai-assistant', 'providers.mjs') as any;
@@ -176,5 +177,16 @@ describe('agent loop', () => {
     }
     await assert.rejects(p.callModel({ model, apiKey: 'sk-abc-123456', system: 's', messages: [{ role: 'user', content: 'x' }], tools: [], fetchImpl, resolveImpl: async () => [{ address: '93.184.216.34' }, { address: '10.0.0.5' }] }), /private or loopback/);
     assert.equal(called, false);
+  });
+  it('an admin cannot reach an arbitrary local port or host: only the operator list is local', () => {
+    const saved = process.env.IAM_AI_LOCAL_ENDPOINTS; delete process.env.IAM_AI_LOCAL_ENDPOINTS;
+    try {
+      assert.equal(p.validateModelUrl('http://localhost:11434/v1').local, true);
+      for (const u of ['http://127.0.0.1:8080/v1', 'http://localhost:5432', 'http://localhost/x', 'http://169.254.169.254/v1', 'http://10.0.0.5:11434/v1']) assert.throws(() => p.validateModelUrl(u), /https|public/, u);
+      process.env.IAM_AI_LOCAL_ENDPOINTS = 'gpu1.corp.lan:8000';
+      assert.equal(p.validateModelUrl('http://gpu1.corp.lan:8000/v1').local, true);
+      assert.throws(() => p.validateModelUrl('http://gpu1.corp.lan:9000/v1'), /https/);
+      for (const a of ['198.18.0.1', '224.0.0.1', '192.0.0.8', '64:ff9b::7f00:1', '2002:7f00:1::1', 'ff02::1']) assert.equal(p.privateAddress(a), true, a);
+    } finally { process.env.IAM_AI_LOCAL_ENDPOINTS = saved; }
   });
 });
