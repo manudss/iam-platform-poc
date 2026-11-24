@@ -18,7 +18,7 @@ Production code: 44 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:153 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:155 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:156 |
-| ApplicationBus.emit | emitter | authn.reenrollment-requested | apps/api/src/workflows/engine.ts:137 |
+| ApplicationBus.emit | emitter | authn.reenrollment-requested | apps/api/src/workflows/engine.ts:139 |
 | callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:363 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:474 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:272 |
