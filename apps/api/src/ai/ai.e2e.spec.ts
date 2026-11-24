@@ -41,7 +41,7 @@ async function login(user: string): Promise<string> {
 // AI assistant end-to-end: REAL Dolt + REAL Rust core + real NestJS API + a scripted fake model endpoint on 127.0.0.1.
 // The assistant acts through the MCP tool surface as a branch-confined session; changes wait for the administrator.
 const MODEL_PORT = 13482;
-type Turn = { text?: string; calls?: { name: string; args: object }[]; delayMs?: number };
+type Turn = { text?: string; calls?: { name: string; args: object }[]; delayMs?: number; fail?: boolean };
 let script: Turn[] = [];
 const modelSeen: { body: any; auth: string | undefined }[] = [];
 let modelServer: Server;
@@ -56,6 +56,7 @@ const startModel = () => new Promise<void>((ok) => {
   }).listen(MODEL_PORT, '127.0.0.1', ok);
 });
 function answerModel(t: Turn, body: any, res: import('node:http').ServerResponse) {
+  if (t.fail) { res.statusCode = 500; res.setHeader('content-type', 'application/json'); res.end('{"error":{"message":"model backend failed"}}'); return; }
   {
     {
       const calls = (t.calls ?? []).map((c, i) => ({ id: `call_${++callId}`, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) }, index: i }));
@@ -198,6 +199,22 @@ describe('AI assistant (real Dolt + real core): chat on the branch-confined MCP 
     assert.equal(m.at(-1)!.parts.at(-1)!.text, 'slow answer', 'the full turn was stored before the lock was released');
     script = [{ text: 'free again' }];
     assert.equal((await userSays('after')).at(-1)!.parts.at(-1)!.text, 'free again');
+  });
+
+  it('a client that disconnects mid-turn, and a model error, both release the lock; the user message is kept', async () => {
+    script = [{ calls: [{ name: 'list_users', args: {} }], delayMs: 2500 }, { text: 'never read' }];
+    const ac = new AbortController();
+    const p = fetch(url(`conversations/${convId}/chat`), { method: 'POST', headers: { 'content-type': 'application/json', ...H() }, body: JSON.stringify({ message: { role: 'user', parts: [{ type: 'text', text: 'will be dropped' }] } }), signal: ac.signal }).catch(() => undefined);
+    await sleep(600); ac.abort(); await p;
+    let free = false;
+    for (let i = 0; i < 40 && !free; i++) { await sleep(250); const probe = await chatPost({ role: 'user', parts: [{ type: 'text', text: 'probe' }] }); free = probe.status !== 409; if (free) { await probe.text(); } }
+    assert.ok(free, 'the lock is released after the client left');
+    const m = await conv();
+    assert.ok(m.some((x) => x.role === 'user' && x.parts.some((p) => p.text === 'will be dropped')), 'what the person wrote is kept');
+    script = [{ fail: true }];
+    const r = await chatPost({ role: 'user', parts: [{ type: 'text', text: 'model will fail' }] }); await r.text();
+    script = [{ text: 'recovered' }];
+    assert.equal((await userSays('after the error')).at(-1)!.parts.at(-1)!.text, 'recovered', 'the conversation works after a model error');
   });
 
   it('another administrator cannot read the conversation, and deleting it revokes its session', async () => {
