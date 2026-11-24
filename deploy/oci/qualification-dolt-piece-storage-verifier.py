@@ -74,9 +74,9 @@ def verify(before_path,after_path,changes):
     need(x['head']==y['head'],'target-head-changed')                 # nothing is committed: the new table lives in the working set only
     need(x['root']!=y['root'],'no-target-change')
     need(x['schemaObjects']==y['schemaObjects'],'schema-objects-changed')
-    if sorted(y['status'],key=json.dumps)!=sorted(x['status']+[NEW_STATUS],key=json.dumps):
+    if sorted(y['status'],key=lambda row:json.dumps(row,sort_keys=True))!=sorted(x['status']+[NEW_STATUS],key=lambda row:json.dumps(row,sort_keys=True)):
         print('DOLT_STATUS_DIAG_V1 '+json.dumps({'before':status_counts(x['status']),'after':status_counts(y['status'])},separators=(',',':')),file=sys.stderr)
-    need(sorted(y['status'],key=json.dumps)==sorted(x['status']+[NEW_STATUS],key=json.dumps),'working-status-changed')   # Dolt's status diff vs HEAD is exactly one new unstaged table
+    need(sorted(y['status'],key=lambda row:json.dumps(row,sort_keys=True))==sorted(x['status']+[NEW_STATUS],key=lambda row:json.dumps(row,sort_keys=True)),'working-status-changed')   # Dolt's status diff vs HEAD is exactly one new unstaged table
     old={t['name']:t for t in x['tables']};new={t['name']:t for t in y['tables']}
     need(NEW not in old,'table-already-present')                      # an idempotent rerun produces no dolt change, never reaches this verifier
     need(set(old)<=set(new) and set(new)-set(old)=={NEW},'table-set-changed')

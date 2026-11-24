@@ -21,6 +21,18 @@ def good_after():
         if (e['database'],e['branch'])==('iam_meta','main'):e['tables']=sorted(e['tables']+[copy.deepcopy(PIECE)],key=lambda t:t['name']);e['root']='root-after';e['status']=e['status']+[dict(v.NEW_STATUS)]
     return a
 class V(unittest.TestCase):
+    def test_persisted_dirty_status_order_is_canonical(self):
+        b=snap();a=good_after()
+        for d in [b,a]:
+            e=next(e for e in d['dolt'] if (e['database'],e['branch'])==v.TARGET)
+            e['status'] += [{'table':n,'staged':False,'status':'new table'} for n in ['workflow_runs','workflow_definitions','workflow_events','workflow_steps','workflow_links']]
+        b=json.loads(json.dumps(b,sort_keys=True));a=json.loads(json.dumps(a,sort_keys=True))
+        self.ok(a,b)
+        # Same counts do not authorize renamed/replaced old rows or staging changes.
+        changed=copy.deepcopy(a);next(e for e in changed['dolt'] if (e['database'],e['branch'])==v.TARGET)['status'][1]['table']='other_name'
+        self.refused(changed,'working-status-changed',before=b)
+        changed=copy.deepcopy(a);next(e for e in changed['dolt'] if (e['database'],e['branch'])==v.TARGET)['status'][1]['staged']=True
+        self.refused(changed,'working-status-changed',before=b)
     def test_status_diagnostic_fixed_cells_no_names(self):
         rows=[{'table':'workflow_piece_state','staged':False,'status':'new table'},{'table':'private_name','staged':True,'status':'modified'}]
         counts=v.status_counts(rows)
