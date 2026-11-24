@@ -4,7 +4,7 @@ Proof of concept for a new IAM/IGA platform: plugins, versioned business data on
 branches, an event bus, no-code workflows, and bounded AI access (MCP server and gateway).
 Stack: Angular, NestJS, Rust core, Dolt.
 
-Docs: [local setup (start here)](docs/local-setup.md) - one command, Docker only: `scripts/dev.ps1` (Windows) or `scripts/dev.sh` (Linux/macOS), then http://localhost:4200 - [usage](docs/usage.md), [theming rules](docs/theming.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO: applications, OIDC provider, decision](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
+Docs: [local setup (start here)](docs/local-setup.md) - one command, Docker only: `scripts/dev.ps1` (Windows) or `scripts/dev.sh` (Linux/macOS), then http://localhost:4200 - [usage](docs/usage.md), [theming rules](docs/theming.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO: applications, OIDC provider, decision](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [AI assistant](docs/ai-assistant.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
 
 ## Hosted demo (free tier)
 
