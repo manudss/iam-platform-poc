@@ -15,6 +15,7 @@ def manifest(s):
 
 class Host:
  def __init__(self,pause):self.calls=[];self.pause=pause
+ def observe_held(self,container,target):return {**target,'running':True,'held':True}
  def preflight(self,*a):self.calls.append('preflight')
  def plan_gates(self):return []
  def close_access(self,*a):self.calls.append('close')
@@ -33,6 +34,16 @@ class Tests(unittest.TestCase):
    self.assertEqual(s,q.load(p));self.assertEqual(len(s['history']),1);self.assertFalse(pause.exists());boot.check(p)
    self.assertEqual(h.calls,['preflight','close','env','start','open','pause']);self.assertEqual(s['resumptions'][-1]['observed_running']['sha'],SHA)
    with self.assertRaises(ValueError):r.release(q,p,m,'lyam',h,pause)
+ def test_live_mismatch_unknown_or_nonheld_refuses_before_preflight_and_writes(self):
+  for observation in [{},{'sha':SHA,'digest':DIG,'held':False,'running':True},{'sha':'c'*40,'digest':DIG,'held':True,'running':True}]:
+   with self.subTest(observation=observation),tempfile.TemporaryDirectory() as d:
+    p,pause,m,h=self.setup_case(d);raw=p.read_bytes();h.observe_held=lambda *a:observation
+    with self.assertRaisesRegex(ValueError,'runtime/journal'):r.release(q,p,m,'lyam',h,pause)
+    self.assertEqual(p.read_bytes(),raw);self.assertEqual(h.calls,[]);self.assertTrue(pause.exists())
+ def test_manifest_refs_are_not_recorded_as_verified_authority(self):
+  with tempfile.TemporaryDirectory() as d:
+   p,pause,m,h=self.setup_case(d);s=r.release(q,p,m,'lyam',h,pause)
+   a=s['resumptions'][-1];self.assertNotIn('authorization_ref',a);self.assertIs(a['manifest_claims']['verified_authority'],False)
  def test_refusals_never_change_state(self):
   for field,value in [('pending',{'sha':SHA}),('failed',{}),('opening_intent',{'x':1}),('resume_required',False),('recovery_fence','c'*40)]:
    with self.subTest(field=field),tempfile.TemporaryDirectory() as d:

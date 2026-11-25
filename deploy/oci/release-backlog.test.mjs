@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {capture} from './release-backlog.mjs';
+import {capture,diagnostic} from './release-backlog.mjs';
 function fake({move=false,omit=false}={}){
  let ref='',roots=0;
  return {async changeUser(x){ref=x.database;},async query(sql){
@@ -14,10 +14,27 @@ function fake({move=false,omit=false}={}){
  }};
 }
 test('covers both databases and every branch without exposing row values',async()=>{
- const v=await capture(fake());assert.equal(v.entries.length,4);assert(v.complete);assert(v.entries.some(e=>e.branch==='personal/demo-alice'));
+ const v=await capture(fake());assert.equal(v.entries.length,4);assert(v.inventory_complete);assert.equal(v.external_coverage,'unverified');assert.equal(v.complete,undefined);assert(v.entries.some(e=>e.branch==='personal/demo-alice'));
  assert(!JSON.stringify(v).includes('PRIVATE-ID'));assert(!JSON.stringify(v).includes('SECRET-CREDENTIAL'));
  assert(v.entries.every(e=>e.tables.every(t=>t.rows===1&&/^[a-f0-9]{64}$/.test(t.sha256))));
 });
 test('moving working roots refuse rather than claim coherent evidence',async()=>{await assert.rejects(capture(fake({move:true})),/changed during capture/);});
 test('runtime table missing is not empty backlog',async()=>{await assert.rejects(capture(fake({omit:true})),/coverage absent/);});
 test('query failure is not empty backlog',async()=>{await assert.rejects(capture({query:async()=>{throw Error('offline');}}),/offline/);});
+
+test('at the row ceiling capture refuses, never reports a possibly partial inventory',async()=>{
+ const c=fake(),query=c.query.bind(c);c.query=async(sql,...args)=>sql.startsWith('SELECT *')?[Array(100000).fill({id:1})]:query(sql,...args);
+ await assert.rejects(capture(c),/row bound exceeded/);
+});
+
+test('finite diagnostic distinguishes SQL stage without leaking raw SQL messages',async()=>{
+ for(const fail of ['branches','session','root','rows']){
+  const c=fake(),query=c.query.bind(c);c.query=async(sql,...args)=>{
+   if((fail==='branches'&&sql.includes('dolt_branches'))||(fail==='root'&&sql.includes('DOLT_HASHOF_DB'))||(fail==='rows'&&sql.startsWith('SELECT *')))throw Object.assign(Error('PRIVATE SQL WITH SECRET'),{code:'ER_PARSE_ERROR'});
+   return query(sql,...args);
+  };
+  if(fail==='session')c.changeUser=async()=>{throw Error('PRIVATE PASSWORD');};
+  try{await capture(c);assert.fail('expected refusal');}catch(e){const d=diagnostic(e);assert.equal(d.stage,{branches:'branches',session:'change-session',root:'working-root',rows:'rows'}[fail]);assert(!JSON.stringify(d).includes('PRIVATE'));}
+ }
+ assert.equal(diagnostic({code:'SECRET',message:'SECRET'}).category,'refused-or-unknown');
+});

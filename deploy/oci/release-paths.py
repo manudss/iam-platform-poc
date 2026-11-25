@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pure review planner. Produces required bindings, never writes env or starts services."""
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, Path
 
 
 def plan(root, container, backup, front, ops):
@@ -18,3 +18,17 @@ def plan(root, container, backup, front, ops):
 def verify(env, expected):
  if any(env.get(k)!=v for k,v in expected.items()):raise ValueError('explicit operational path binding differs')
  return True
+
+
+def verify_operational(env, env_path, state_path):
+ """Shared by the installed release controller and unattended boot guard.
+ No inferred /opt/lyam fallback is accepted for a format4 deployment.
+ """
+ root=str(Path(env_path).parent)
+ expected=plan(root,env.get('LYAM_CONTAINER',''),env.get('LYAM_BACKUP_DIR',''),env.get('LYAM_FRONT_BARRIER_FILE',''),env.get('LYAM_OPS_BARRIER_FILE',''))
+ verify(env,expected)
+ if env_path!=str(Path(root)/'lyam.env') or state_path!=expected['LYAM_QUEUE_STATE']:raise ValueError('environment/state path does not match active root')
+ for key in ('LYAM_QUEUE_STATE','LYAM_ORDERED_QUEUE'):
+  p=Path(env[key])
+  if str(p.resolve())!=str(p):raise ValueError('noncanonical or symlink operational path')
+ return expected

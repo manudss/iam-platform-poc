@@ -576,3 +576,11 @@ test('inherited lock proof with real stat/flock: owner accepted, others refused'
  const closed=runLockBlock('@BLOCK@');assert.equal(closed.status,1);
  for(const r of [unlocked,third,otherInode,replaced,closed])assert.doesNotMatch(r.stdout,/PROOF_OK/);
 });
+
+test('updater forwards configured E5-style policy path to both actual postcheck invocations',()=>{
+ const {env,dir,stub}=setup();const hook=join(dir,'post-check.sh');const policy='/opt/lyam-recovery/active/qualification.json';
+ writeFileSync(hook,'#!/bin/sh\nprintf "%s %s\\n" "$2" "$LYAM_QUALIFICATION_POLICY" >> "$STUB_DIR/policies"\n');chmodSync(hook,0o755);
+ writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\nLYAM_QUALIFICATION_POLICY=${policy}\n`);
+ const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');assert.equal(r.status,0,r.stderr);
+ assert.equal(readFileSync(join(stub,'policies'),'utf8'),`before ${policy}\nafter ${policy}\n`);
+});

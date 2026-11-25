@@ -27,7 +27,7 @@ def validate_state(s):
         if not s.get('resumptions') or s['resumptions'][-1].get('observed_running')!=observation:raise ValueError('release/resumption audit differs')
 
 
-def preconditions(q, state, manifest, pause):
+def preconditions(q, state, manifest, pause, container, observe):
     if state.get('format') != 3 or state.get('resume_required') is not True or not pause: raise ValueError('resolved paused held state required')
     if any(state.get(k) for k in ('pending','failed','opening_intent','release_intent')): raise ValueError('another operation unresolved')
     last = state['history'][-1]
@@ -35,12 +35,15 @@ def preconditions(q, state, manifest, pause):
     q.checked_manifest(state, manifest, 'reviewed-release-held')
     if not re.fullmatch(r'[A-Za-z0-9._-]{8,64}', str(manifest.get('engagement_id',''))): raise ValueError('release engagement required')
     if set(manifest.get('target',{})) != {'sha','digest'} or any(manifest['target'][k] != last[k] for k in ('sha','digest')): raise ValueError('same-image release only')
-    return copy.deepcopy(manifest['target'])
+    target=copy.deepcopy(manifest['target'])
+    observed=observe(container,target)
+    if any(observed.get(k)!=target[k] for k in ('sha','digest')) or observed.get('held') is not True or observed.get('running') is not True:raise ValueError('live runtime/journal divergence or non-held runtime')
+    return target
 
 
 def release(q, path, manifest, container, host, pause, hook=None):
     state = q.load(path)
-    target = preconditions(q, state, manifest, Path(pause).is_file())
+    target = preconditions(q, state, manifest, Path(pause).is_file(), container, host.observe_held)
     # This MUST establish controllers/boot guard, live identities, exact config,
     # real backlog + isolated-copy evidence, absence of competing workers, gates.
     host.preflight(state, manifest, container, target)
@@ -67,7 +70,7 @@ def release(q, path, manifest, container, host, pause, hook=None):
         # Single atomic journal commit. history remains a unique source chain.
         at=datetime.datetime.now(datetime.timezone.utc).isoformat()
         state.setdefault('releases',[]).append({'target':target,'at':at,'manifest':copy.deepcopy(manifest),'observed_running':proof,'prior_fingerprint':original,'expected':copy.deepcopy(intent['expected']),'gates':copy.deepcopy(intent['gates'])})
-        state.setdefault('resumptions',[]).append({'at':at,'state_fingerprint':original,'authorization_ref':manifest['authorization_ref'],'evidence_refs':manifest['evidence_refs'],'observed_running':proof,'kind':'reviewed-release-held'})
+        state.setdefault('resumptions',[]).append({'at':at,'state_fingerprint':original,'manifest_claims':{'authorization_ref':manifest['authorization_ref'],'evidence_refs':manifest['evidence_refs'],'verified_authority':False},'observed_running':proof,'kind':'reviewed-release-held'})
         state.update(resume_required=False,delivery_mode='normal',release_finalize_required=True); del state['release_intent']
         validate_state(state); q.atomic(path,state)
         if hook: hook('journal-committed')

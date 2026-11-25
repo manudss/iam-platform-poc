@@ -27,29 +27,54 @@ def imported(path,name):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
 
+def verify_backlog_pair(initial,current,now=None):
+ now=time.time() if now is None else now
+ for evidence in (initial,current):
+  if evidence.get('format')!=1 or evidence.get('kind')!='live-release-backlog' or evidence.get('inventory_complete') is not True or evidence.get('external_coverage')!='unverified':raise ValueError('bounded local inventory with explicit external gap required')
+  ts=evidence.get('captured_at')
+  if type(ts) not in (int,float) or not 0<=now-ts<=900:raise ValueError('fresh backlog pair required')
+  rows=evidence.get('entries')
+  if not isinstance(rows,list) or not rows:raise ValueError('nonempty inventory coverage required')
+  for branch in rows:
+   for table in branch.get('tables',[]):
+    n=table.get('rows')
+    if type(n) is not int or not 0<=n<100000:raise ValueError('row bound reached or invalid')
+ if initial['entries']!=current['entries'] or initial.get('sha256')!=current.get('sha256'):raise ValueError('backlog changed behind gates; review and recapture required')
+ return True
+
+
 class Host:
  def __init__(self,manifest,lock_fd=None):
   self.lock_fd=lock_fd;self.intent=None;self.persist=None
   self.m=manifest;self.gates=[]
  def bind_intent(self,intent,persist):self.intent=intent;self.persist=persist
- def run(self,args):
+ def run(self,args,input_text=None):
   if self.intent is None:return run(args)
   prior=self.intent.get('child')
   if prior is not None and self.q.queue_state(prior.get('identity'))!='absent':raise ValueError('prior child alive or unknown; no additional subprocess')
   if type(self.lock_fd) is not int or self.lock_fd<3:raise ValueError('inherited updater lock required')
   # Every external child inherits the actual open lock description. A dead queue
   # cannot permit a second mutator while its Docker/qualification child survives.
-  child=subprocess.Popen(args,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,pass_fds=[self.lock_fd])
+  child=subprocess.Popen(args,text=True,stdin=subprocess.PIPE if input_text is not None else None,stdout=subprocess.PIPE,stderr=subprocess.PIPE,pass_fds=[self.lock_fd])
   self.active_child=child
   try:
    self.intent['child']={'identity':self.q.queue_identity(child.pid),'argv_kind':Path(args[0]).name};self.persist()
-   out,err=child.communicate(timeout=600)
+   out,err=child.communicate(input=input_text,timeout=600)
   except BaseException:
    # Never kill or retry a child of an uncertain release. Keep identity and lock.
    raise
   self.active_child=None;self.intent['child']=None;self.persist()
   if child.returncode:raise subprocess.CalledProcessError(child.returncode,args)
   return out
+ def observe_held(self,container,target):
+  q=imported(Path(__file__).with_name('ordered-queue.py'),'release_readonly_observer')
+  result=q.observe_running(container,target)
+  c=json.loads(run(['docker','inspect','--type','container',container]))[0]
+  # Separate observations must refer to exactly the same immutable container/image.
+  if c.get('Image')!=result['image_id'] or not c.get('State',{}).get('Running') or c.get('Config',{}).get('Image')!='ghcr.io/manudss/iam-platform-poc@'+target['digest']:raise ValueError('live runtime changed during observation')
+  settings=[v for v in c.get('Config',{}).get('Env',[]) if v.split('=',1)[0]=='IAM_AUTOMATION_HOLD']
+  if settings!=['IAM_AUTOMATION_HOLD=1']:raise ValueError('exact live HOLD1 required')
+  return {**result,'held':True,'container_id':c['Id']}
  def preflight(self,state,manifest,container,target):
   if type(self.lock_fd) is not int or self.lock_fd<3:raise ValueError('actual updater lock fd required')
   # Deliberate WIP safety stop: evidence-shaped JSON is not qualification.
@@ -59,7 +84,7 @@ class Host:
   self.target=target;self.container=container;self.image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
   # Bind the complete installed controller set, including host boot and systemd
   # supervision, BEFORE upgrading the journal. An old format3 controller refuses4.
-  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py'}
+  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs'}
   bindings=manifest.get('installed')
   if not isinstance(bindings,list) or {Path(x.get('path','')).name for x in bindings}!=expected:raise ValueError('complete installed release toolchain required')
   if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',container):raise ValueError('bounded container name required')
@@ -75,6 +100,8 @@ class Host:
   for line in envraw.decode().splitlines():
    if line and not line.startswith('#'):
     k,v=line.split('=',1);self.env[k]=v
+  paths=imported(Path(__file__).with_name('release-paths.py'),'release_operational_paths')
+  paths.verify_operational(self.env,str(self.env_path),manifest['state_path'])
   normal_path,normal_raw=read_spec(manifest['normal_runtime']);self.normal_config=json.loads(normal_raw)
   if type(self.normal_config.get('port')) is not str:raise ValueError('runtime port must be a string')
   if self.normal_config != {'image':self.image,'container':container,'port':self.env.get('LYAM_PORT','8080'),'network':self.env.get('LYAM_DOCKER_NETWORK',''),'data_dir':self.env.get('LYAM_DATA_DIR','/opt/lyam/data'),'restart':'no','cap_drop':['ALL'],'security_opt':['no-new-privileges:true'],'seed':'never'}:raise ValueError('exact normal runtime config required')
@@ -100,7 +127,10 @@ class Host:
   # Receipt is a result of an isolated coherent copy, not an authority grant.
   _,raw=read_spec(manifest['isolated_qualification']);receipt=json.loads(raw)
   _,raw=read_spec(manifest['backlog']);backlog=json.loads(raw)
-  if backlog.get('complete') is not True or type(backlog.get('captured_at')) not in (int,float) or not 0<=time.time()-backlog['captured_at']<=900:raise ValueError('fresh complete real backlog evidence required')
+  self.backlog=backlog
+  self.backlog_producer,self.backlog_source=read_spec(manifest['backlog_producer'])
+  if self.backlog_producer!=Path(__file__).with_name('release-backlog.mjs'):raise ValueError('fixed installed backlog producer required')
+  if backlog.get('inventory_complete') is not True or type(backlog.get('captured_at')) not in (int,float) or not 0<=time.time()-backlog['captured_at']<=900:raise ValueError('fresh real inventory required; external reconciliation remains unverified')
   required={'result':'qualified-normal-release','image':self.image,'state_fingerprint':manifest['state_fingerprint'],'env_before_sha256':manifest['env']['sha256'],'env_after_sha256':hashlib.sha256(self.normal_raw).hexdigest(),'backlog_sha256':manifest['backlog']['sha256'],'policy_sha256':manifest['normal_policy']['sha256'],'normal_runtime_sha256':manifest['normal_runtime']['sha256'],'production_credentials_used':False,'production_upstreams_used':False}
   if any(receipt.get(k)!=v for k,v in required.items()):raise ValueError('isolated copy qualification binding incomplete')
   # Coherent preservation backup captured by the operator, immutable and fresh.
@@ -139,9 +169,10 @@ class Host:
   sm=imported(Path(__file__).with_name('release-supervision.py'),'release_supervisor')
   sm.verify_live(self.supervision,manifest['engagement_id'])
  def before_commit(self,intent):
-  for key in ['env','pause','normal_runtime','normal_policy','isolated_qualification','backlog','backup_receipt']:
+  if not hasattr(self,'backlog_recapture'):raise ValueError('postgate recapture missing')
+  verify_backlog_pair(self.backlog,self.backlog_recapture)
+  for key in ['env','pause','normal_runtime','normal_policy','isolated_qualification','backlog','backup_receipt','backlog_producer']:
    binding=self.m[key]
-   if key=='env':binding={'path':str(self.env_path),'sha256':hashlib.sha256(self.normal_raw).hexdigest()}
    _,raw=read_spec(binding)
    if key in ('backlog','backup_receipt'):
     x=json.loads(raw)
@@ -194,11 +225,20 @@ class Host:
   self.opening.check_origins(self.policy['origins'],503)
  def install_normal_env(self,intent):
   # Stop before initial preservation capture; the held app cannot run backlog.
+  self.recapture_backlog()
   self.run(['docker','stop',self.container])
   args=self.qualify_args('before',self.m['env']['path']);self.run(args)
-  mod=imported(Path(__file__).with_name('release-held.py'),'release_env_install')
-  intent['env_proof']=mod.install_env(self.env_path,self.m['env']['sha256'])
   self.install_operational_policy()
+ def recapture_backlog(self):
+  # Called after both access gates are proven closed, while the original app is
+  # still running held. Input is the exact protected installed producer bytes.
+  read_spec(self.m['backlog_producer'])
+  raw=self.run(['docker','exec','-i',self.container,'node','--input-type=module'],input_text=self.backlog_source.decode()+"\nawait main();\n")
+  current=json.loads(raw)
+  verify_backlog_pair(self.backlog,current)
+  self.backlog_recapture=current
+  if self.intent is None or self.persist is None:raise ValueError('durable release intent required for recapture')
+  self.intent['postgate_backlog']={'captured_at':current['captured_at'],'sha256':current['sha256'],'external_coverage':'unverified'};self.persist()
  def install_operational_policy(self):
   p,raw=read_spec(self.m['operational_policy_before'])
   if raw!=self.prior_policy_raw:raise ValueError('operational policy changed')
@@ -214,6 +254,9 @@ class Host:
  def qualify_args(self,phase,env):
   return [str(Path(__file__).with_name('qualification.py')),'--phase',phase,'--container',self.container,'--image',self.image,'--env-file',env,'--data-dir',self.env.get('LYAM_DATA_DIR','/opt/lyam/data'),'--backup-dir',self.env.get('LYAM_BACKUP_DIR','/opt/lyam/backups'),'--barrier-file',str(self.front),'--target-image',self.image,'--evidence-dir',str(self.evidence),'--policy',str(self.policy_source)]
  def start_normal(self,intent):
+  if intent.get('normal_start_committed') is not True:raise ValueError('durable effects commit required before HOLD removal')
+  mod=imported(Path(__file__).with_name('release-held.py'),'release_env_install')
+  intent['env_proof']=mod.install_env(self.env_path,self.m['env']['sha256']);self.persist()
   if self.env_path.read_bytes()!=self.normal_raw:raise ValueError('normal environment changed')
   c=json.loads(self.run(['docker','inspect',self.container]))[0]
   if c['Id']!=self.original_container['id'] or c['State']['Running'] or c['Config']['Image']!=self.image:raise ValueError('stopped exact held container required')

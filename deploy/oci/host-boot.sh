@@ -39,13 +39,19 @@ wait_loop() { # $1 description, rest: probe command; LYAM_BOOT_TRIES x 5s
 # Read-only preflight MUST run before HOLD is read: a release may already have
 # atomically removed HOLD while the durable release intent still blocks startup.
 BOOT_GUARD="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/release-boot-guard.py"
-STATE="$(getconf LYAM_QUEUE_STATE)"; STATE="${STATE:-/opt/lyam/deploy-queue/state.json}"
+STATE="$(getconf LYAM_QUEUE_STATE)"
+if [ "$ENV_FILE" != /opt/lyam/lyam.env ]; then
+  [ -n "$STATE" ] && [ -n "$(getconf LYAM_ORDERED_QUEUE)" ] || fail "nonlegacy environment requires explicit queue/state paths"
+fi
+STATE="${STATE:-/opt/lyam/deploy-queue/state.json}"
+PAUSE="$(getconf LYAM_PAUSE_FILE)"; PAUSE="${PAUSE:-/opt/lyam/UPDATE_PAUSED}"
+[ ! -e "$PAUSE" ] || fail "deployment pause forbids unattended boot"
 if [ -f "$BOOT_GUARD" ]; then
-  python3 "$BOOT_GUARD" "$STATE" || fail "release state forbids unattended boot"
+  python3 "$BOOT_GUARD" "$STATE" "$ENV_FILE" || fail "release state forbids unattended boot"
 elif [ -f "$STATE" ]; then
   # Legacy installation has no format4 writer. Still refuse a migrated state
   # rather than starting with a missing newly-required guard.
-  python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(0 if s.get("format") in (1,2,3) and not s.get("release_intent") else 1)' "$STATE" || fail "release boot guard missing"
+  python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(0 if s.get("format") in (1,2,3) and not any(s.get(k) for k in ("release_intent","resume_required","pending","failed","opening_intent","release_finalize_required")) else 1)' "$STATE" || fail "release boot guard missing"
 fi
 
 # Held containers use an inert FIFO restart fence. Never let boot recreate or
