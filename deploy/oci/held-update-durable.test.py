@@ -118,6 +118,25 @@ class D(unittest.TestCase):
  def test_caught_failure_is_report_only(self):
   wd,w=self.start_ready({'FAKE_MODE':'fail'})
   self.assertEqual(self.wait('watchdog-result.json')['action'],'caught-failure-report-only');self.assertFalse(Path(str(self.state)+'.rearmed').exists())
+ def test_stalled_watchdog_after_ready_go_refuses_before_start(self):
+  # Reproduce the category observed in CI without weakening the worker guard.
+  # Parent readiness is not a promise that the watchdog keeps advancing.
+  wd=self.run_unit('watchdog');w=self.run_unit('worker',{'FAKE_MODE':'fail'},capture=True)
+  self.wait('worker-identity.json')
+  deadline=time.monotonic()+20
+  while time.monotonic()<deadline:
+   if (self.f/'WATCH_READY').exists() and (self.f/'heartbeat.json').exists() and du.heartbeat_fresh(self.f,1):break
+   time.sleep(.05)
+  else:self.fail('watchdog never became ready')
+  os.kill(wd.pid,signal.SIGSTOP)
+  try:
+   (self.f/'GO').write_text('1');_,err=w.communicate(timeout=8)
+   self.assertNotEqual(w.returncode,0);self.assertIn(b'watchdog not ready',err)
+   self.assertTrue(self.wait('worker-result.json')['before_start'])
+   self.assertFalse((self.f/'STARTED').exists());self.assertFalse((self.f/'queue-identity.json').exists())
+  finally:os.kill(wd.pid,signal.SIGCONT)
+  self.assertEqual(self.wait('watchdog-result.json')['action'],'failed-before-start-report-only')
+  self.assertFalse((self.f/'rearm-attempt.json').exists());self.assertFalse(Path(str(self.state)+'.rearmed').exists())
  def test_spec_requires_exact_interpreter_and_self(self):
   du.PROTECT=lambda p:None;sp=self.spec;link=self.d/'py';link.symlink_to(PY);sp['fileSHA256'][str(link)]=sp['fileSHA256'][PY];sp['python']=str(link)
   (self.f/'supervision-spec.json').write_text(json.dumps(sp))
