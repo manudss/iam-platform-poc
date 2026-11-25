@@ -15,7 +15,7 @@ def main():
  name='dolt-copy-'+os.urandom(8).hex();server='dolt-server-'+os.urandom(8).hex();out=root/'capture.json';proof={'format':1,'kind':'synthetic-dolt-copy-runner-proof','synthetic_copy_run_completed':False,'production_data_used':False,'held_path_exercised':False,'verifier_exercised':False,'source_version_established':False};destination=Path('/tmp/dolt-copy-runner-proof.json')
  try:
   started=time.monotonic()
-  files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py','dolt-held-capture.py','dolt-source-stage.py']
+  files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py','dolt-held-capture.py','dolt-source-stage.py','dolt-copy-transform.py']
   for file in files:
    p=code/file;shutil.copyfile(repo/'deploy/oci'/file,p);p.chmod(0o700)
   # Real tables, view, procedure, four refs per database. Dirty main is kept.
@@ -102,6 +102,23 @@ def main():
   anchors=lambda env:[{k:row[k] for k in ('database','branch','head','root')} for row in env['dolt']]
   verdict=adapter.evaluate(capture,after,anchors(capture),anchors(after),verifier.verify)
   if not verdict['migration0003_shape_consistent_with_operator_anchor_refs_only'] or verdict['restoration_admissible']:raise ValueError('synthetic migration verdict differs')
+  # Exercise SAME review-only replay function, separate NEW disposable tree.
+  # Synthetic after anchor is self-derived, unlike future E5 original anchor.
+  replay=mod('dolt-copy-transform.py','copy_replay')
+  for filename,value in [('before-envelope.json',capture),('before-refs.json',anchors(capture)),('after-refs.json',anchors(after))]:
+   p=root/filename;p.write_text(json.dumps(value));p.chmod(0o600)
+  ddl_path=root/'exact-image-ddl.sql';ddl_path.write_bytes(ddl.encode());ddl_path.chmod(0o600)
+  binding=lambda p:{'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+  replay_root=Path('/root/dolt-replay-'+os.urandom(8).hex())
+  replay_spec={'format':1,'kind':'reviewed-disposable-copy0003-replay','work':str(work),'work_tree_sha256':tree_hash,'root':str(replay_root),'image_id':image_id,'before':binding(out),'before_refs':binding(root/'before-refs.json'),'after_refs':binding(root/'after-refs.json'),'source':binding(code/'qualification-container.mjs'),'copy_reader':binding(code/'dolt-copy-capture.py'),'held_reader':binding(code/'dolt-held-capture.py'),'adapter':binding(code/'dolt-migration-evidence.py'),'verifier':binding(code/'qualification-dolt-piece-storage-verifier.py'),'ddl':binding(ddl_path),'ddl_sha256':hashlib.sha256(ddl.encode()).hexdigest()}
+  try:
+   replay_result=replay.bounded_execute(replay_spec,m.read_binding)
+   proof['same_replay_controller_completed']=replay_result['completed']
+   proof['same_replay_cleanup_confirmed']=replay_result['cleanup_confirmed']
+   proof['replay_server_measurement']=replay_result.get('server_measurement')
+   proof['replay_client_measurements']=replay_result.get('client_measurements')
+  finally:
+   if replay_root.exists():shutil.rmtree(replay_root)
   proof.update(verifier_exercised=True,synthetic_server_capture_completed=True,isolated_held_helper_exercised=True,synthetic_migration_shape_passed=True,anchors_in_fixture_are_self_derived=True,held_path_exercised=False)
 
  finally:
