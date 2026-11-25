@@ -1,0 +1,32 @@
+name: Floating AI chat UI
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ai-floating-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci --prefix apps/web
+      - name: Floating AI assistant browser regression (synthetic API, real shell and plugin)
+        run: |
+          npm ci --prefix scripts/ai-assistant-ui
+          node scripts/ai-assistant-ui/build.mjs --check
+          npm run build --prefix apps/web
+          node scripts/ai-floating-check.mjs /tmp/ai-floating-shots
+      - name: Floating AI assistant screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-floating-screenshots
+          path: /tmp/ai-floating-shots
+          retention-days: 7
+          if-no-files-found: ignore

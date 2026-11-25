@@ -233,20 +233,6 @@ jobs:
         with: { node-version: 22 }
       - run: npm ci && npm test -- --watch=false
         working-directory: apps/web
-      - name: Floating AI assistant browser regression (synthetic API, real shell and plugin)
-        run: |
-          npm ci --prefix scripts/ai-assistant-ui
-          node scripts/ai-assistant-ui/build.mjs --check
-          npm run build --prefix apps/web
-          node scripts/ai-floating-check.mjs /tmp/ai-floating-shots
-      - name: Floating AI assistant screenshots
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-floating-screenshots
-          path: /tmp/ai-floating-shots
-          retention-days: 7
-          if-no-files-found: ignore
       - name: Demo edge framing policy (only /login?preview=1 may be framed)
         run: node --test demo/frame-policy.test.mjs demo/warm-signin.test.mjs
       - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
