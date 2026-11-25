@@ -19,3 +19,15 @@ Stage a separate protected fixed controller/tool directory, with reviewed hashes
 ## Not complete
 
 This contract is not execution code or approval. Remaining architecture is actual restoration/bus schema-specific comparators, positive independent anchor recovery, fixed direct closed controller, explicit local-TLS transport and fresh epoch qualifier/admission integration. The current preflight remains unconditionally refusing. A network fixture result cannot fill these gaps. User approval to restore functionality is not proof that absent evidence existed, and cannot change what an audit claims.
+
+## Direct execution path now prepared for review
+
+restored-runtime-check.py calls the fixed hash-bound current closed helper postcheck directly (not the nonexistent historical receipt chain), checks actual container/image/revision/HOLD/caps, both gates and exactly three policy SNI names with default CA/hostname validation over explicit loopback connections. It reports LOCAL_SNI_NOT_PUBLIC_ROUTABILITY, historical baseline missing and restoration preservation not verified. This reads container metadata but never starts/stops or changes a gate.
+
+restored-epoch-qualifier.py is a distinct root CLI requiring spec/controller hashes and explicit execute flag. It takes the existing actual journal/update locks, invokes that fixed direct runtime checker before/after, binds qualification.py and qualification-container.mjs source plus auth/Bao files, creates a new current-epoch baseline with explicit LOCAL_TLS_SNI_EPOCH_NOT_PUBLIC transport, then executes authenticated smoke and capture on the already-running held container. Output and evidence names are epoch-specific, never historical before/after impersonation. It never updates the journal or claims restoration admissible.
+
+Expected smoke mutations: OIDC/session handling and append-only decision_audit may add rows. Activation rows must remain exact. Dolt refs/tables, Bao metadata, credential file hashes, PG schema/table/sequence-definition coverage, all non-append tables and migration ledger must remain exact; any unexpected change refuses. Audit additions are counted and capped1000 for this test, but their semantics still need direct validation. q.compare preserves prior audit multisets and monotonic sequences. A fresh same-epoch pass cannot repair the absent historical TLS proof or missing bus attribution. Provider callbacks and public routability are not established by these SNI checks.
+
+Prepared tests cover pure schema validators/refusal, actual FD locks, malformed spec before any capture and fixed path rejection. The direct runtime/epoch CLI has NOT been executed on E5 or a real app. Full positive integration and fault cases remain required before use. There is still NO code path that appends reviewed-restored-epoch to the deployment journal. Do not reinterpret its result as that admission.
+
+The policy relocation allowlist is now exactly network, baoTokenFile and authFile everywhere in the reviewed bridge. No other location expansion is implied. Unknown epoch/admission kind must be refused before any journal write; no legacy reconciler should be asked to accept one.

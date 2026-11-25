@@ -5,7 +5,7 @@ unaccounted policy drift refuses. This module cannot make adoption executable.
 """
 import hashlib,json,re
 STORE_KEYS={'dolt','bao','credentials','postgres','migrationLedger'}
-POLICY_LOCATION_KEYS={'network','pgContainer','baoAddress','baoTokenFile','authFile'}
+POLICY_LOCATION_KEYS={'network','baoTokenFile','authFile'}
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 def policy_bridge(old,new,relocations):

@@ -106,17 +106,17 @@ def closed_runtime(inspect):
     if 'IAM_AUTOMATION_HOLD=1' not in env or 'IAM_DEMO_SEED_MODE=never' not in env or host['RestartPolicy']['Name'] not in ['no','none']:raise ValueError('closed recovery hold/seed/restart mismatch')
     if 'ALL' not in (host.get('CapDrop') or []) or host.get('CapAdd') or host.get('Privileged') or not any(x.startswith('no-new-privileges') for x in host.get('SecurityOpt',[])):raise ValueError('closed recovery capabilities mismatch')
 
-def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding):
+def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding,transport_coverage='UNVERIFIED_CAPTURE_TRANSPORT'):
     global CAPTURE_LOCK_FDS
     if CAPTURE_LOCK_FDS:raise ValueError('nested held baseline forbidden')
     if not isinstance(lock_bindings,dict) or set(lock_bindings)!={'journal','updater'}:raise ValueError('both actual held locks required')
     try:
         CAPTURE_LOCK_FDS=tuple(fd for path,fd in lock_bindings.values())
-        return _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding)
+        return _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding,transport_coverage)
     finally:CAPTURE_LOCK_FDS=()
 
 
-def _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding):
+def _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding,transport_coverage='UNVERIFIED_CAPTURE_TRANSPORT'):
     """Fresh current-epoch baseline only, never a substitute for original preservation.
     Caller supplies the fixed closed-runtime verifier, both actual held locks and
     a new evidence directory. No stop/start, smoke, auth or environment mutation.
@@ -148,7 +148,7 @@ def _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bi
     def capture():
         state=json.loads(cmd(['docker','exec','-i',container,'node','--input-type=module','-e',source,'capture'],json.dumps({**p,'running':True,'baoToken':Path(p['baoTokenFile']).read_text().strip()})))
         ledger=Path(data_dir)/'migrations/journal.json'
-        state.update(migrationLedger=json.loads(ledger.read_text()) if ledger.exists() else None,credentials=credential_hashes(Path(data_dir),p),postgres=postgres(p),transportCoverage='TLS_EXPECTED_ORIGINS',image=image,policyHash=digest(policy_raw))
+        state.update(migrationLedger=json.loads(ledger.read_text()) if ledger.exists() else None,credentials=credential_hashes(Path(data_dir),p),postgres=postgres(p),transportCoverage=transport_coverage,image=image,policyHash=digest(policy_raw))
         return state
     before=capture();after=capture()
     if before!=after or identity()!=first:raise ValueError('held baseline stores or runtime moving')
