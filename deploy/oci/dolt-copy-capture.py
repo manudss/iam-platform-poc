@@ -58,7 +58,11 @@ def execute(spec,reader):
   # Python timeout kills docker CLIENT only. Finally forcibly removes this exact
   # disposable container before returning; no auto-remove obscures its outcome.
   r=subprocess.run(args+[executed,'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=300)
-  if r.returncode:raise ValueError('Dolt copy capture refused')
+  if r.returncode:
+   result['container_exit_code']=r.returncode
+   stages=re.findall(r'^QUALIFICATION_DIAG_V1:(capture-dolt|init)$',r.stderr,re.M)
+   result['capture_stage']=stages[-1] if stages else 'unverified'
+   raise ValueError('Dolt copy capture refused')
   envelope=json.loads(r.stdout)
   if not isinstance(envelope,dict) or set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not False or not envelope['dolt']:raise ValueError('Dolt envelope differs')
   if digest_tree(work)[0]!=h:raise ValueError('read-only work copy changed')

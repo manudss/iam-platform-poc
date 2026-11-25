@@ -2,7 +2,7 @@
 """Operator-only, fixed direct runtime + two real locks, no smoke or service start.
 Captures Dolt twice on existing held server; does not change a gate or journal.
 """
-import contextlib,fcntl,hashlib,importlib.util,json,os,re,signal,subprocess
+import contextlib,fcntl,hashlib,importlib.util,json,os,re,signal,subprocess,secrets
 from pathlib import Path
 
 def load_fixed(binding,name,reader):
@@ -11,7 +11,7 @@ def load_fixed(binding,name,reader):
  s=importlib.util.spec_from_file_location('held_'+name.replace('.','_'),path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
 def execute(spec,bindings,reader):
- if set(spec)!={'format','kind','runtime_controller','runtime','source','out'} or spec['format']!=1 or spec['kind']!='reviewed-held-dolt-only-capture':raise ValueError('exact held capture spec required')
+ if set(spec)!={'format','kind','runtime_controller','runtime','source','out','executed_source_sha256'} or spec['format']!=1 or spec['kind']!='reviewed-held-dolt-only-capture':raise ValueError('exact held capture spec required')
  runtime=load_fixed(spec['runtime_controller'],'restored-runtime-check.py',reader)
  source_path,source=reader(spec['source'])
  if source_path!=Path(__file__).with_name('qualification-container.mjs').absolute():raise ValueError('fixed Dolt source required')
@@ -19,13 +19,26 @@ def execute(spec,bindings,reader):
  if not re.fullmatch(r'/root/dolt-held-evidence-[a-f0-9]{16}\.json',str(out)) or out.exists():raise ValueError('fresh private bounded held output required')
  runtime.locks(bindings);before=runtime.verify(spec['runtime'],bindings)
  executed_source=("const {spawn:epochSpawn}=await import('node:child_process');const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},150000)\",String(process.pid)],{stdio:'ignore'});epochWatch.unref();process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
+ if hashlib.sha256(executed_source.encode()).hexdigest()!=spec['executed_source_sha256']:raise ValueError('held executed source binding differs')
+ # SQL clients run in a NEW bounded cgroup, not in the app's cgroup. Only the
+ # existing held network namespace is shared. No production filesystem mount.
+ observed=subprocess.run(['docker','inspect',spec['runtime']['container']],text=True,capture_output=True,timeout=15)
+ if observed.returncode:raise ValueError('held resource metadata unavailable')
+ identity=json.loads(observed.stdout)[0];image_id=identity['Image']
+ if next(int(l.split()[1]) for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemAvailable:'))<3*1024*1024:raise ValueError('held read requires 3GiB host headroom')
  rows=[]
  for _ in range(2):
-  value=subprocess.run(['docker','exec','-i',spec['runtime']['container'],'node','--input-type=module','-e',executed_source,'dolt-only'],input='{"running":true}',text=True,capture_output=True,timeout=180,pass_fds=tuple(fd for _,fd in bindings.values()))
-  if value.returncode:raise ValueError('held Dolt read refused')
-  envelope=json.loads(value.stdout)
-  if set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not True or not envelope['dolt']:raise ValueError('held Dolt envelope differs')
-  rows.append(envelope)
+  name='dolt-held-reader-'+secrets.token_hex(8)
+  args=['docker','run','--name',name,'--restart','no','--user','0:0','--network','container:'+spec['runtime']['expected_container_id'],'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--entrypoint','node',image_id,'--input-type=module','-e',executed_source,'dolt-only']
+  try:
+   value=subprocess.run(args,input='{"running":true}',text=True,capture_output=True,timeout=180,pass_fds=tuple(fd for _,fd in bindings.values()))
+   if value.returncode:raise ValueError('held isolated Dolt read refused')
+   envelope=json.loads(value.stdout)
+   if set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not True or not envelope['dolt']:raise ValueError('held Dolt envelope differs')
+   rows.append(envelope)
+  finally:
+   cleanup=subprocess.run(['docker','rm','-f',name],text=True,capture_output=True,timeout=20)
+   if cleanup.returncode:raise ValueError('held reader cleanup unverified')
  if rows[0]!=rows[1]:raise ValueError('held Dolt moving between captures')
  if runtime.verify(spec['runtime'],bindings)!=before:raise ValueError('held identity/gates changed')
  runtime.locks(bindings);reader(spec['source']);reader(spec['runtime_controller'])
@@ -45,7 +58,7 @@ def main():
  s=importlib.util.spec_from_file_location('capture_reader',path);r=importlib.util.module_from_spec(s);s.loader.exec_module(r)
  r.read_binding({'path':str(Path(__file__).absolute()),'sha256':a.controller_sha256});_,raw=r.read_binding({'path':a.spec,'sha256':a.spec_sha256});spec=json.loads(raw)
  if not a.execute_reviewed_held_read:raise ValueError('explicit reviewed held read required')
- raise ValueError('held exec resource isolation not qualified: refuse before locks or capture')
+ raise ValueError('isolated held reader remains review-only pending real server fixture')
  def stop(signum,frame):raise TimeoutError('held read global deadline')
  prior={sig:signal.signal(sig,stop) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)};signal.alarm(600)
  try:
