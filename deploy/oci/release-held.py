@@ -28,10 +28,10 @@ def validate_state(s):
 
 
 def preconditions(q, state, manifest, pause, container, observe):
-    if state.get('format') != 3 or state.get('resume_required') is not True or not pause: raise ValueError('resolved paused held state required')
+    if state.get('format') not in (3,5) or state.get('resume_required') is not True or not pause: raise ValueError('resolved paused held state required')
     if any(state.get(k) for k in ('pending','failed','opening_intent','release_intent')): raise ValueError('another operation unresolved')
     last = state['history'][-1]
-    if last.get('mode') != 'ui-open-automation-held' or last.get('automation_held') is not True or state.get('recovery_fence') != last['sha']: raise ValueError('held fence required')
+    if last.get('mode') not in ('ui-open-automation-held','restored-automation-held') or last.get('automation_held') is not True or state.get('recovery_fence') != last['sha']: raise ValueError('held fence required')
     q.checked_manifest(state, manifest, 'reviewed-release-held')
     if not re.fullmatch(r'[A-Za-z0-9._-]{8,64}', str(manifest.get('engagement_id',''))): raise ValueError('release engagement required')
     if set(manifest.get('target',{})) != {'sha','digest'} or any(manifest['target'][k] != last[k] for k in ('sha','digest')): raise ValueError('same-image release only')
@@ -42,7 +42,7 @@ def preconditions(q, state, manifest, pause, container, observe):
 
 
 def release(q, path, manifest, container, host, pause, hook=None):
-    state = q.load(path)
+    state = q.load(path,allow_restored=True)
     target = preconditions(q, state, manifest, Path(pause).is_file(), container, host.observe_held)
     # This MUST establish controllers/boot guard, live identities, exact config,
     # real backlog + isolated-copy evidence, absence of competing workers, gates.

@@ -5,7 +5,7 @@ No application start, pause removal or journal migration. Operator-only install.
 import argparse, fcntl, hashlib, json, os, stat, subprocess
 from pathlib import Path
 
-NAMES={'ordered-queue.py','release-held.py','release-host.py','release-supervision.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs'}
+NAMES={'ordered-queue.py','release-held.py','release-host.py','release-supervision.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py'}
 
 def protected(p):
  p=Path(p)
@@ -18,7 +18,7 @@ def protected(p):
 def install(spec,commit=False):
  root=protected(spec['install_dir']);state=protected(spec['state']);pause=protected(spec['pause']);env=protected(spec['env'])
  raw=state.read_bytes();s=json.loads(raw)
- if s.get('format')!=3 or s.get('resume_required') is not True or s.get('opening_intent') or s.get('pending') or s.get('failed') or s['history'][-1].get('mode')!='ui-open-automation-held':raise ValueError('resolved held format3 state required')
+ if s.get('format') not in (3,5) or s.get('resume_required') is not True or s.get('opening_intent') or s.get('pending') or s.get('failed') or s['history'][-1].get('mode') not in ('ui-open-automation-held','restored-automation-held'):raise ValueError('resolved held format3 state required')
  if stat.S_IMODE(env.stat().st_mode)!=0o600:raise ValueError('environment must already be private')
  if sum(x==b'IAM_AUTOMATION_HOLD=1' for x in env.read_bytes().splitlines())!=1:raise ValueError('persistent HOLD1 required')
  c=json.loads(subprocess.check_output(['docker','inspect',spec['container']],text=True))[0]

@@ -84,7 +84,7 @@ class Host:
   self.target=target;self.container=container;self.image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
   # Bind the complete installed controller set, including host boot and systemd
   # supervision, BEFORE upgrading the journal. An old format3 controller refuses4.
-  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs'}
+  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py'}
   bindings=manifest.get('installed')
   if not isinstance(bindings,list) or {Path(x.get('path','')).name for x in bindings}!=expected:raise ValueError('complete installed release toolchain required')
   if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',container):raise ValueError('bounded container name required')
@@ -158,9 +158,18 @@ class Host:
   # Normal launch arguments are constructed, not taken from free-form manifest.
   self.front=Path(self.env.get('LYAM_FRONT_BARRIER_FILE','/var/lib/lyam-front-gate/MAINTENANCE'))
   self.ops=Path(self.env.get('LYAM_OPS_BARRIER_FILE','/var/lib/lyam-front-gate/OPS-MAINTENANCE'))
-  if self.front==self.ops or any(os.path.lexists(p) for p in [self.front,self.ops]):raise ValueError('both gates must initially be absent and distinct')
+  if self.front==self.ops:raise ValueError('distinct public gates required')
+  self.initial_gates=[]
+  restored=state.get('format')==5
+  if restored:
+   for p in [self.front,self.ops]:
+    spec=next((x for x in manifest.get('closed_gates',[]) if x.get('path')==str(p)),None)
+    checked,raw=read_spec(spec);st=checked.stat()
+    self.initial_gates.append({'path':str(p),'bytes_hex':raw.hex(),'mode':stat.S_IMODE(st.st_mode),'uid':st.st_uid,'gid':st.st_gid})
+   if len(manifest.get('closed_gates',[]))!=2:raise ValueError('exact closed gate bindings required')
+  elif any(os.path.lexists(p) for p in [self.front,self.ops]):raise ValueError('UI-open state requires initially absent gates')
   for p in [self.front,self.ops]:self.opening.protected_parent(p)
-  self.opening.check_origins(self.policy['origins'],200)
+  self.opening.check_origins(self.policy['origins'],503 if restored else 200)
   # Runtime invocation/cgroup proof is supplied by the installed durable
   # supervisor and independently verified, never a mere manifest boolean.
   supervision=manifest.get('supervision')
@@ -215,6 +224,7 @@ class Host:
   if set(c.get('NetworkSettings',{}).get('Networks',{}))!={net}:raise ValueError('exact single network required')
  def expected_state(self):return {'env_path':str(self.env_path),'env_before_sha256':self.m['env']['sha256'],'env_after_sha256':hashlib.sha256(self.normal_raw).hexdigest(),'container':self.original_container,'normal_runtime':self.m['normal_runtime'],'operational_policy_before':self.m['operational_policy_before'],'operational_policy_after_sha256':self.m['normal_policy']['sha256']}
  def plan_gates(self):
+  if getattr(self,'initial_gates',[]):return self.initial_gates
   token=('lyam-reviewed-release:'+self.m['engagement_id']+':'+os.urandom(16).hex()).encode()
   self.gates=[{'path':str(p),'bytes_hex':token.hex(),'mode':0o644,'uid':0,'gid':0} for p in [self.front,self.ops]]
   return self.gates
