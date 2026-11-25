@@ -19,7 +19,7 @@ def main():
   for file in files:
    p=code/file;shutil.copyfile(repo/'deploy/oci'/file,p);p.chmod(0o700)
   # Real tables, view, procedure, four refs per database. Dirty main is kept.
-  seed="""const f=require('fs'),{execFileSync:x}=require('child_process');for(const db of ['iam','iam_meta']){const cwd='/fixture/'+db;f.mkdirSync(cwd);const sql=q=>x('dolt',['sql','-q',q],{cwd});x('dolt',['init','--name','Fixture','--email','fixture@example.invalid'],{cwd});sql('CREATE TABLE fixture_rows (id INT PRIMARY KEY, note LONGTEXT); CREATE TABLE fixture_extra (id INT PRIMARY KEY, n INT); CREATE VIEW fixture_view AS SELECT id FROM fixture_rows; CREATE PROCEDURE fixture_proc() SELECT 1');x('dolt',['sql'],{cwd,input:'INSERT INTO fixture_rows VALUES '+Array.from({length:1024},(_,i)=>"("+i+",'"+'x'.repeat(16384)+"')").join(',')+';'});sql('INSERT INTO fixture_extra VALUES(1,7)');x('dolt',['add','.'],{cwd});x('dolt',['commit','-m','synthetic baseline'],{cwd});for(const branch of ['personal','wf_run_1','wf_run_2'])x('dolt',['branch',branch],{cwd});sql("INSERT INTO fixture_rows VALUES(9999,'dirty synthetic')");}"""
+  seed="""const f=require('fs'),{execFileSync:x}=require('child_process');for(const db of ['iam','iam_meta']){const cwd='/fixture/'+db;f.mkdirSync(cwd);const sql=q=>x('dolt',['sql','-q',q],{cwd});x('dolt',['init','--name','Fixture','--email','fixture@example.invalid'],{cwd});sql('CREATE TABLE fixture_rows (id INT PRIMARY KEY, note LONGTEXT); CREATE TABLE fixture_extra (id INT PRIMARY KEY, n INT); CREATE VIEW fixture_view AS SELECT id FROM fixture_rows; CREATE PROCEDURE fixture_proc() SELECT 1');x('dolt',['sql'],{cwd,input:'INSERT INTO fixture_rows VALUES '+Array.from({length:1024},(_,i)=>"("+i+",'"+'x'.repeat(16384)+"')").join(',')+';'});sql('INSERT INTO fixture_extra VALUES(1,7)');x('dolt',['add','.'],{cwd});x('dolt',['commit','-m','synthetic baseline'],{cwd});for(const branch of ['personal','wf_run_1','wf_run_2'])x('dolt',['branch',branch],{cwd});sql("INSERT INTO fixture_rows VALUES(9999,'dirty synthetic')");sql("INSERT INTO `"+db+"/personal`.fixture_rows VALUES(9998,'dirty nonmain synthetic')");}"""
   run(['docker','run','--rm','--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','64','-v',str(incoming)+':/fixture','--entrypoint','node',IMAGE,'-e',seed])
   # Physical padding separately exercises copy/tmpfs, not SQL query scale.
   with (incoming/'synthetic-padding.bin').open('wb') as f:
@@ -43,6 +43,15 @@ def main():
   raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=8 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
+  def dirty_nonmain_assert(envelope):
+   refs={(r['database'],r['branch']):r for r in envelope['dolt']}
+   for db in ['iam','iam_meta']:
+    r=refs[(db,'personal')];main=refs[(db,'main')]
+    table=next(t for t in r['tables'] if t['name']=='fixture_rows')
+    if table['rows']!=1025 or r['root']==main['root'] or not any(st['table']=='fixture_rows' and st['status']=='modified' and st['staged'] is False for st in r['status']):raise ValueError('dirty nonmain WORKING not observed')
+    if refs[(db,'wf_run_1')]['status'] or next(t for t in refs[(db,'wf_run_1')]['tables'] if t['name']=='fixture_rows')['rows']!=1024:raise ValueError('clean control ref differs')
+   return True
+  proof['dirty_nonmain_offline_observed']=dirty_nonmain_assert(capture)
   proof.update(synthetic_copy_run_completed=True,ref_count=8,capture_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),copy_runner_sha256=hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),capture_source_sha256=spec['source']['sha256'],cleanup_confirmed=True,source_copy_bytes=size)
   # Running=true capture against a REAL disposable Dolt server, no app.
   after_work=root/'after';shutil.copytree(work,after_work)
@@ -81,6 +90,10 @@ def main():
   finally:
    proof['held_helper_measurements']=held_measurements
    proof['server_capture_measurement']=server_monitor.finish()
+  proof['dirty_nonmain_server_observed']=dirty_nonmain_assert(after)
+  cold_refs={(r['database'],r['branch']):r for r in capture['dolt']};live_refs={(r['database'],r['branch']):r for r in after['dolt']}
+  if any(cold_refs[(db,'personal')]!=live_refs[(db,'personal')] for db in ['iam','iam_meta']):raise ValueError('dirty nonmain differs offline vs server')
+  proof['dirty_nonmain_offline_server_equal']=True
   proof['sql_capture_duration_seconds']=time.monotonic()-capture_started
   proof['table_entries_captured']=sum(len(r['tables']) for r in after['dolt'])
   proof['main_fixture_rows']=[{'database':r['database'],'rows':t['rows']} for r in after['dolt'] if r['branch']=='main' for t in r['tables'] if t['name']=='fixture_rows']
