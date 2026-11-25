@@ -26,6 +26,7 @@ import { PluginScreenLoader } from './plugin-screen';
 })
 export class FloatingAssistant {
   private readonly s = inject(Session);
+  private readonly host = inject(ElementRef<HTMLElement>);
   private readonly router = inject(Router);
   private readonly loader = inject(PluginScreenLoader);
   private readonly mount = viewChild<ElementRef<HTMLElement>>('mount');
@@ -123,7 +124,7 @@ export class FloatingAssistant {
     this[kind] = { x: side === 0 ? 8 : side === 1 ? b.x : p.x, y: side === 2 ? 8 : side === 3 ? b.y : p.y };
   }
   private save() { try { localStorage.setItem('iam-chat-positions', JSON.stringify({ launcher: this.launcher, panel: this.panel })); } catch { /* no persistence required */ } }
-  @HostListener('window:resize') resize() { if (typeof window !== 'undefined' && typeof document !== 'undefined') document.documentElement.style.setProperty('--ai-viewport-height', `${window.visualViewport?.height ?? innerHeight}px`); this.clamp('launcher'); this.clamp('panel'); }
+  @HostListener('window:resize') resize() { if (typeof window !== 'undefined' && typeof document !== 'undefined') this.host.nativeElement.style.setProperty('--ai-viewport-height', `${window.visualViewport?.height ?? innerHeight}px`); this.clamp('launcher'); this.clamp('panel'); }
   @HostListener('document:keydown.escape') escape() { if (this.opened()) this.minimize(); }
   private dispose() { this.element?.remove(); this.element = undefined;  }
   ngOnDestroy() { if (typeof window !== 'undefined') { window.visualViewport?.removeEventListener('resize', this.viewportChanged); window.visualViewport?.removeEventListener('scroll', this.viewportChanged); } ++this.request; this.dispose(); }
