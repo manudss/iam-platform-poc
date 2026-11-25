@@ -60,6 +60,20 @@ class Tests(unittest.TestCase):
    with patch.object(subprocess,'run',side_effect=command):scope['cleanup']()
    self.assertTrue(json.loads(out.read_text())['cleanup_complete']);self.assertFalse(root.exists());self.assertTrue(all(0<t<=15 for args,t in calls))
    self.assertEqual({sig:signal.getsignal(sig) for sig in prior},prior)
+ def test_first_signal_shields_postobservation_and_restores_handlers(self):
+  import signal
+  with tempfile.TemporaryDirectory() as d:
+   out=Path(d)/'result';spec={'out':str(out),'image':h.IMAGE,'source_sha':h.SOURCE,'held_id':'a'*64};base={'containers':[],'networks':[],'held_namespace':{},'host_filter_rules':{},'memory_available_kib':2000000};shots=[];prior={sig:signal.getsignal(sig) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
+   class Engine:
+    def execute(self,*a,**kw):os.kill(os.getpid(),signal.SIGTERM)
+   def snapshot(_):
+    shots.append(1)
+    if len(shots)==2:
+     os.kill(os.getpid(),signal.SIGTERM);os.kill(os.getpid(),signal.SIGINT)
+    return base
+   with patch.object(h,'snapshot',side_effect=snapshot):
+    with self.assertRaises(TimeoutError):h.execute_reviewed(spec,Engine())
+   self.assertEqual(len(shots),2);self.assertTrue(json.loads(out.read_text())['production_observation']['unchanged']);self.assertEqual({sig:signal.getsignal(sig) for sig in prior},prior)
  def test_host_resource_flags_are_exact_and_duplicates_refuse(self):
   s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   args=m.host_resource_args(['docker','run','--name','fixture','image'])

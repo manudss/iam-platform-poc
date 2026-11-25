@@ -79,6 +79,7 @@ def snapshot(held_id):
 def execute_reviewed(spec,engine):
  before=snapshot(spec['held_id']);out=Path(spec['out']);error=None
  def interrupted(signum,frame):
+  for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
   signal.alarm(0);raise TimeoutError('host fixture interrupted; owned cleanup required')
  prior={sig:signal.signal(sig,interrupted) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
  signal.alarm(600)
@@ -86,19 +87,22 @@ def execute_reviewed(spec,engine):
  except Exception as e:error=e
  finally:
   signal.alarm(0)
-  for sig,handler in prior.items():signal.signal(sig,handler)
+  for sig in prior:signal.signal(sig,signal.SIG_IGN)
  try:
-  after=snapshot(spec['held_id'])
-  unchanged=all(before[k]==after[k] for k in ('containers','networks','held_namespace','host_filter_rules'))
-  summary={'checked':True,'unchanged':unchanged,'before_sha256':hashlib.sha256(json.dumps(before,sort_keys=True).encode()).hexdigest(),'after_sha256':hashlib.sha256(json.dumps(after,sort_keys=True).encode()).hexdigest(),'memory_before_kib':before['memory_available_kib'],'memory_after_kib':after['memory_available_kib'],'comparisons':{k:before[k]==after[k] for k in ('containers','networks','held_namespace','host_filter_rules')}}
- except Exception:summary={'checked':False,'unchanged':False}
- result=json.loads(out.read_text()) if out.exists() else {'format':1,'result':'refused','app_started':False,'stage':'host-fixture-before-artifact'}
- result['production_observation']=summary
- if not summary['unchanged']:result['result']='refused'
- fd=os.open(out,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
- with os.fdopen(fd,'w') as f:json.dump(result,f,indent=2);f.flush();os.fsync(f.fileno())
- if error:raise error
- if not summary['unchanged']:raise ValueError('production or host namespace changed')
+  try:
+   after=snapshot(spec['held_id'])
+   unchanged=all(before[k]==after[k] for k in ('containers','networks','held_namespace','host_filter_rules'))
+   summary={'checked':True,'unchanged':unchanged,'before_sha256':hashlib.sha256(json.dumps(before,sort_keys=True).encode()).hexdigest(),'after_sha256':hashlib.sha256(json.dumps(after,sort_keys=True).encode()).hexdigest(),'memory_before_kib':before['memory_available_kib'],'memory_after_kib':after['memory_available_kib'],'comparisons':{k:before[k]==after[k] for k in ('containers','networks','held_namespace','host_filter_rules')}}
+  except Exception:summary={'checked':False,'unchanged':False}
+  result=json.loads(out.read_text()) if out.exists() else {'format':1,'result':'refused','app_started':False,'stage':'host-fixture-before-artifact'}
+  result['production_observation']=summary
+  if not summary['unchanged']:result['result']='refused'
+  fd=os.open(out,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+  with os.fdopen(fd,'w') as f:json.dump(result,f,indent=2);f.flush();os.fsync(f.fileno())
+  if error:raise error
+  if not summary['unchanged']:raise ValueError('production or host namespace changed')
+ finally:
+  for sig,handler in prior.items():signal.signal(sig,handler)
 
 
 def main():
