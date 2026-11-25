@@ -46,8 +46,10 @@ export class FloatingAssistant {
       for (const kind of ['launcher', 'panel'] as const) if (Number.isFinite(saved?.[kind]?.x) && Number.isFinite(saved?.[kind]?.y)) this[kind] = saved[kind];
     } catch { /* geometry is optional */ }
     this.resize();
-    window.visualViewport?.addEventListener('resize', this.viewportChanged);
-    window.visualViewport?.addEventListener('scroll', this.viewportChanged);
+    if (typeof window !== 'undefined') {
+      window.visualViewport?.addEventListener('resize', this.viewportChanged);
+      window.visualViewport?.addEventListener('scroll', this.viewportChanged);
+    }
     this.router.events.pipe(takeUntilDestroyed()).subscribe(e => {
       if (e instanceof NavigationEnd && !isPersonalArea(e.urlAfterRedirects) && !this.available()) void this.discover(this.request);
     });
@@ -121,8 +123,8 @@ export class FloatingAssistant {
     this[kind] = { x: side === 0 ? 8 : side === 1 ? b.x : p.x, y: side === 2 ? 8 : side === 3 ? b.y : p.y };
   }
   private save() { try { localStorage.setItem('iam-chat-positions', JSON.stringify({ launcher: this.launcher, panel: this.panel })); } catch { /* no persistence required */ } }
-  @HostListener('window:resize') resize() { if (typeof document !== 'undefined') document.documentElement.style.setProperty('--ai-viewport-height', `${window.visualViewport?.height ?? innerHeight}px`); this.clamp('launcher'); this.clamp('panel'); }
+  @HostListener('window:resize') resize() { if (typeof window !== 'undefined' && typeof document !== 'undefined') document.documentElement.style.setProperty('--ai-viewport-height', `${window.visualViewport?.height ?? innerHeight}px`); this.clamp('launcher'); this.clamp('panel'); }
   @HostListener('document:keydown.escape') escape() { if (this.opened()) this.minimize(); }
   private dispose() { this.element?.remove(); this.element = undefined;  }
-  ngOnDestroy() { window.visualViewport?.removeEventListener('resize', this.viewportChanged); window.visualViewport?.removeEventListener('scroll', this.viewportChanged); ++this.request; this.dispose(); }
+  ngOnDestroy() { if (typeof window !== 'undefined') { window.visualViewport?.removeEventListener('resize', this.viewportChanged); window.visualViewport?.removeEventListener('scroll', this.viewportChanged); } ++this.request; this.dispose(); }
 }
