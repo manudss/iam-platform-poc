@@ -35,6 +35,14 @@ class Tests(unittest.TestCase):
    result=json.loads(out.read_text());self.assertEqual(result['result'],'refused');self.assertFalse(result['production_observation']['comparisons']['containers'])
    with patch.object(h,'memory_available',return_value=500000):
     with self.assertRaisesRegex(ValueError,'pressure'):h.checkpoint()
+ def test_timeout_still_runs_postsnapshot_and_returns_refusal(self):
+  with tempfile.TemporaryDirectory() as d:
+   out=Path(d)/'result.json';spec={'out':str(out),'image':h.IMAGE,'source_sha':h.SOURCE,'held_id':'a'*64};base={'containers':[],'networks':[],'held_namespace':{},'host_filter_rules':{},'memory_available_kib':2000000}
+   class Engine:
+    def execute(self,*a,**kw):raise TimeoutError('fixture timeout')
+   with patch.object(h,'snapshot',return_value=base) as shot,patch.object(h.signal,'alarm'):
+    with self.assertRaises(TimeoutError):h.execute_reviewed(spec,Engine())
+   self.assertEqual(shot.call_count,2);self.assertEqual(json.loads(out.read_text())['result'],'refused')
  def test_host_resource_flags_are_exact_and_duplicates_refuse(self):
   s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   args=m.host_resource_args(['docker','run','--name','fixture','image'])

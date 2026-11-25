@@ -2,7 +2,7 @@
 """Operator-only bounded host fixture. Never invokes production env or stores.
 Not permission to execute. See the reviewed host fixture contract first.
 """
-import argparse,hashlib,importlib.util,ipaddress,json,os,re,shutil,stat,subprocess
+import argparse,hashlib,importlib.util,ipaddress,json,os,re,shutil,stat,subprocess,signal
 from pathlib import Path
 IMAGE='ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904'
 SOURCE='276d32d3162c940d7744eca9432e8b914976539f'
@@ -78,8 +78,15 @@ def snapshot(held_id):
 
 def execute_reviewed(spec,engine):
  before=snapshot(spec['held_id']);out=Path(spec['out']);error=None
+ def interrupted(signum,frame):
+  signal.alarm(0);raise TimeoutError('host fixture interrupted; owned cleanup required')
+ prior={sig:signal.signal(sig,interrupted) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
+ signal.alarm(600)
  try:engine.execute(argparse.Namespace(image=spec['image'],source_sha=spec['source_sha'],out=spec['out']),host_fixture=True,checkpoint=checkpoint)
  except Exception as e:error=e
+ finally:
+  signal.alarm(0)
+  for sig,handler in prior.items():signal.signal(sig,handler)
  try:
   after=snapshot(spec['held_id'])
   unchanged=all(before[k]==after[k] for k in ('containers','networks','held_namespace','host_filter_rules'))
