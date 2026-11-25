@@ -55,10 +55,14 @@ jobs:
       - name: Existing exact image only
         run: docker pull ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904
       - name: Actual copy CLI with synthetic offline Dolt data
-        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/dolt-copy-hosted-fixture.py
+        run: |
+          for attempt in 1 2 3; do
+            sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/dolt-copy-hosted-fixture.py
+            cp /tmp/dolt-copy-runner-proof.json /tmp/dolt-copy-runner-proof-$attempt.json
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dolt-copy-runner-proof
-          path: /tmp/dolt-copy-runner-proof.json
+          path: /tmp/dolt-copy-runner-proof*.json
           if-no-files-found: warn

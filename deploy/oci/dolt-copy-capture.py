@@ -11,7 +11,7 @@ class ResourceMonitor:
  Sampling is observational, not a bound; an early kill can evade peak sampling.
  """
  def __init__(self,name):
-  self.name=name;self.done=threading.Event();self.peak=None;self.samples=0;self.thread=None;self.pids_peak=None;self.pids_events_max=None
+  self.name=name;self.done=threading.Event();self.peak=None;self.samples=0;self.thread=None;self.pids_peak=None;self.pids_events_max=None;self.zombies_peak=None
  def start(self):
   self.thread=threading.Thread(target=self.sample,daemon=True);self.thread.start();return self
  def sample(self):
@@ -34,6 +34,13 @@ class ResourceMonitor:
      self.peak=max(self.peak or 0,n);self.samples+=1
      try:self.pids_peak=max(self.pids_peak or 0,int(path.with_name('pids.peak').read_text().strip()))
      except Exception:pass
+     try:
+      members=path.with_name('cgroup.procs').read_text().split();zombies=0
+      for member in members:
+       status=Path('/proc')/member/'status'
+       if 'State:\tZ' in status.read_text():zombies+=1
+      self.zombies_peak=max(self.zombies_peak or 0,zombies)
+     except Exception:pass
      try:self.pids_events_max=max(self.pids_events_max or 0,int(dict(row.split() for row in path.with_name('pids.events').read_text().splitlines())['max']))
      except Exception:pass
    except Exception:pass
@@ -41,7 +48,7 @@ class ResourceMonitor:
  def finish(self):
   self.done.set()
   if self.thread:self.thread.join(timeout=4)
-  result={'sampled_memory_peak_bytes':self.peak,'samples':self.samples,'sampled_pids_peak':self.pids_peak,'pids_events_max':self.pids_events_max,'measurement_is_upper_bound':False,'docker_state_available':False}
+  result={'sampled_memory_peak_bytes':self.peak,'samples':self.samples,'sampled_pids_peak':self.pids_peak,'sampled_zombie_processes_peak':self.zombies_peak,'pids_events_max':self.pids_events_max,'measurement_is_upper_bound':False,'docker_state_available':False}
   try:
    r=subprocess.run(['docker','inspect',self.name],capture_output=True,text=True,timeout=5)
    state=json.loads(r.stdout)[0]['State']
@@ -103,7 +110,7 @@ def command(spec,source):
  if not re.fullmatch(r'sha256:[a-f0-9]{64}',spec['image_id']):raise ValueError('immutable local image ID required')
  if spec['dolt_version']!='2.6.1':raise ValueError('reviewed calibrated Dolt version required')
  if source.get('path')!=str(Path(__file__).with_name('qualification-container.mjs').absolute()):raise ValueError('fixed capture source required')
- return ['docker','run','-i','--name',spec['container'],'--restart','no','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--oom-score-adj','1000','--user','0:0','--memory','1536m','--memory-swap','1536m','--pids-limit','96','--cpus','0.5','--mount','type=bind,src='+str(work)+',dst=/data/dolt,readonly','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=0700','--workdir','/tmp','--env','HOME=/tmp','--env','GOMAXPROCS=2','--entrypoint','node',spec['image_id'],'--input-type=module','-e']
+ return ['docker','run','--init','-i','--name',spec['container'],'--restart','no','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--oom-score-adj','1000','--user','0:0','--memory','1536m','--memory-swap','1536m','--pids-limit','96','--cpus','0.5','--mount','type=bind,src='+str(work)+',dst=/data/dolt,readonly','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=0700','--workdir','/tmp','--env','HOME=/tmp','--env','GOMAXPROCS=2','--entrypoint','node',spec['image_id'],'--input-type=module','-e']
 
 def executed_source(raw):
  return ("const {readFileSync:epochRead,statfsSync:epochStat}=await import('node:fs');process.on('exit',()=>{try{const peak=epochRead('/sys/fs/cgroup/memory.peak','utf8').trim();const st=epochStat('/tmp');console.error('DOLT_RESOURCE_V1:'+peak+':'+((st.blocks-st.bfree)*st.bsize))}catch{}});"

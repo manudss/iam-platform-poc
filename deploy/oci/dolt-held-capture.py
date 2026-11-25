@@ -20,7 +20,7 @@ def resource_monitor(name):
 
 def capture_once(container_id,image_id,executed,bindings,measurements=None):
   name='dolt-held-reader-'+secrets.token_hex(8)
-  args=['docker','run','-i','--name',name,'--restart','no','--user','0:0','--network','container:'+container_id,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--env','GOMAXPROCS=2','--entrypoint','node',image_id,'--input-type=module','-e',executed,'dolt-only']
+  args=['docker','run','--init','-i','--name',name,'--restart','no','--user','0:0','--network','container:'+container_id,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--env','GOMAXPROCS=2','--entrypoint','node',image_id,'--input-type=module','-e',executed,'dolt-only']
   monitor=resource_monitor(name).start()
   started=__import__('time').monotonic()
   try:
