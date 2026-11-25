@@ -69,7 +69,9 @@ class Tests(unittest.TestCase):
       tests=json.loads(args[-1]);return json.dumps({**{k:not k.startswith(('private','metadata','public_','backend_','frontend_','dns_other')) for k,h,p in tests['tcp']},**{k:True for k,h,expected in tests['dns']}})
      if args[:2] in (['docker','stop'],['docker','rm']):return ''
      raise AssertionError(args[:4])
+    markers=[]
     def marker(proof):
+     markers.append(proof.copy())
      trace.append(['MARKER'])
      if fail_marker:raise ValueError('ambiguous write')
     real_stat=n.os.stat
@@ -78,7 +80,7 @@ class Tests(unittest.TestCase):
       with self.assertRaises(ValueError):n.launch(c,marker)
       self.assertIn(['MARKER'],trace);self.assertEqual(trace[-1],['docker','stop','new-container']);self.assertNotIn(['docker','rm','new-container'],trace)
      else:
-      result=n.launch(c,marker);self.assertEqual(result['namespace_inode'],42)
+      result=n.launch(c,marker);self.assertEqual(result['namespace_inode'],42);self.assertEqual(result,markers[0])
       release=next(i for i,a in enumerate(trace) if a[:4]==['docker','exec','new-container','sh'])
       self.assertLess(trace.index(['MARKER']),release)
  def test_real_lock_proof_absent_unheld_wrong_inode_and_held(self):
