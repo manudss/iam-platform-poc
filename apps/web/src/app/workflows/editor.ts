@@ -182,6 +182,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
             @for(f of mailFields(st);track f.key){<label>{{f.label}} @if(f.required){<b class="req">*</b>}<input [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key]??''" (ngModelChange)="setCfg(nid,f.key,$event)" /><span class="hint">{{f.help}}</span></label>}
             </section>
           }
+          @if(st.type.startsWith('google-sheets-ap-') || st.type.startsWith('jira-ap-')) {<p class="hint">Native Activepieces fields. IDs can be typed directly; JSON fields use the native object shape. Resolution reads the provider through the selected connection, never changes provider data.</p><label>Property to resolve<input name="apProperty" [(ngModel)]="nativeProperty" placeholder="values, sheetId, spreadsheetId" /></label><button class="secondary" (click)="resolveNative(st)">Read property options/schema</button>@if(nativeSchema()){<pre class="hint">{{nativeSchema()}}</pre>}}
           @for (f of actionFields(st.type); track f.key) {
             @switch (f.type) {
             @case ('text') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<textarea rows="3" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)"></textarea>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
@@ -301,6 +302,12 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private connectionEpoch=0;
   private readonly connectionRefresh = effect(() => { this.s.branchEpoch(); const epoch=++this.connectionEpoch;this.connections.set([]); this.realRequest.set(null); void clientOf(this.s).connections().then(r=>{if(epoch===this.connectionEpoch)this.connections.set(r.connections);}).catch(()=>{if(epoch===this.connectionEpoch)this.connections.set([]);}); });
   protected connectionsFor(type:string) { return this.connections().filter(c=>c.provider===managedProvider(type)); }
+  protected nativeProperty='values';
+  protected nativeSchema=signal('');
+  protected async resolveNative(st:NodeState){
+    this.nativeSchema.set('Loading property...');
+    try{const r=await this.s.api.raw<any>('POST',st.type.startsWith('jira-ap-')?'/activepieces-jira-properties':'/activepieces-sheets-properties',{connectionId:st.config['connectionId'],action:st.type,property:this.nativeProperty,config:st.config});this.nativeSchema.set(r.status<400?JSON.stringify(r.data.property,null,2):'Property read failed. Check the selected connection and input IDs.');}catch{this.nativeSchema.set('Property read failed.');}
+  }
   protected actionFields(type:string) { return (this.blockOf(type)?.fields ?? []).filter(f=>(type!=='lyam-send-template-mail'||!['templateKey','templateRevision'].includes(f.key)) && (!managedProvider(type) || !['dryRun','source'].includes(f.key))); }
   protected realConnection(st:NodeState) { return this.connectionsFor(st.type).find(c=>c.id===st.config['connectionId'] && (c.secretConfigured || c.provider==='http')); }
   protected simulate(id:string) { const st=this.state.get(id); if(!st)return; st.config=simulatedAction(st.config);this.refreshNode(id);this.stateVersion.update(v=>v+1); }
@@ -637,7 +644,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     };
     const blk = this.blockOf(type);
     const fieldDefaults = Object.fromEntries((blk?.fields ?? []).filter((f) => f.default !== undefined).map((f) => [f.key, f.default as unknown]));
-    return { ...fieldDefaults, ...defaults[type], ...(managedProvider(type) ? {executionMode:'simulation',realConfirmed:false,connectionId:'',...(type.startsWith('google-sheets-')?{source:'google'}:{})} : {}) };
+    return { ...fieldDefaults, ...defaults[type], ...(managedProvider(type) ? {executionMode:'simulation',realConfirmed:false,connectionId:'',...(type.startsWith('google-sheets-')&&!type.startsWith('google-sheets-ap-')?{source:'google'}:{})} : {}) };
   }
 
   // ---- Drag & drop from the palette ----

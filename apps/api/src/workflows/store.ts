@@ -1,3 +1,4 @@
+import{randomUUID}from'node:crypto';
 import type { WorkflowConnection } from './connections.js';
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { createConnection, Connection } from 'mysql2/promise';
@@ -98,6 +99,42 @@ export class WorkflowStore {
     await this.ready;
     return this.open();
   }
+
+  /** Prepared only by the versioned boot migration, never by a runtime write. */
+  private async pieceTable(c:Connection){await c.query('CREATE TABLE IF NOT EXISTS workflow_piece_state (tenant VARCHAR(64) NOT NULL, scope_id VARCHAR(200) NOT NULL, state_key VARCHAR(200) NOT NULL, value_json LONGTEXT NOT NULL, PRIMARY KEY(tenant,scope_id,state_key))');}
+  async pieceGet(tenant:string,scope:string,key:string):Promise<unknown>{
+    const c=await this.meta();try{const [rows]=await c.query('SELECT value_json FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key=?',[tenant,scope,key]);const r=(rows as {value_json:string}[])[0];return r?JSON.parse(r.value_json):null;}catch(e){if(WorkflowStore.noTable(e))return null;throw e;}finally{await c.end();}
+  }
+  async preparePieceStorage(){const c=await this.meta();try{await this.pieceTable(c);}finally{await c.end();}}
+  async verifyPieceStorage(){const c=await this.meta();try{const[rows]=await c.query('SHOW COLUMNS FROM workflow_piece_state');const got=(rows as any[]).map(x=>x.Field);if(JSON.stringify(got)!==JSON.stringify(['tenant','scope_id','state_key','value_json']))throw Error('Native connector storage schema mismatch');const[indexes]=await c.query('SHOW INDEX FROM workflow_piece_state');const pk=(indexes as any[]).filter(x=>x.Key_name==='PRIMARY').sort((a,b)=>Number(a.Seq_in_index)-Number(b.Seq_in_index));if(JSON.stringify(pk.map(x=>x.Column_name))!==JSON.stringify(['tenant','scope_id','state_key'])||pk.some(x=>Number(x.Non_unique)!==0))throw Error('Native connector storage primary key mismatch');}finally{await c.end();}}
+  async piecePut(tenant:string,scope:string,key:string,value:unknown){
+    const text=JSON.stringify(value);if(text===undefined||text.length>16_000_000)throw new BadRequestException('connector state too large or undefined');
+    const c=await this.meta();try{await c.query('REPLACE INTO workflow_piece_state (tenant,scope_id,state_key,value_json) VALUES (?,?,?,?)',[tenant,scope,key,text]);}finally{await c.end();}
+  }
+  async pieceSubscriptions():Promise<{tenant:string,scope:string,state:unknown}[]>{
+    const c=await this.meta();try{const[rows]=await c.query("SELECT tenant,scope_id,value_json FROM workflow_piece_state WHERE state_key='lyam:subscription'");return (rows as any[]).map(r=>({tenant:r.tenant,scope:r.scope_id,state:JSON.parse(r.value_json)}));}catch(e){if(WorkflowStore.noTable(e))return [];throw e;}finally{await c.end();}
+  }
+  /** Operational status only. Never expose native values, webhook tokens or provider payloads. */
+  async pieceHasTriggerState(tenant:string,scope:string):Promise<boolean>{const c=await this.meta();try{const[rows]=await c.query("SELECT state_key FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key<>'lyam:lock' LIMIT 1",[tenant,scope]);return(rows as any[]).length>0;}finally{await c.end();}}
+  async pieceStatuses(tenant:string):Promise<{scope:string,subscription:unknown,locked:boolean,pending:number,inbox:number}[]>{
+    const c=await this.meta();try{const[rows]=await c.query("SELECT scope_id,state_key,value_json FROM workflow_piece_state WHERE tenant=? AND (scope_id LIKE 'trigger:%' OR scope_id LIKE 'action:%' OR scope_id='inbox-quota') AND (state_key IN ('lyam:subscription','lyam:lock','lyam:pending','lyam:delivery-status') OR state_key LIKE 'lyam:inbox:%')",[tenant]);const result=new Map<string,{scope:string,subscription:unknown,locked:boolean,pending:number,inbox:number}>();for(const r of rows as any[]){const v=JSON.parse(r.value_json),entry=result.get(r.scope_id)??{scope:r.scope_id,subscription:null,locked:false,pending:0,inbox:0};if(r.state_key==='lyam:delivery-status')entry.subscription={status:'review',reason:v.reason==='Inbox storage failed; notification not accepted'?'Inbox storage failed; notification not accepted. Check callback errors and quota, reconcile sheets before restart.':'Native trigger collection failed; notification retained'};if(r.state_key==='lyam:subscription'&&!(entry.subscription as any)?.reason)entry.subscription={key:v.key,status:v.status,lastRenew:v.lastRenew,...(['Trigger configuration changed; preserve prior subscription, cursors and pending events for operator reconciliation','Native trigger retired or changed; preserve subscription and durable state for operator reconciliation'].includes(v.reviewReason)?{reason:v.reviewReason}:{})};if(r.state_key==='lyam:lock')entry.locked=true;if(r.state_key.startsWith('lyam:inbox:'))entry.inbox++;if(r.state_key==='lyam:pending')entry.pending=Array.isArray(v)?v.length:0;result.set(r.scope_id,entry);}return [...result.values()];}catch(e){if(WorkflowStore.noTable(e))return [];throw e;}finally{await c.end();}
+  }
+  /** Coalesced full-refetch inbox, capped per tenant under an autocommitted
+   * durable mutex. A crashed enqueue owner requires operator reconciliation. */
+  async pieceEnqueue(tenant:string,scope:string,value:unknown){
+    const owner=randomUUID();if(!await this.pieceClaim(tenant,'inbox-quota',owner))throw Error('Native notification inbox busy or needs crash reconciliation');
+    try{const c=await this.meta();try{const[existing]=await c.query("SELECT state_key FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key='lyam:inbox:notification'",[tenant,scope]);
+      if(!(existing as any[]).length){const[rows]=await c.query("SELECT COUNT(*) n FROM workflow_piece_state WHERE tenant=? AND state_key='lyam:inbox:notification'",[tenant]);if(Number((rows as any[])[0].n)>=1000)throw Error('Native notification inbox quota reached');}
+      await c.query("REPLACE INTO workflow_piece_state (tenant,scope_id,state_key,value_json) VALUES (?,?,'lyam:inbox:notification',?)",[tenant,scope,JSON.stringify(value)]);
+    }finally{await c.end();}}finally{await this.pieceRelease(tenant,'inbox-quota',owner);}
+  }
+  async prunePieceFiles(now=Date.now()){const c=await this.meta();try{await c.query("DELETE FROM workflow_piece_state WHERE scope_id LIKE 'file:%' AND JSON_EXTRACT(value_json,'$.expiresAt') IS NOT NULL AND CAST(JSON_UNQUOTE(JSON_EXTRACT(value_json,'$.expiresAt')) AS UNSIGNED) < ?",[now]);}catch(e){if(!WorkflowStore.noTable(e))throw e;}finally{await c.end();}}
+  async pieceInbox(tenant:string,scope:string):Promise<{key:string,value:unknown}[]>{const c=await this.meta();try{const[rows]=await c.query("SELECT state_key,value_json FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key LIKE 'lyam:inbox:%' ORDER BY state_key LIMIT 100",[tenant,scope]);return(rows as any[]).map(r=>({key:r.state_key,value:JSON.parse(r.value_json)}));}catch(e){if(WorkflowStore.noTable(e))return [];throw e;}finally{await c.end();}}
+  async pieceDeleteExact(tenant:string,scope:string,key:string,value:unknown){const c=await this.meta();try{await c.query('DELETE FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key=? AND value_json=?',[tenant,scope,key,JSON.stringify(value)]);}finally{await c.end();}}
+  async pieceDelete(tenant:string,scope:string,key:string){const c=await this.meta();try{await c.query('DELETE FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key=?',[tenant,scope,key]);}catch(e){if(!WorkflowStore.noTable(e))throw e;}finally{await c.end();}}
+  /** Durable fail-closed mutex. No expiry: a crashed owner requires operator reconciliation, never an overlapping provider call. */
+  async pieceClaim(tenant:string,scope:string,owner:string){const c=await this.meta();try{let r:any;try{[r]=await c.query("INSERT IGNORE INTO workflow_piece_state (tenant,scope_id,state_key,value_json) VALUES (?,?,'lyam:lock',?)",[tenant,scope,JSON.stringify({owner,at:Date.now()})]);}catch(e){if(WorkflowStore.writeConflict(e))return false;throw e;}return Number(r.affectedRows)===1;}finally{await c.end();}}
+  async pieceRelease(tenant:string,scope:string,owner:string){const c=await this.meta();try{await c.query("DELETE FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key='lyam:lock' AND JSON_UNQUOTE(JSON_EXTRACT(value_json,'$.owner'))=?",[tenant,scope,owner]);}finally{await c.end();}}
 
   /** Initial migration prepares storage before any workflow runner is allowed to start. */
   async prepareMigrationStorage() { const c = await this.meta(); await c.end(); }

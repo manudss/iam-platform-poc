@@ -20,6 +20,15 @@ def cmd(args, input=None):
         global CHILD_STAGE
         matches=DIAGNOSTIC_RE.findall(r.stderr) if args[-1:] in (['smoke'],['capture']) else []
         CHILD_STAGE=matches[-1] if matches and matches[-1] in CHILD_STAGES else None
+        codes=re.findall(r'^DOLT_TRANSFORMATION_REFUSED ([a-z][a-z-]{0,63})$',r.stderr,re.M)
+        allowed={'evidence-missing','evidence-malformed','evidence-duplicate','change-categories','branch-set-changed','target-branch-absent','other-database-or-branch-changed','target-head-changed','no-target-change','schema-objects-changed','working-status-changed','table-already-present','table-set-changed','existing-table-changed','new-table-not-empty','new-table-columns','new-table-keys','new-table-column-attributes','new-table-collation','new-table-primary-key','new-table-indexes','ddl-not-calibrated','new-table-ddl','usage','unreadable-evidence'}
+        for code in codes[-1:]:
+            if code in allowed:print('TRANSFORM_DIAG_V1 '+code,file=sys.stderr)
+        for raw in re.findall(r'^DOLT_STATUS_DIAG_V1 (\{[^\n]{1,400}\})$',r.stderr,re.M)[-1:]:
+            try:
+                v=json.loads(raw)
+                if set(v)=={'before','after'} and all(isinstance(v[k],list) and len(v[k])==20 and all(type(n) is int and 0<=n<=1000000 for n in v[k]) for k in v):print('DOLT_STATUS_DIAG_V1 '+json.dumps(v,separators=(',',':')),file=sys.stderr)
+            except (ValueError,TypeError):pass
         raise ValueError('command failed, private diagnostic inspection required')
     return r.stdout.strip()
 def digest(data):return hashlib.sha256(data).hexdigest()
@@ -151,12 +160,27 @@ def main():
     if changes:
         # Each target digest needs a separate reviewed verifier. It receives hash-only snapshots,
         # and must prove ALL declared transformations, including non-target preservation.
-        verifier=p.get('transformationVerifiers',{}).get(a.image)
-        if not verifier or not Path(verifier).is_file() or not os.access(verifier,os.X_OK):raise ValueError('unexpected preservation changes; no digest-specific reviewed verifier')
-        stage('transformation-verifier');cmd([verifier,str(evidence/'before.json'),str(after_file)])
+        entry=p.get('transformationVerifiers',{}).get(a.image)
+        # Versioned verifier interface. A plain string is the LEGACY interface (exactly: BEFORE AFTER), unchanged for verify-0002-*.
+        # An object {"path":...,"interface":"categories-v1"} additionally receives the exact change categories as a third argument.
+        if isinstance(entry,str):verifier,extra=entry,None
+        elif isinstance(entry,dict) and set(entry)=={'path','interface'} and entry['interface']=='categories-v1' and isinstance(entry['path'],str):verifier,extra=entry['path'],','.join(sorted({c.split(':',1)[0] for c in changes}))
+        else:verifier,extra=None,None
+        if not verifier or not Path(verifier).is_file() or not os.access(verifier,os.X_OK):
+            kinds=sorted({c.split(':',1)[0] for c in changes})
+            print('PRESERVATION_DIAG_V1 '+json.dumps({'categories':kinds},sort_keys=True),file=sys.stderr)
+            raise ValueError('unexpected preservation changes; no digest-specific reviewed verifier')
+        stage('transformation-verifier');cmd([verifier,str(evidence/'before.json'),str(after_file)]+([extra] if extra is not None else []))
     print('ISOLATED LOOPBACK ONLY: preservation/OIDC/journal checks passed, NO public TLS qualification, keep production paused' if a.isolated_loopback_test else 'Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
 if __name__=='__main__':
     try:main()
-    except Exception:
+    except Exception as error:
         print('QUALIFICATION_DIAG_V1:'+STAGE+(('/'+CHILD_STAGE) if CHILD_STAGE else ''),file=sys.stderr)
+        import traceback
+        # Diagnostic enums and source line numbers only. Private messages and subprocess output never leave.
+        frames=traceback.extract_tb(error.__traceback__)
+        lines=[f.lineno for f in frames if Path(f.filename).name=='qualification.py'][-8:]
+        kind=type(error).__name__
+        if kind not in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError'}:kind='Other'
+        print('QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':kind,'sourceLines':lines},sort_keys=True),file=sys.stderr)
         print('Qualification failed or UNKNOWN. Keep maintenance armed and inspect private evidence.',file=sys.stderr);sys.exit(1)

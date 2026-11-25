@@ -24,6 +24,14 @@
         "apps/api/src/migrations/v0002/run.ts": "8ce872c866d2b2b4a497c2961204e6b7a70b858a463214594e8bc727d369484d"
       },
       "checksum": "3fef799dcba07cf71f9cc53b4ba1199850d06cefae4720826b70733fd2256a4f"
+    },
+    {
+      "id": "0003",
+      "name": "Native connector operational state storage",
+      "files": {
+        "apps/api/src/migrations/v0003/run.ts": "086d7645490d63ca64293ec0077e1fcf1ca68d6f8c112dd7c8f71493a0ca3c1f"
+      },
+      "checksum": "74ba7edb45a3364056485939f92e7d50145b2c6bea65de2d87c9bee97d6e1257"
     }
   ]
 }

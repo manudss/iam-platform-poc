@@ -119,3 +119,68 @@ Never treat this public demo token as suitable for production. No Google/Jira cr
 
 Editor additions: block search, duplicate a step (without links), read-only definition JSON,
 and per-step outputs in the run view. Placeholder examples are reference chips, not automatic field insertion.
+
+### Guarded updates using the existing generic cell block
+
+`google-sheets-update` remains the shared component for emails, ticket references,
+status markers such as `OK`, and any other nonempty cell value. It delegates to
+the installed Activepieces Google Sheets `Update Row` action. There is no
+email-specific block or embedded candidate/status rule.
+
+Existing positional and unique-key configurations remain compatible. For controlled
+assisted-demo processing, set `checked=true` on **every** write, including the
+initial email, ticket trace, `cree`, and `badge-fait` markers. Checked mode requires
+a managed Google source. It adds:
+
+- Selection: existing `keyColumn` / `keyValue`, OR up to four flat
+  `matchColumn1..4` / `matchValue1..4` pairs. At least one selector value must
+  be nonempty. All comparisons are exact strings. The selector must identify
+  exactly one row before preconditions are considered.
+- Preconditions: up to four independent `checkColumn1..4` / `checkValue1..4`
+  pairs, compared against the fresh row. A missing value means empty string.
+  A precondition on the target column also accepts the new value, allowing
+  verified same-value continuation without rewriting.
+- `column` and `value`: generic target and nonempty value to write.
+- `requireExpected=true`, `expectedValue`: refuse a target cell different from
+  that expected value or the new value. Expected may be empty. An already-equal
+  cell returns without a second write.
+- `uniqueValue=true`: refuse the new target value in another row of that column,
+  using case-insensitive, trimmed collision comparison.
+- `requiredColumns`: optional additional unique headers, comma separated.
+
+Flat values accept event/step placeholders without parsing interpolated JSON.
+Quotes, backslashes and spaces in source fields remain literal. Do not substitute
+an event field that the poller omitted: an absent optional source field can be
+configured as an explicit empty value instead.
+
+Example workflow configuration, not a built-in rule: match `nom`, `prenom`,
+`departement`, `role`; require `process=OK` and empty `cree`, `ticket`, `badge-fait`;
+write the workflow-calculated address to `email` with `requireExpected=true`,
+empty `expectedValue`, and `uniqueValue=true`. Downstream steps use the returned
+`value`, never the originally empty trigger email. Subsequent updates select
+by this recorded email, change `column`/`value`, and use their own workflow
+preconditions. The block itself knows nothing about these field names.
+
+Checked mode reads twice, requiring unique headers, one matching source and
+unchanged complete source values. A row that moved before the final read is
+resolved again. Only the requested cell is written. Fresh readback verifies the
+same source, headers, complete row, and target value. Returns
+`updated=true, value=<verified value>, written=true`, or `written=false` for an
+already-equal verified target. Simulation has no provider calls and returns
+`updated=false, dryRun=true`. Activepieces uses USER_ENTERED values; clearing a
+cell is not supported here and a formula/calculated result differing from the
+requested literal fails readback rather than claiming literal storage.
+
+This is **not atomic, not a row lock and not compare-and-swap**. Google updates
+remain positional, including a race after the last read. The operator must stop
+sorting/editing until candidate processing finishes. Do not treat the declared
+single-editor demo scope as a technical concurrency guarantee.
+
+Immediately before the checked write the engine saves an external-effect review
+marker, not before readonly validation. A lost response, write failure, readback
+mismatch or crash before saved step completion stops the run for review. Retry
+and error routes cannot bypass the marker. Reconcile provider and downstream
+state before a deliberate recovery. A fresh invocation can recognize an already
+equal value without another write only if selection and preconditions still
+match. This does not authorize adopting an old account/ticket. Legacy unchecked
+updates retain their prior behavior; they do not silently gain these guarantees.

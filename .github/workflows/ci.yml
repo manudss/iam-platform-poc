@@ -257,6 +257,7 @@ jobs:
           python3 deploy/oci/reviewed-ui-held.test.py
           python3 deploy/oci/reviewed-ui-controller.test.py
           python3 deploy/oci/qualification.test.py
+          python3 deploy/oci/qualification-dolt-piece-storage-verifier.test.py
           python3 deploy/oci/closed-recovery-integrity.test.py
           python3 deploy/oci/closed-recovery-helper.test.py
           python3 deploy/oci/closed-launcher.test.py

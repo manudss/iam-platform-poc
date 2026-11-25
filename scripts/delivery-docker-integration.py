@@ -107,7 +107,29 @@ def queue_failure_diagnostic(stderr, state):
     markers=sorted({code for needle,code in vocabulary.items() if needle in stderr})
     # Bound numeric code from queue journal, not a parsed arbitrary external string.
     code=state.get('failed',{}).get('exit')
-    return {'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
+    diag=[]
+    import re
+    for raw in re.findall(r'^QUALIFICATION_DIAG_V1 (\{[^\n]{1,600}\})$',stderr,re.M):
+        try:
+            v=json.loads(raw)
+            if set(v)=={'exceptionType','sourceLines'} and v['exceptionType'] in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError','Other'} and isinstance(v['sourceLines'],list) and len(v['sourceLines'])<=8 and all(type(n) is int and 0<n<1000000 for n in v['sourceLines']):diag.append(v)
+        except (ValueError,TypeError):pass
+    result={'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
+    if diag:result['qualificationDiagnostics']=diag[-4:]
+    allowed={'dolt','bao','credentials','postgres-schema','postgres-tables','postgres-append-preservation','postgres-rows','postgres-sequences','postgres-sequence-rewind'}
+    for raw in re.findall(r'^PRESERVATION_DIAG_V1 (\{[^\n]{1,600}\})$',stderr,re.M):
+        try:
+            v=json.loads(raw)
+            if set(v)=={'categories'} and isinstance(v['categories'],list) and 0<len(v['categories'])<=len(allowed) and all(type(c) is str and c in allowed for c in v['categories']):result['preservationCategories']=sorted(set(v['categories']))
+        except (ValueError,TypeError):pass
+    refused=re.findall(r'^TRANSFORM_DIAG_V1 ([a-z][a-z-]{0,63})$',stderr,re.M)
+    if refused:result['transformationRefusal']=refused[-1]
+    for raw in re.findall(r'^DOLT_STATUS_DIAG_V1 (\{[^\n]{1,400}\})$',stderr,re.M)[-1:]:
+        try:
+            v=json.loads(raw)
+            if set(v)=={'before','after'} and all(isinstance(v[k],list) and len(v[k])==20 and all(type(n) is int and 0<=n<=1000000 for n in v[k]) for k in v):result['doltStatusCounts']=v
+        except (ValueError,TypeError):pass
+    return result
 
 
 def main():
@@ -227,6 +249,11 @@ raise SystemExit(r.returncode)
                   'credentialFiles': ['core-state/credentials.json', 'core-state/iam-poc-account-blocks.json',
                                       'core-state/iam-poc-authn-enrollments.json', 'core-state/iam-poc-password-history.json'],
                   'appendOnlyTables': ['public.activations', 'public.decision_audit'], 'transformationVerifiers': {}}
+        verifier=bindir/'qualification-dolt-piece-storage-verifier.py'
+        if verifier.is_file():
+            if not os.access(verifier,os.X_OK):raise RuntimeError('transformation-verifier-not-executable')
+            policy['transformationVerifiers'][c['image']]={'path':str(verifier),'interface':'categories-v1'}
+            result['transformationVerifier']={'image':c['image'],'sha256':sha(verifier),'scope':'only-empty-piece-storage-table'}
         pol = owned / 'qualification.json'
         pol.write_text(json.dumps(policy))
         pol.chmod(0o600)
@@ -359,7 +386,11 @@ raise SystemExit(r.returncode)
             after=json.loads(after_paths[0].read_text());smoke=json.loads(smoke_paths[0].read_text())
             qualifier=load_module(bindir/'qualification.py','candidate_qualifier')
             changes=qualifier.compare(before,after,policy)
-            if changes:raise RuntimeError('measured-preservation-diff')
+            if changes:
+                declared=policy['transformationVerifiers'].get(c['image'])
+                if not declared or declared.get('interface')!='categories-v1':raise RuntimeError('measured-preservation-diff')
+                run([declared['path'],str(evidence_dir/'before.json'),str(after_paths[0]),','.join(sorted({k.split(':',1)[0] for k in changes}))])
+                result['declaredTransformationVerified']=True
             if not after.get('migrationLedger') or not smoke:raise RuntimeError('missing-ledger-or-smoke-proof')
             if urllib.request.urlopen(origin+'/healthz',timeout=10).status!=200 or (gates/'MAINTENANCE').exists():raise RuntimeError('measured-final-front-not-open')
             result['measurements']={'preservationChanges':changes,'beforeSHA256':sha(evidence_dir/'before.json'),

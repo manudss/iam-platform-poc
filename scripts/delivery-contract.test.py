@@ -124,10 +124,36 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('diag3',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
         self.assertEqual(m.queue_failure_diagnostic('[update] pre-opening qualification failed or UNKNOWN; private detail',{'failed':{'exit':4}}),{'updaterExit':4,'categories':['qualification-before-open-refused']})
+    def test_qualification_diagnostic_is_bounded(self):
+        spec=importlib.util.spec_from_file_location('diag4',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        good='QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':'ValueError','sourceLines':[12,124]})
+        bad='QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':'private-token','sourceLines':[12]})
+        r=m.queue_failure_diagnostic(good+'\n'+bad,{})
+        self.assertEqual(r['qualificationDiagnostics'],[{'exceptionType':'ValueError','sourceLines':[12,124]}])
+        self.assertNotIn('private',json.dumps(r))
+        pres='PRESERVATION_DIAG_V1 '+json.dumps({'categories':['dolt','postgres-rows']})
+        self.assertEqual(m.queue_failure_diagnostic(pres,{})['preservationCategories'],['dolt','postgres-rows'])
+        badpres='PRESERVATION_DIAG_V1 '+json.dumps({'categories':['postgres-rows:private']})
+        self.assertNotIn('preservationCategories',m.queue_failure_diagnostic(badpres,{}))
+    def test_transform_refusal_is_bounded(self):
+        spec=importlib.util.spec_from_file_location('diag5',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        self.assertEqual(m.queue_failure_diagnostic('TRANSFORM_DIAG_V1 schema-objects-changed',{})['transformationRefusal'],'schema-objects-changed')
+        self.assertNotIn('transformationRefusal',m.queue_failure_diagnostic('TRANSFORM_DIAG_V1 private value /path',{}))
+        d={'before':[0]*20,'after':[0]*20};d['after'][0]=1
+        self.assertEqual(m.queue_failure_diagnostic('DOLT_STATUS_DIAG_V1 '+json.dumps(d),{})['doltStatusCounts'],d)
+        for bad in [{'before':[0]*19,'after':[0]*20},{'before':['secret']*20,'after':[0]*20},{'before':[True]*20,'after':[0]*20},{'before':[-1]*20,'after':[0]*20}]:
+            self.assertNotIn('doltStatusCounts',m.queue_failure_diagnostic('DOLT_STATUS_DIAG_V1 '+json.dumps(bad),{}))
+    def test_transformation_metadata_is_not_an_extra_contract_check(self):
+        source=Path(__file__).with_name('delivery-docker-integration.py').read_text()
+        self.assertNotIn("result['checks']['declaredTransformationVerified']",source)
+        self.assertIn("result['declaredTransformationVerified']=True",source)
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
         self.assertEqual(m.queue_failure_diagnostic('unknown private text',{}),{'updaterExit':None,'categories':['unclassified']})
+
 
 if __name__ == '__main__':
     unittest.main()

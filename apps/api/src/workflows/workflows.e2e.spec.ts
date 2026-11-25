@@ -159,17 +159,20 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 21);
+    assert.equal(routes.length, 22);
+    assert.ok(routes.includes('connectorFile'), 'native export download stays behind the same controller guard chain');
   });
 
   it('tenant binding and PII minimization on the REAL API (guard chain + response projections)', async () => {
     // (a) The bearer token's tenant is bound to the route :tenant: a token of another tenant is refused
     // on every surface, EVEN with a valid admin token (the identity binding wins over the capability).
     const foreign = 'other-tenant:demo-alice';
-    for (const [m, p, b] of [['GET', '/workflows', undefined], ['POST', '/workflows', { name: 'x', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }], edges: [] } }], ['GET', '/workflow-tasks?scope=all', undefined], ['GET', '/versioning/tables', undefined], ['GET', '/versioning/tables/identities?ref=main', undefined]] as const)
+    for (const [m, p, b] of [['GET', '/workflow-runs/foreign/connector-files/file', undefined], ['GET', '/workflows', undefined], ['POST', '/workflows', { name: 'x', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }], edges: [] } }], ['GET', '/workflow-tasks?scope=all', undefined], ['GET', '/versioning/tables', undefined], ['GET', '/versioning/tables/identities?ref=main', undefined]] as const)
       assert.equal((await call(m, p, b as object | undefined, { token: foreign })).status, 403, `${m} ${p} must refuse another tenant's token`);
     // (b) No token at all is refused; a malformed one too.
     assert.equal((await call('GET', '/workflows', undefined, { token: null })).status, 401);
+    assert.equal((await call('GET', '/workflow-runs/foreign/connector-files/file', undefined, { token: null })).status, 401);
+    assert.equal((await call('GET', '/workflow-runs/foreign/connector-files/file', undefined, { admin: null })).status, 403);
     assert.equal((await call('GET', '/workflows', undefined, { token: 'garbage' })).status, 401);
     // (c) The raw table browser returns FULL rows (every column a schema adds): it stays behind the
     // admin capability - unlike the workflow/IGA surfaces which project minimal fields (asserted below

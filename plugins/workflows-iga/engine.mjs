@@ -434,7 +434,9 @@ export function createWorkflowEngine(deps) {
     const outputs = {};
     for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
     const priorInput = (await store.step(run.id, node.id))?.input;
-    const resolved = substituteStepOutputs(node, outputs);
+    // runStep already resolved this node exactly once. A second pass would
+    // reinterpret event/provider strings as executable placeholders.
+    const resolved = node;
     // Derived from the stored graph, never a user-editable bypass flag. A generic create/temporary
     // workflow without the badge correlation is not made dependent on mail configuration.
     const graphNodes = run.graph?.nodes ?? [];
@@ -549,6 +551,7 @@ export function createWorkflowEngine(deps) {
     } : undefined;
     const ctx = {
       tenant: run.tenant,
+      pieceRuntime: deps.pieceRuntime ? deps.pieceRuntime(run.tenant,run.definition_id,run.id,node.id) : undefined,
       secrets,
       users: deps.users ? { firstAccess: (id, ref) => deps.users.firstAccess(run.tenant, id, ref), emailOf: (id, ref) => deps.users.emailOf(run.tenant, id, ref) } : undefined,
       setTemporaryPassword: deps.users ? async ({ id, password, hours }) => { const branch = await ensureBranch(run, say); return deps.users.setTemporary(run.tenant, { runId: run.id, branch, id, password, hours }); } : undefined,
@@ -631,7 +634,7 @@ export function createWorkflowEngine(deps) {
     }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
     if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
-    if (managed && !simulation && ((node.type === 'jira-update-issue' && output?.updated !== true) || (node.type === 'google-sheets-create-column' && output?.created !== true) || (node.type === 'jira-create-issue' && !output?.key) || (node.type === 'jira-add-comment' && !output?.commentId) || (node.type === 'jira-transition-issue' && output?.transitioned !== true) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
+    if (managed && !simulation && ((/^(google-sheets|jira)-ap-/.test(node.type) && output?.confirmed !== true) || (node.type === 'google-sheets-update' && resolved.config.checked && output?.updated !== true) || (node.type === 'jira-update-issue' && output?.updated !== true) || (node.type === 'google-sheets-create-column' && output?.created !== true) || (node.type === 'jira-create-issue' && !output?.key) || (node.type === 'jira-add-comment' && !output?.commentId) || (node.type === 'jira-transition-issue' && output?.transitioned !== true) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
     if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
 
     if (output !== undefined && output !== null && typeof output !== 'object') return { value: String(output) };
