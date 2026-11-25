@@ -1,0 +1,40 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "ai-assistant",
+  "version": "1.0.0",
+  "name": "AI assistant",
+  "publisher": "iam-platform",
+  "kinds": [
+    "connector"
+  ],
+  "provides": [],
+  "description": "The chat assistant: model providers (a local model and external OpenAI-compatible or Anthropic models added by an administrator), the safe agent loop (tool allowlist, confirmation of changes, bounded steps, tool output treated as untrusted data) and the rules for model endpoints and keys. The assistant acts only through the MCP tool surface, as a branch-confined session: it can prepare changes, never publish them.",
+  "hooks": [],
+  "settings": [],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "screens": [
+    {
+      "id": "chat",
+      "title": "AI assistant",
+      "area": "admin",
+      "render": "component",
+      "component": "screens/chat.mjs"
+    }
+  ],
+  "menu": [
+    {
+      "id": "ai-assistant",
+      "title": "AI assistant",
+      "area": "admin",
+      "group": "Extensions",
+      "icon": "\u2726",
+      "order": 20,
+      "path": "/screens/ai-assistant/chat"
+    }
+  ]
+}

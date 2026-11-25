@@ -53,6 +53,7 @@ jobs:
           python3 deploy/oci/held-update.test.py
           python3 deploy/oci/held-update-durable.test.py
           python3 scripts/held-update-progress.test.py
+          python3 scripts/held-update-diagnostic.test.py
           python3 scripts/held-update-verdict.test.py
           python3 deploy/oci/ordered-queue.test.py
           node --test deploy/oci/update.test.mjs

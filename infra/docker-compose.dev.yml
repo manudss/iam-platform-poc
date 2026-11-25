@@ -103,7 +103,7 @@ services:
       - ../:/repo
       - dev-web-node-modules:/repo/apps/web/node_modules
       - dev-web-angular-cache:/repo/apps/web/.angular
-      - dev-npm-cache:/root/.npm
+      - dev-web-npm-cache:/root/.npm
     ports: ["127.0.0.1:4200:4200"]
     depends_on: [app]
 
@@ -116,4 +116,5 @@ volumes:
   dev-web-node-modules: {}
   dev-web-angular-cache: {}
   dev-npm-cache: {}
+  dev-web-npm-cache: {}
   dev-api-state: {}

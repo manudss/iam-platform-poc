@@ -19,9 +19,11 @@ import { McpController, McpSessionsController, McpUpstreamsController, McpGrants
 import { McpUpstreamService } from './mcp/upstream.service.js';
 import { McpGrantsService } from './mcp/grants.service.js';
 import { McpSessionService } from './mcp/session.service.js';
+import { AiController } from './ai/ai.controller.js';
+import { AiStoreService } from './ai/ai-store.service.js';
 import { CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService } from './policies/policy-studio.js';
 
-@Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController, McpUpstreamsController, McpGrantsController, PolicyStudioController], providers: [AuditService, McpSessionService, McpUpstreamService, McpGrantsService, PolicyStudioService, { provide: POLICY_SOURCE, useClass: CorePolicySource }] })
+@Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController, McpUpstreamsController, McpGrantsController, AiController, PolicyStudioController], providers: [AuditService, McpSessionService, McpUpstreamService, McpGrantsService, AiStoreService, PolicyStudioService, { provide: POLICY_SOURCE, useClass: CorePolicySource }] })
 export class AppModule {
   /** SSO events (sign-in allowed, refused, tokens issued) go to the decision audit: who, which application, when. No claim values, no tokens. */
   constructor(events: ApplicationBus, audit: AuditService) {

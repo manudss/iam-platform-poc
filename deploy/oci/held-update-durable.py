@@ -189,6 +189,16 @@ def launcher_commands(folder,engagement,python,selfpath,poll=5):
  return out
 
 def worker(folder,spec,poll=5):
+ # Python exceptions only: SIGKILL/OOM before STARTED cannot publish this result.
+ # Without a result the watchdog stays pre-go-await; retained unit evidence is a separate concern.
+ try:return _worker(folder,spec,poll)
+ except Exception:
+  # A refused launch is terminal evidence, not permission to start or rearm.
+  # Do not overwrite a post-STARTED outcome: a child may still be alive there.
+  if not (Path(folder)/'STARTED').exists():atomic(Path(folder)/'worker-result.json',{'exit':1,'at':time.time(),'before_start':True})
+  raise
+
+def _worker(folder,spec,poll=5):
  folder=Path(folder)
  if REQUIRE_UNITS:await_units(folder,'worker',spec)   # before identity/heartbeat use/GO
  atomic(folder/'worker-identity.json',identity(os.getpid()))
@@ -227,7 +237,9 @@ def final_audit_ok(folder,spec,state):
 def decision(folder,spec,state):
  """Distinct categories; first match wins. Only interrupted-rearm-permitted can lead to the single rearm call."""
  folder=Path(folder)
- if not (folder/'STARTED').exists():return 'pre-go-await'          # no completed/exit before this engagement started
+ if not (folder/'STARTED').exists():
+  if (folder/'worker-result.json').exists():return 'failed-before-start-report-only'
+  return 'pre-go-await'          # no completed/exit before this engagement started
  i=state.get('opening_intent');phase=str((i or {}).get('phase',''))
  if (folder/'worker-result.json').exists():
   rc=read(folder/'worker-result.json')['exit']

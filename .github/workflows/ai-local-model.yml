@@ -1,0 +1,72 @@
+name: ai-local-model
+# Real local model proof for the AI assistant (not a required check): Ollama + a small tool-calling model.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['plugins/ai-assistant/**', 'scripts/ai-local-model-smoke.mjs', 'scripts/ai-assistant-ui/**', 'apps/api/src/ai/**', '.github/workflows/ai-local-model.yml']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install and start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > /tmp/ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/version && break; sleep 2; done
+      - name: Pull the model
+        run: ollama pull qwen2.5:3b
+      - name: Plugin dependencies and signature
+        run: |
+          (cd apps/api && npm ci)
+          npm ci && node scripts/plugin-deps.mjs
+          node scripts/plugin-dev-setup.mjs
+      - name: Screen bundle is up to date
+        run: (cd scripts/ai-assistant-ui && npm ci && npm run check)
+      - name: Real model through the AI SDK chat turn and a real MCP server
+        run: IAM_AI_LOCAL_URL=http://127.0.0.1:11434/v1 IAM_AI_LOCAL_MODEL=qwen2.5:3b node scripts/ai-local-model-smoke.mjs
+      - name: Ollama log
+        if: ${{ !cancelled() }}
+        run: tail -n 40 /tmp/ollama.log || true
+  e2e-real-model:
+    # Real Ollama model -> real API -> real MCP tools on a real Dolt branch -> confirmation / refusal (ai.e2e.spec.ts, real-model test).
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AI_E2E_REQUIRE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cargo build -p iam-core --locked
+        working-directory: core
+      - name: Dolt and NATS binaries
+        run: |
+          mkdir -p /tmp/svc && cd /tmp/svc
+          gh release download v2.6.1 -R dolthub/dolt -p 'dolt-linux-amd64.tar.gz' -D /tmp/svc --clobber
+          gh release download v2.15.2 -R nats-io/nats-server -p 'nats-server-v2.15.2-linux-amd64.tar.gz' -D /tmp/svc --clobber
+          mkdir dolt nats
+          tar xzf dolt-linux-amd64.tar.gz -C dolt; tar xzf nats-server-*.tar.gz -C nats
+          echo "DOLT_BIN=$(find /tmp/svc/dolt -name dolt -type f | head -1)" >> $GITHUB_ENV
+          echo "NATS_SERVER_BIN=$(find /tmp/svc/nats -name nats-server -type f | head -1)" >> $GITHUB_ENV
+      - name: Install and start Ollama, pull the model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > /tmp/ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/version && break; sleep 2; done
+          ollama pull qwen2.5:3b
+      - run: node scripts/plugin-dev-setup.mjs
+      - run: npm ci
+        working-directory: apps/api
+      - run: npm ci && node scripts/plugin-deps.mjs
+      - run: npm run build
+        working-directory: apps/api
+      - name: Real model through the real API and MCP tools
+        working-directory: apps/api
+        run: IAM_AI_REAL_MODEL_URL=http://127.0.0.1:11434/v1 IAM_AI_REAL_MODEL=qwen2.5:3b node --test dist/ai/ai.e2e.spec.js
