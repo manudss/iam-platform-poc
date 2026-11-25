@@ -9,13 +9,14 @@ from pathlib import Path
 
 STAGE='init'
 CHILD_STAGE=None
+CAPTURE_LOCK_FDS=()
 DIAGNOSTIC_RE=re.compile(r'^QUALIFICATION_DIAG_V1:([a-z][a-z0-9-]{0,47})$',re.M)
 CHILD_STAGES={'capture-dolt','capture-bao','smoke-hold','smoke-health','smoke-workflows-before','smoke-auth-input','smoke-oidc-form','smoke-oidc-login','smoke-oidc-token','smoke-oidc-session','smoke-activations','smoke-activations-parse','smoke-activations-validation','smoke-negative-redirect','smoke-workflows-after','smoke-ledger','init'}
 def stage(value):
     global STAGE,CHILD_STAGE
     STAGE=value;CHILD_STAGE=None
 def cmd(args, input=None):
-    r=subprocess.run(args,input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+    r=subprocess.run(args,input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180,pass_fds=CAPTURE_LOCK_FDS)
     if r.returncode:
         global CHILD_STAGE
         matches=DIAGNOSTIC_RE.findall(r.stderr) if args[-1:] in (['smoke'],['capture']) else []
@@ -105,7 +106,17 @@ def closed_runtime(inspect):
     if 'IAM_AUTOMATION_HOLD=1' not in env or 'IAM_DEMO_SEED_MODE=never' not in env or host['RestartPolicy']['Name'] not in ['no','none']:raise ValueError('closed recovery hold/seed/restart mismatch')
     if 'ALL' not in (host.get('CapDrop') or []) or host.get('CapAdd') or host.get('Privileged') or not any(x.startswith('no-new-privileges') for x in host.get('SecurityOpt',[])):raise ValueError('closed recovery capabilities mismatch')
 
-def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed):
+def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding):
+    global CAPTURE_LOCK_FDS
+    if CAPTURE_LOCK_FDS:raise ValueError('nested held baseline forbidden')
+    if not isinstance(lock_bindings,dict) or set(lock_bindings)!={'journal','updater'}:raise ValueError('both actual held locks required')
+    try:
+        CAPTURE_LOCK_FDS=tuple(fd for path,fd in lock_bindings.values())
+        return _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding)
+    finally:CAPTURE_LOCK_FDS=()
+
+
+def _held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed,capture_binding):
     """Fresh current-epoch baseline only, never a substitute for original preservation.
     Caller supplies the fixed closed-runtime verifier, both actual held locks and
     a new evidence directory. No stop/start, smoke, auth or environment mutation.
@@ -129,7 +140,11 @@ def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bin
         x=json.loads(cmd(['docker','inspect',container]))[0];closed_runtime(x)
         if x['Config']['Image']!=image or x['State'].get('Running') is not True or not x.get('Id'):raise ValueError('held baseline exact running image required')
         return {k:x[k] for k in ('Id','RestartCount')}
-    first=identity();source=Path(__file__).with_name('qualification-container.mjs').read_text()
+    source_path=Path(__file__).with_name('qualification-container.mjs').absolute()
+    if not isinstance(capture_binding,dict) or set(capture_binding)!={'path','sha256'} or capture_binding['path']!=str(source_path):raise ValueError('fixed capture source binding required')
+    source_raw=source_path.read_bytes()
+    if digest(source_raw)!=capture_binding['sha256']:raise ValueError('capture source changed')
+    first=identity();source=source_raw.decode()
     def capture():
         state=json.loads(cmd(['docker','exec','-i',container,'node','--input-type=module','-e',source,'capture'],json.dumps({**p,'running':True,'baoToken':Path(p['baoTokenFile']).read_text().strip()})))
         ledger=Path(data_dir)/'migrations/journal.json'
@@ -138,10 +153,12 @@ def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bin
     before=capture();after=capture()
     if before!=after or identity()!=first:raise ValueError('held baseline stores or runtime moving')
     prove_closed();locks()
+    if source_path.read_bytes()!=source_raw:raise ValueError('capture source changed')
     if Path(policy_path).read_bytes()!=policy_raw:raise ValueError('held baseline policy changed')
     evidence.mkdir(mode=0o700,parents=False,exist_ok=False)
-    private_json(evidence/'before.json',before)
-    proof={'kind':'held-running-current-epoch','container':first,'policyHash':digest(policy_raw),'beforeSHA256':digest((evidence/'before.json').read_bytes()),'originalPreservationReplaced':False,'smokeExecuted':False,'requiresSeparateOriginalPreservationBridge':True}
+    before.update(kind='held-running-baseline',epoch='postrotation-current',originalPreservationReplaced=False)
+    private_json(evidence/'held-running-baseline.json',before)
+    proof={'kind':'held-running-current-epoch','container':first,'policyHash':digest(policy_raw),'beforeSHA256':digest((evidence/'held-running-baseline.json').read_bytes()),'originalPreservationReplaced':False,'smokeExecuted':False,'requiresSeparateOriginalPreservationBridge':True}
     private_json(evidence/'baseline-proof.json',proof)
     return proof
 

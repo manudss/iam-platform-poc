@@ -3,22 +3,24 @@
 The app NEVER starts: marker callback refuses FIFO release after all probes.
 No production stores, env, credentials, accounts or host connection.
 """
-import argparse,ast,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time
+import argparse,ast,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time,secrets
 from pathlib import Path
 
 def run(args):
  p=subprocess.run(args,text=True,capture_output=True,timeout=240)
  if p.returncode:raise ValueError('fixture command failed')
  return p.stdout.strip()
-def main():
- p=argparse.ArgumentParser();p.add_argument('--image',required=True);p.add_argument('--source-sha',required=True);p.add_argument('--out',required=True);a=p.parse_args()
- if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted':raise ValueError('disposable hosted root runner required')
- if Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('production marker present')
+def execute(a,host_fixture=False):
+ if os.geteuid()!=0:raise ValueError('root fixture required')
+ if not host_fixture:
+  if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted':raise ValueError('disposable hosted root runner required')
+  if Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('production marker present')
  out=Path(a.out);out.parent.mkdir(parents=True,exist_ok=True)
- root=Path(tempfile.mkdtemp(prefix='normal-fixture-',dir='/root'));root.chmod(0o700);prefix='normal-ci-'+str(os.getpid());created=[];networks=[];stage='pull';result={'format':1,'result':'refused','app_started':False,'stage':stage}
+ root=Path(tempfile.mkdtemp(prefix='normal-fixture-',dir='/root'));root.chmod(0o700);prefix=('normal-host-' if host_fixture else 'normal-ci-')+secrets.token_hex(8);created=[];networks=[];stage='pull';result={'format':1,'result':'refused','app_started':False,'stage':stage}
  spec=importlib.util.spec_from_file_location('normal',Path(__file__).resolve().parents[1]/'deploy/oci/normal-runtime.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n)
  try:
-  run(['docker','pull',a.image]);image=json.loads(run(['docker','image','inspect',a.image]))[0]
+  if not host_fixture:run(['docker','pull',a.image])
+  image=json.loads(run(['docker','image','inspect',a.image]))[0]
   ids={};stage='networks'
   for role,subnet in [('backend','172.29.0.0/24'),('frontend','172.30.0.0/24')]:
    name=prefix+'-'+role;args=['docker','network','create','--driver','bridge','--subnet',subnet,'--gateway',subnet.rsplit('.',1)[0]+'.1']
@@ -27,7 +29,7 @@ def main():
   peers={};stage='fake-companions'
   for role,ip,port in [('pg','172.29.0.10',5432),('bao','172.29.0.11',8200)]:
    name=prefix+'-'+role;code="require('net').createServer(s=>s.end()).listen("+str(port)+",'0.0.0.0')"
-   cid=run(['docker','run','-d','--name',name,'--restart','no','--network',prefix+'-backend','--ip',ip,'--network-alias',role,'--entrypoint','node',a.image,'-e',code]);created.append(cid);peers[role]={'name':name,'id':cid,'ip':ip}
+   cid=run(['docker','run','-d',*(['--memory','96m','--memory-swap','96m','--pids-limit','64','--cpus','0.25'] if host_fixture else []),'--name',name,'--restart','no','--network',prefix+'-backend','--ip',ip,'--network-alias',role,'--entrypoint','node',a.image,'-e',code]);created.append(cid);peers[role]={'name':name,'id':cid,'ip':ip}
   stage='fake-companion-readiness'
   for role,port in [('pg',5432),('bao',8200)]:
    for attempt in range(30):
@@ -47,6 +49,7 @@ def main():
    command_count[0]+=1
    result['launcher_command_count']=command_count[0]
    result['launcher_command_kind']=next((v for v in ('docker','nsenter') if args[0]==v),'other')
+   if host_fixture and args[:2]==['docker','run']:args=args[:2]+['--memory','256m','--memory-swap','256m','--pids-limit','128','--cpus','0.5']+args[2:]
    try:return original_call(args,pass_fds=pass_fds)
    except Exception:
     result['command_failed']=True
@@ -78,6 +81,9 @@ def main():
    if name.startswith(prefix+'-'):run(['docker','rm','-f',name])
   for network in reversed(networks):run(['docker','network','rm',network])
   shutil.rmtree(root)
+def main():
+ p=argparse.ArgumentParser();p.add_argument('--image',required=True);p.add_argument('--source-sha',required=True);p.add_argument('--out',required=True)
+ execute(p.parse_args())
 if __name__=='__main__':
  try:main()
  except Exception:

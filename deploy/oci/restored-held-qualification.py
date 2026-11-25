@@ -16,6 +16,7 @@ def execute(q,manifest,container,target,lock_fds):
  if opening.get('qualifier',{}).get('path')!=str(qualifier):raise ValueError('fixed installed qualifier required')
  c.read_spec(opening['qualifier']);before_path,before_raw=c.read_spec(opening['before']);policy_path,policy_raw=c.read_spec(opening['policy'])
  before=json.loads(before_raw)
+ if before.get('kind')=='held-running-baseline' or before.get('epoch'):raise ValueError('current epoch cannot replace original preservation baseline')
  if before.get('policyHash')!=hashlib.sha256(policy_raw).hexdigest():raise ValueError('baseline policy differs')
  if before_path.name!='before.json':raise ValueError('exact existing preservation baseline required')
  evidence=before_path.parent
