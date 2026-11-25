@@ -38,16 +38,33 @@ class D(unittest.TestCase):
    if p.poll() is None:p.kill()
    p.wait(timeout=10)
   self.t.cleanup()
- def run_unit(self,mode,env=None):
+ def run_unit(self,mode,env=None,delay=0,capture=False):
   # tests run as non-root: bypass only the root-ancestry check through an import-time hook wrapper
-  code="import sys,importlib.util;s=importlib.util.spec_from_file_location('du',%r);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);m.PROTECT=lambda p:None;m.REQUIRE_UNITS=False;sys.exit(m.main(['%s','--folder',%r,'--poll','1']))"%(str(SELF),mode,str(self.f))
-  p=subprocess.Popen([sys.executable,'-c',code],env={**os.environ,**(env or {})});self.procs.append(p);return p
+  code="import sys,importlib.util,time;time.sleep(%r);s=importlib.util.spec_from_file_location('du',%r);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);m.PROTECT=lambda p:None;m.REQUIRE_UNITS=False;sys.exit(m.main(['%s','--folder',%r,'--poll','1']))"%(delay,str(SELF),mode,str(self.f))
+  p=subprocess.Popen([sys.executable,'-c',code],env={**os.environ,**(env or {})},stderr=subprocess.PIPE if capture else None);self.procs.append(p);return p
  def wait(self,name,t=20):
   e=time.time()+t
   while time.time()<e:
    if (self.f/name).exists():return json.loads((self.f/name).read_text())
    time.sleep(.1)
   self.fail('timeout '+name)
+ def start_ready(self,env=None,delay=.5):
+  # Model slow watchdog scheduling explicitly; worker identity alone is not readiness.
+  wd=self.run_unit('watchdog',delay=delay);w=self.run_unit('worker',env)
+  self.wait('worker-identity.json')
+  deadline=time.monotonic()+20
+  while time.monotonic()<deadline:
+   self.assertIsNone(wd.poll(),'watchdog exited before GO');self.assertIsNone(w.poll(),'worker exited before GO')
+   if (self.f/'WATCH_READY').exists() and (self.f/'heartbeat.json').exists() and du.heartbeat_fresh(self.f,1):
+    (self.f/'GO').write_text('1');return wd,w
+   time.sleep(.05)
+  self.fail('watchdog readiness did not advance before GO')
+ def test_worker_identity_alone_refuses_early_go(self):
+  # Deterministically reproduce the failed fixture ordering with the real guarded worker.
+  w=self.run_unit('worker',{'FAKE_MODE':'ok'},capture=True);self.wait('worker-identity.json')
+  self.assertFalse((self.f/'WATCH_READY').exists());(self.f/'GO').write_text('1')
+  _,err=w.communicate(timeout=5);self.assertNotEqual(w.returncode,0);self.assertIn(b'watchdog not ready',err)
+  self.assertFalse((self.f/'queue-identity.json').exists());self.assertFalse((self.f/'STARTED').exists())
  def test_state_without_intent_before_go_does_not_complete(self):
   w=self.run_unit('watchdog');time.sleep(2.5);self.assertIsNone(w.poll(),'watchdog exits before GO on a null-intent state')
   self.assertFalse((self.f/'watchdog-result.json').exists());self.assertTrue((self.f/'WATCH_READY').exists())
@@ -73,10 +90,10 @@ class D(unittest.TestCase):
   self.assertEqual(du.state_of(me),'alive');self.assertEqual(du.state_of({**me,'boot_id':'x'}),'unknown')
   self.assertEqual(du.state_of({**me,'starttime':str(int(me['starttime'])+1)}),'unknown');self.assertEqual(du.state_of({'pid':1}),'unknown')
  def test_success_end_to_end(self):
-  wd=self.run_unit('watchdog');w=self.run_unit('worker',{'FAKE_MODE':'ok'});self.wait('worker-identity.json');(self.f/'GO').write_text('1')
+  wd,w=self.start_ready({'FAKE_MODE':'ok'},delay=2)
   self.assertEqual(self.wait('worker-result.json')['exit'],0);r=self.wait('watchdog-result.json');self.assertEqual(r['action'],'completed')
  def test_sigkill_queue_after_intent_gives_one_rearm_never_a_second(self):
-  wd=self.run_unit('watchdog');w=self.run_unit('worker',{'FAKE_MODE':'hang'});self.wait('worker-identity.json');(self.f/'GO').write_text('1')
+  wd,w=self.start_ready({'FAKE_MODE':'hang'})
   qi=self.wait('queue-identity.json');e=time.time()+10
   while time.time()<e and 'closed-step-0' not in self.state.read_text():time.sleep(.1)
   e=time.time()+15
@@ -86,7 +103,7 @@ class D(unittest.TestCase):
   self.assertEqual(Path(str(self.state)+'.rearmed').read_text(),'x',"exactly one rearm");self.assertTrue((self.f/'rearm-attempt.json').exists())
   ev=[json.loads(l)['action'] for l in (self.f/'watchdog-events.jsonl').read_text().splitlines()];self.assertIn('observe-live-queue',ev)
  def test_caught_failure_is_report_only(self):
-  wd=self.run_unit('watchdog');w=self.run_unit('worker',{'FAKE_MODE':'fail'});self.wait('worker-identity.json');(self.f/'GO').write_text('1')
+  wd,w=self.start_ready({'FAKE_MODE':'fail'})
   self.assertEqual(self.wait('watchdog-result.json')['action'],'caught-failure-report-only');self.assertFalse(Path(str(self.state)+'.rearmed').exists())
  def test_spec_requires_exact_interpreter_and_self(self):
   du.PROTECT=lambda p:None;sp=self.spec;link=self.d/'py';link.symlink_to(PY);sp['fileSHA256'][str(link)]=sp['fileSHA256'][PY];sp['python']=str(link)
