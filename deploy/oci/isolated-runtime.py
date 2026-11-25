@@ -46,6 +46,7 @@ def validate(c):
  r=c['resources']
  if not isinstance(r,dict) or set(r)!={'memory_bytes','pids','nano_cpus'} or type(r['memory_bytes']) is not int or not 512*1024**2<=r['memory_bytes']<=8*1024**3 or type(r['pids']) is not int or not 64<=r['pids']<=1024 or type(r['nano_cpus']) is not int or not 100000000<=r['nano_cpus']<=2000000000:raise ValueError('explicit bounded resource profile required')
  if not re.fullmatch('ghcr.io/manudss/iam-platform-poc@sha256:[a-f0-9]{64}',c['image']) or not re.fullmatch('sha256:[a-f0-9]{64}',c['image_id']):raise ValueError('immutable image binding required')
+ if c['kind']=='isolated-copy' and not str(Path(c['data_dir'])).startswith('/opt/lyam-qualification/copies/'):raise ValueError('copy data root must be dedicated and fixed')
  if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,63}',c['container']):raise ValueError('bounded container name required')
  if type(c['port']) is not int or not 1024<=c['port']<=65535:raise ValueError('explicit unprivileged loopback port required')
  if c['backend']['id']==c['frontend']['id'] or c['backend']['name']==c['frontend']['name']:raise ValueError('two distinct networks required')
@@ -101,7 +102,9 @@ def identity(c,cid,pid,ns):
  if x.get('Image')!=c['image_id'] or cfg.get('Image')!=c['image'] or cfg.get('Entrypoint')!=['sh'] or cfg.get('Cmd')!=['-c',GUARD]:raise ValueError('exact FIFO image command differs')
  if set(nets)!={c['backend']['name'],c['frontend']['name']} or any(nets[c[r]['name']].get('NetworkID')!=c[r]['id'] for r in ('backend','frontend')):raise ValueError('app network differs')
  for k,want in {'RestartPolicy':{'Name':'no','MaximumRetryCount':0},'CapDrop':['ALL'],'PortBindings':{'8080/tcp':[{'HostIp':'127.0.0.1','HostPort':str(c['port'])}]},'Dns':c['dns_upstreams'],'Memory':c['resources']['memory_bytes'],'MemorySwap':c['resources']['memory_bytes'],'PidsLimit':c['resources']['pids'],'NanoCpus':c['resources']['nano_cpus'],'Sysctls':{'net.ipv6.conf.all.disable_ipv6':'1','net.ipv6.conf.default.disable_ipv6':'1'}}.items():
-  if hc.get(k)!=want:raise ValueError('runtime security or network option differs')
+  got=hc.get(k)
+  if k=='Dns' and c['kind']=='isolated-copy' and got is None:got=[]
+  if got!=want:raise ValueError('runtime security or network option differs')
  if hc.get('Privileged') or hc.get('CapAdd') or hc.get('ExtraHosts') or not any(v in ('no-new-privileges','no-new-privileges:true') for v in hc.get('SecurityOpt') or []):raise ValueError('runtime powers differ')
  mounts=x.get('Mounts',[])
  if len(mounts)!=1 or mounts[0].get('Source')!=c['data_dir'] or mounts[0].get('Destination')!='/data' or not mounts[0].get('RW') or mounts[0].get('Type')!='bind':raise ValueError('exact data mount required')

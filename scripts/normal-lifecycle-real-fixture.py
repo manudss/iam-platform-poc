@@ -13,7 +13,9 @@ def run(args,input=None,timeout=300):
 def main():
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable runner only')
  isolated=os.environ.get('LYAM_SYNTHETIC_ISOLATED_COPY')=='1'
- repo=Path(__file__).resolve().parents[1];root=Path('/root/normal-real-'+secrets.token_hex(8));root.mkdir(mode=0o700);prefix=root.name;owned=[];nets=[];result={'kind':'synthetic-three-store-normal-lifecycle','production_data_used':False,'passed':False,'stage':'setup','same_image_twice':True,'update_shell_exercised':False,'queue_exercised':False,'boot_exercised':False}
+ repo=Path(__file__).resolve().parents[1];root=Path(('/opt/lyam-qualification/copies/' if isolated else '/root/')+'normal-real-'+secrets.token_hex(8));
+ if isolated:root.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+ root.mkdir(mode=0o700);prefix=root.name;owned=[];nets=[];result={'kind':'synthetic-three-store-normal-lifecycle','production_data_used':False,'passed':False,'stage':'setup','same_image_twice':True,'update_shell_exercised':False,'queue_exercised':False,'boot_exercised':False}
  def docker(*args):return run(['docker',*args])
  def wait(name,port,path):
   for _ in range(100):
