@@ -100,8 +100,10 @@ def main():
    checker.chmod(0o700)
    settings={'LYAM_CONTAINER':app,'LYAM_DATA_DIR':str(data),'LYAM_BACKUP_DIR':str(backup),'LYAM_PORT':'18088','LYAM_LOCK_FILE':str(lock),'LYAM_PAUSE_FILE':str(root/'PAUSE'),'LYAM_FRONT_BARRIER_FILE':str(gate),'LYAM_NORMAL_RUNTIME':str(profile),'LYAM_NORMAL_RUNTIME_SHA256':hashlib.sha256(profile.read_bytes()).hexdigest(),'LYAM_NORMAL_LIFECYCLE_SHA256':hashlib.sha256((code/'normal-lifecycle.py').read_bytes()).hexdigest(),'LYAM_NORMAL_LAUNCHER_SHA256':hashlib.sha256((code/'normal-runtime.py').read_bytes()).hexdigest(),'LYAM_POST_UPDATE_CHECK':str(checker),'LYAM_HEALTH_TIMEOUT':'120'}
    values=dict(line.split('=',1) for line in env.read_text().splitlines());values.update(settings);values['IAM_PUBLIC_ORIGIN']='http://127.0.0.1:18089';env.write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
+   shim=root/'fixture-bin';shim.mkdir(mode=0o700);docker_cli=shutil.which('docker')
+   shim_docker=shim/'docker';shim_docker.write_text("#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\nif a[:1]==['run']:a=['run','--memory','2048m','--memory-swap','2048m','--pids-limit','256','--cpus','2']+a[1:]\nos.execv("+repr(docker_cli)+",['docker']+a)\n");shim_docker.chmod(0o700)
    try:
-    process=subprocess.run(['sh',str(code/'update.sh'),'--image',IMAGE,'--env-file',str(env),'--require-qualification'],capture_output=True,text=True,timeout=700)
+    process=subprocess.run(['sh',str(code/'update.sh'),'--image',IMAGE,'--env-file',str(env),'--require-qualification'],capture_output=True,text=True,timeout=700,env={**os.environ,'PATH':str(shim)+':'+os.environ['PATH']})
     result['updater_exit']=process.returncode
     if process.returncode:raise ValueError('actual updater shell refused')
     if gate.exists():raise ValueError('fixture front not reopened')
@@ -118,6 +120,12 @@ def main():
   result.update(passed=True,stage='completed',attempts=attempts,pg_fixture_rows=2,bao_real=True,dolt_real=True,limits='fixture app2GiB/PID256/CPU2,PG512MiB,Bao256MiB',limitation='Same exact image lifecycle; optional updater shell uses fixture checker, no full qualification/queue/new-SHA/boot proof; Bao dev not durable restart proof.')
  finally:
   failures=[]
+  # A failed updater may already have renamed the old app. Collect only this
+  # random fixture prefix before cleanup, including ambiguous failed attempts.
+  try:
+   existing=docker('ps','-a','--format','{{.Names}}').splitlines()
+   owned.extend(name for name in existing if name.startswith(prefix+'-') and name not in owned)
+  except Exception:failures.append('enumeration')
   for name in reversed(owned):
    p=subprocess.run(['docker','rm','-f',name],capture_output=True,timeout=20)
    if p.returncode and subprocess.run(['docker','inspect',name],capture_output=True,timeout=5).returncode==0:failures.append('container')
