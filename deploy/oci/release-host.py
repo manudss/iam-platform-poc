@@ -84,7 +84,7 @@ class Host:
   self.target=target;self.container=container;self.image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
   # Bind the complete installed controller set, including host boot and systemd
   # supervision, BEFORE upgrading the journal. An old format3 controller refuses4.
-  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py','restored-held-qualification.py'}
+  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py','restored-held-qualification.py','normal-runtime.py'}
   bindings=manifest.get('installed')
   if not isinstance(bindings,list) or {Path(x.get('path','')).name for x in bindings}!=expected:raise ValueError('complete installed release toolchain required')
   if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',container):raise ValueError('bounded container name required')
@@ -103,8 +103,10 @@ class Host:
   paths=imported(Path(__file__).with_name('release-paths.py'),'release_operational_paths')
   paths.verify_operational(self.env,str(self.env_path),manifest['state_path'])
   normal_path,normal_raw=read_spec(manifest['normal_runtime']);self.normal_config=json.loads(normal_raw)
-  if type(self.normal_config.get('port')) is not str:raise ValueError('runtime port must be a string')
-  if self.normal_config != {'image':self.image,'container':container,'port':self.env.get('LYAM_PORT','8080'),'network':self.env.get('LYAM_DOCKER_NETWORK',''),'data_dir':self.env.get('LYAM_DATA_DIR','/opt/lyam/data'),'restart':'no','cap_drop':['ALL'],'security_opt':['no-new-privileges:true'],'seed':'never'}:raise ValueError('exact normal runtime config required')
+  normal=imported(Path(__file__).with_name('normal-runtime.py'),'release_normal_contract')
+  normal.validate(self.normal_config)
+  if self.normal_config['image']!=self.image or self.normal_config['source_sha']!=target['sha'] or self.normal_config['container']!=container or self.normal_config['data_dir']!=self.env['LYAM_DATA_DIR']:raise ValueError('normal runtime binding differs')
+  if self.normal_config['env']!={'path':str(self.env_path),'sha256':hashlib.sha256(self.normal_raw).hexdigest()}:raise ValueError('normal env output binding differs')
   if self.env.get('LYAM_LOCK_FILE','/opt/lyam/.update.lock')!=manifest.get('update_lock_path'):raise ValueError('configured updater lock binding required')
   if self.env.get('LYAM_CONTAINER','lyam')!=container or self.env.get('IAM_DEMO_SEED_MODE')!='never':raise ValueError('container/seed setting differs')
   self.pause=Path(self.env.get('LYAM_PAUSE_FILE','/opt/lyam/UPDATE_PAUSED'))
@@ -272,9 +274,21 @@ class Host:
   if c['Id']!=self.original_container['id'] or c['State']['Running'] or c['Config']['Image']!=self.image:raise ValueError('stopped exact held container required')
   # Remove only the stopped, previously observed container. No volume deletion.
   self.run(['docker','rm',self.container])
-  args=['docker','run','-d','--name',self.container,'--restart','no','--cap-drop','ALL','--security-opt','no-new-privileges:true','-p','127.0.0.1:'+self.env.get('LYAM_PORT','8080')+':8080','-v',self.env.get('LYAM_DATA_DIR','/opt/lyam/data')+':/data','--env-file',str(self.env_path),'-e','IAM_DEMO_SEED_MODE=never']
-  if self.env.get('LYAM_DOCKER_NETWORK'):args+=['--network',self.env['LYAM_DOCKER_NETWORK']]
-  args+=[self.image];self.run(args)
+  runtime_path,raw=read_spec(self.m['normal_runtime'])
+  cfg=json.loads(raw)
+  if cfg['image']!=self.image or cfg['container']!=self.container or cfg['env']!={'path':str(self.env_path),'sha256':hashlib.sha256(self.normal_raw).hexdigest()}:raise ValueError('exact normal launcher binding differs')
+  normal=imported(Path(__file__).with_name('normal-runtime.py'),'release_normal_runtime')
+  normal.LOCK_FDS=(self.lock_fd,)
+  def effects(proof):
+   intent['effects_released']=True;intent['phase']='effects-released';intent['normal_launch']=proof
+   intent['events'].append({'phase':'effects-released','at':time.time()});self.persist()
+  self.normal_launch=normal.launch(cfg,effects)
+  intent['normal_launch']=self.normal_launch;self.persist()
+ def verify_normal_namespace(self,intent):
+  normal=imported(Path(__file__).with_name('normal-runtime.py'),'release_normal_postcheck')
+  normal.LOCK_FDS=(self.lock_fd,)
+  cfg=json.loads(read_spec(self.m['normal_runtime'])[1])
+  return normal.postcheck(cfg,intent['normal_launch'])
  def verify_normal(self,intent):
   deadline=time.monotonic()+420
   code="const fs=require('fs');const lines=fs.readFileSync('/data/api.log','utf8').split('\\n').filter(l=>l.includes('automation hold: '));const m=/automation hold: (\\{[^\\n]+\\})/.exec(lines.at(-1)||'');const x=m&&JSON.parse(m[1]);if('IAM_AUTOMATION_HOLD' in process.env||!x||x.held!==false||x.settingPresent!==false)process.exit(1);Promise.all([fetch('http://127.0.0.1:3000/health'),fetch('http://127.0.0.1:8081/health')]).then(rs=>process.exit(rs.every(r=>r.ok)?0:1)).catch(()=>process.exit(1))"
@@ -285,11 +299,12 @@ class Host:
     time.sleep(2)
   c=json.loads(self.run(['docker','inspect',self.container]))[0]
   if c['HostConfig']['RestartPolicy']['Name']!='no' or c['RestartCount']!=0 or c['HostConfig'].get('Privileged') or c['HostConfig'].get('CapAdd') or set(c['HostConfig'].get('CapDrop') or [])!={'ALL'}:raise ValueError('normal runtime security differs')
-  self.verify_config(c,self.normal_raw)
+  self.verify_normal_namespace(intent)
   observation=self.q.observe_running(self.container,self.target)
   self.run(self.qualify_args('after',str(self.env_path)))
   return {**observation,'held':False,'settingPresent':False}
  def open_access(self,intent):
+  self.verify_normal_namespace(intent)
   self.opening.check_origins(self.policy['origins'],503)
   for g in intent['gates']:
    p=Path(g['path']);st=p.lstat()

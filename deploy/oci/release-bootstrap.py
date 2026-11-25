@@ -5,7 +5,7 @@ No application start, pause removal or journal migration. Operator-only install.
 import argparse, fcntl, hashlib, json, os, stat, subprocess
 from pathlib import Path
 
-NAMES={'ordered-queue.py','release-held.py','release-host.py','release-supervision.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py','restored-held-qualification.py'}
+NAMES={'ordered-queue.py','release-held.py','release-host.py','release-supervision.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py','restored-held-qualification.py','normal-runtime.py'}
 
 def protected(p):
  p=Path(p)

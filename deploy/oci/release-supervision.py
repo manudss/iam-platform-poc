@@ -6,7 +6,7 @@ one rearm-release-held call, no open/retry/restart/kill). The spec carries hashe
 authority: the operator's GO file is the only start signal, and nothing here opens or lifts anything."""
 import argparse,fcntl,hashlib,json,os,re,subprocess,sys,time
 from pathlib import Path
-HELD=('prepared','closing','env-installing','closed','env-installed','normal-start-committed','normal-verified','opening')
+HELD=('prepared','closing','env-installing','closed','env-installed','normal-start-committed','effects-released','normal-verified','opening')
 PROTECT=None  # tests replace; production requires root-owned, non-writable ancestry
 
 def atomic(path,value):

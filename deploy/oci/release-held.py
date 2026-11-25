@@ -5,7 +5,7 @@ The host adapter is a separately hash-bound installed controller, never user cod
 import copy, datetime, hashlib, json, os, re, stat
 from pathlib import Path
 
-PHASES = ('prepared', 'closing', 'env-installing', 'closed', 'env-installed', 'normal-start-committed', 'normal-verified', 'opening', 'failed-closed', 'failed-access-unknown')
+PHASES = ('prepared', 'closing', 'env-installing', 'closed', 'env-installed', 'normal-start-committed', 'effects-released', 'normal-verified', 'opening', 'failed-closed', 'failed-access-unknown')
 
 def validate_state(s):
     if s.get('format') != 4: return
@@ -48,7 +48,7 @@ def release(q, path, manifest, container, host, pause, hook=None):
     # real backlog + isolated-copy evidence, absence of competing workers, gates.
     host.preflight(state, manifest, container, target)
     original = q.fingerprint(state)
-    intent = {'phase':'prepared','queue':q.queue_identity(),'manifest':copy.deepcopy(manifest),'container':container,'target':target,'prior_fingerprint':original,'gates':host.plan_gates(),'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expected':host.expected_state() if hasattr(host,'expected_state') else {},'normal_start_committed':False,'events':[]}
+    intent = {'phase':'prepared','queue':q.queue_identity(),'manifest':copy.deepcopy(manifest),'container':container,'target':target,'prior_fingerprint':original,'gates':host.plan_gates(),'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expected':host.expected_state() if hasattr(host,'expected_state') else {},'normal_start_committed':False,'effects_released':False,'events':[]}
     state.update(format=4, delivery_mode='release-pending', release_intent=intent)
     def persist(phase):
         intent['phase']=phase;intent['events'].append({'phase':phase,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}); q.atomic(path,state)
