@@ -44,9 +44,9 @@ def main():
    raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
   except Exception:
    # TEMPORARY synthetic-only diagnosis, never a qualification capture.
-   debug=(code/'qualification-container.mjs').read_text().replace("}catch(error){const known=","}catch(error){console.error(String(error?.message));const known=")
+   debug=(code/'qualification-container.mjs').read_text().replace("}catch(error){const known=","}catch(error){console.error(String(error?.message));console.error(String(error?.stdout));console.error(String(error?.stderr));const known=")
    diagnostic=subprocess.run(['docker','run','--rm','-i','--network','none','--read-only','--cap-drop','ALL','--memory','1536m','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824','--env','HOME=/tmp','-v',str(work)+':/data/dolt:ro','--entrypoint','node',image_id,'--input-type=module','-e',debug,'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=120)
-   print('SYNTHETIC_DIAGNOSTIC_NOT_PROOF '+diagnostic.stderr[-5000:])
+   print('SYNTHETIC_DIAGNOSTIC_NOT_PROOF '+str(diagnostic.returncode)+' stderr '+diagnostic.stderr[-5000:]+' stdout '+diagnostic.stdout[-1000:])
    raise
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=8 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
