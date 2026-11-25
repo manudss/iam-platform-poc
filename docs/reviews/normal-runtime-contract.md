@@ -47,3 +47,10 @@ prepare() now performs read-only topology, file and image validation before the 
 OCI host DNS was observed as 169.254.169.254. The draft normal profile therefore requires explicit public --dns upstreams (one or two global IPv4 addresses), exact TCP/UDP53 rules only for them, and keeps metadata80/443 rejected. 1.1.1.1 and 9.9.9.9 are the proposed tested-fixture values. Real Docker DNS forwarding must pass before any normal app initialization. This is not yet a successful claim. Added tests for private172/private192, alternate resolver denial and 192.88.99/24 exclusion.
 
 The first Docker workflow uses GitHub-hosted ubuntu only, exact existing81aeb image, fresh prefix-owned two networks, fake TCP PG/Bao, empty /data and seednever. It refuses effects in the callback after actual namespace probes, so app startup is never permitted. Output is a bounded stage/verdict, not raw logs or env. This tests network plumbing only, not a three-store rehearsal. It will be triggered through the draft PR and must complete before further host testing.
+
+
+## Preserved held runtime and real-run checkpoint
+
+Release now durably records the original stopped container ID and quarantine name, then renames it instead of removing it. A second prepare or later namespace refusal therefore leaves that stopped held container available for operator review. No automatic restart, rename-back or deletion occurs. A retained container is not a data snapshot: shared /data may change after app effects, so it must never be treated as an automatic rollback.
+
+Actual disposable run reached the real launcher after anonymous GHCR pull, network creation and fake-companion readiness, then refused. This is not yet qualified. The fixture exports only fixed controller refusal text and command family/count, never raw commands, stdout, stderr or environment. Exit1 propagates to the job. Subsequent runs are used to diagnose real Docker behavior, not to weaken guards.
