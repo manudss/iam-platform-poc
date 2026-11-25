@@ -71,7 +71,8 @@ class Tests(unittest.TestCase):
     def marker(proof):
      trace.append(['MARKER'])
      if fail_marker:raise ValueError('ambiguous write')
-    with patch.object(n,'protected',return_value=(Path(d)/'env',raw)),patch.object(n,'topology'),patch.object(n,'call',side_effect=call),patch.object(n,'inspect',return_value=info),patch.object(n,'identity',return_value=info),patch.object(n.os,'stat',return_value=type('Stat',(),{'st_ino':42})()):
+    real_stat=n.os.stat
+    with patch.object(n,'protected',return_value=(Path(d)/'env',raw)),patch.object(n,'topology'),patch.object(n,'call',side_effect=call),patch.object(n,'inspect',return_value=info),patch.object(n,'identity',return_value=info),patch.object(n.os,'stat',side_effect=lambda path,*a,**kw:type('Stat',(),{'st_ino':42})() if str(path).startswith('/proc/') else real_stat(path,*a,**kw)):
      if fail_marker:
       with self.assertRaises(ValueError):n.launch(c,marker)
       self.assertIn(['MARKER'],trace);self.assertEqual(trace[-1],['docker','stop','new-container']);self.assertNotIn(['docker','rm','new-container'],trace)

@@ -72,7 +72,7 @@ def verify_held_queue_refusals(qmodule,root,bindir,guarded_state,plan,wrapper):
     if held_status.returncode==0 or 'deployment queue blocked or paused' not in held_status.stderr:raise RuntimeError('held-status-not-refused')
     if attempted or held.read_bytes()!=held_original:raise RuntimeError('held-queue-mutated')
     unsupported=root/'unsupported-queue.json'
-    unsupported.write_text(json.dumps({**guarded_state,'format':4}))
+    unsupported.write_text(json.dumps({**guarded_state,'format':99}))
     try:qmodule.load(unsupported)
     except ValueError as error:
         if str(error)!='uninitialized or corrupt deployment history':raise

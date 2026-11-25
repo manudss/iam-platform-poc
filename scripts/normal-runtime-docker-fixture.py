@@ -3,7 +3,7 @@
 The app NEVER starts: marker callback refuses FIFO release after all probes.
 No production stores, env, credentials, accounts or host connection.
 """
-import argparse,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile
+import argparse,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time
 from pathlib import Path
 
 def run(args):
@@ -28,6 +28,13 @@ def main():
   for role,ip,port in [('pg','172.29.0.10',5432),('bao','172.29.0.11',8200)]:
    name=prefix+'-'+role;code="require('net').createServer(s=>s.end()).listen("+str(port)+",'0.0.0.0')"
    cid=run(['docker','run','-d','--name',name,'--restart','no','--network',prefix+'-backend','--ip',ip,'--network-alias',role,'--entrypoint','node',a.image,'-e',code]);created.append(cid);peers[role]={'name':name,'id':cid,'ip':ip}
+  stage='fake-companion-readiness'
+  for role,port in [('pg',5432),('bao',8200)]:
+   for attempt in range(30):
+    check=subprocess.run(['docker','exec',peers[role]['id'],'node','-e',"const s=require('net').connect(Number(process.argv[1]),'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1000)",str(port)],capture_output=True,timeout=5)
+    if check.returncode==0:break
+    time.sleep(1)
+   else:raise ValueError('fake companion not ready')
   data=root/'data';data.mkdir(mode=0o700);env=root/'lyam.env';raw=b'IAM_DEMO_SEED_MODE=never\n';env.write_bytes(raw);env.chmod(0o600);lock=root/'lock';lock.touch(mode=0o600)
   cfg={'format':1,'kind':'normal-two-network','image':a.image,'image_id':image['Id'],'source_sha':a.source_sha,'container':prefix+'-app','data_dir':str(data),'port':18088,'env':{'path':str(env),'sha256':hashlib.sha256(raw).hexdigest()},'backend':{'name':prefix+'-backend','id':ids['backend']},'frontend':{'name':prefix+'-frontend','id':ids['frontend']},**peers,'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':['1.1.1.1','9.9.9.9'],'companion_extra_internal':[]}
   class NoEffects(Exception):pass
