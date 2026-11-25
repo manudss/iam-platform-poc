@@ -39,3 +39,26 @@ jobs:
             /tmp/normal-runtime-proof.json
             /tmp/normal-runtime-host-path-proof.json
           if-no-files-found: warn
+  dolt-copy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Dolt copy and held unit contracts
+        run: |
+          python3 deploy/oci/dolt-copy-capture.test.py
+          python3 deploy/oci/dolt-held-capture.test.py
+          python3 deploy/oci/dolt-migration-evidence.test.py
+          python3 deploy/oci/qualification-dolt-only.test.py
+      - name: Existing exact image only
+        run: docker pull ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904
+      - name: Actual copy CLI with synthetic offline Dolt data
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/dolt-copy-hosted-fixture.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dolt-copy-runner-proof
+          path: /tmp/dolt-copy-runner-proof.json
+          if-no-files-found: warn
