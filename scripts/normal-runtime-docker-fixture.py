@@ -41,6 +41,18 @@ def main():
   reached=[]
   def refuse(proof):reached.append(proof);raise NoEffects()
   stage='launcher-real-docker'
+  original_call=n.call
+  command_count=[0]
+  def traced_call(args,pass_fds=()):
+   command_count[0]+=1
+   result['launcher_command_count']=command_count[0]
+   result['launcher_command_kind']=next((v for v in ('docker','nsenter') if args[0]==v),'other')
+   try:return original_call(args,pass_fds=pass_fds)
+   except Exception:
+    result['command_failed']=True
+    result['command_family']=('docker-'+args[1]) if args[0]=='docker' and args[1] in ('run','exec','network','image','inspect','stop','rm') else 'namespace-command'
+    raise
+  n.call=traced_call
   with lock.open('a') as fd:
    fcntl.flock(fd,fcntl.LOCK_EX);n.LOCK_FDS=(fd.fileno(),);n.LOCK_PATHS=(str(lock),)
    try:n.launch(cfg,refuse)
@@ -51,8 +63,11 @@ def main():
   if app['State']['Running'] or app['Config']['Cmd']!=['-c',n.GUARD]:raise ValueError('fixture app was not stopped at FIFO')
   if list(data.iterdir()):raise ValueError('app data changed before FIFO')
   result={'format':1,'result':'pre-fifo-network-qualified','app_started':False,'stage':'complete','image':a.image,'source_sha':a.source_sha,'normal_controller_sha256':hashlib.sha256(Path(n.__file__).read_bytes()).hexdigest(),'probe_runs':3,'stores':'empty fixture data and fake TCP PG/Bao only','limitation':'No release, full app, real stores, boot or production qualification'}
- except Exception:
+ except Exception as error:
   result['stage']=stage
+  known=('normal launcher command refused; inspect private diagnostics','exact FIFO image command differs','runtime security or network option differs','network topology differs','companion alias/IP differs','normal namespace probes failed','unexpected preexisting filter policy','actual runtime env differs from reviewed bytes','dedicated deny probe lacks actual rejection','verified DNS/TLS probe failed','IPv6 inactivity not proved','UDP/ICMP rejection not established','live capability proof failed')
+  result['reason']=str(error) if str(error) in known else 'other-controller-refusal'
+  result['error_type']=type(error).__name__ if type(error).__name__ in ('ValueError','TimeoutExpired','KeyError','FileNotFoundError','TypeError') else 'other'
   raise
  finally:
   out.write_text(json.dumps(result,indent=2));out.chmod(0o644)
