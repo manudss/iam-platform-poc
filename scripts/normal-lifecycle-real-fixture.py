@@ -42,7 +42,13 @@ def main():
    b=subprocess.run(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','status'],capture_output=True,timeout=5)
    if r.returncode==0 and b.returncode==0:break
    time.sleep(1)
-  else:raise ValueError('companions unavailable')
+  else:
+   result['companion_diagnostics']={}
+   for name in [pg,bao]:
+    x=json.loads(docker('inspect',name))[0]
+    log=subprocess.run(['docker','logs','--tail','25',name],capture_output=True,text=True,timeout=10)
+    result['companion_diagnostics'][name]={'state':{k:x['State'].get(k) for k in ['Status','Running','ExitCode','Error','OOMKilled']},'synthetic_only_log':(log.stdout+log.stderr)[-6000:]}
+   raise ValueError('companions unavailable')
   docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/fixture-ready','value=synthetic')
   if isolated:
    for companion in [pg,bao]:
