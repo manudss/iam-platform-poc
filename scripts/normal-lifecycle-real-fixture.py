@@ -51,7 +51,7 @@ def main():
    for name in [pg,bao]:
     x=json.loads(docker('inspect',name))[0]
     log=subprocess.run(['docker','logs','--tail','25',name],capture_output=True,text=True,timeout=10)
-    result['companion_diagnostics'][name]={'state':{k:x['State'].get(k) for k in ['Status','Running','ExitCode','Error','OOMKilled']},'synthetic_pg_log':(log.stdout+log.stderr)[-6000:] if name==pg else 'Bao log omitted to avoid ephemeral unseal material'}
+    result['companion_diagnostics'][name]={'state':{k:x['State'].get(k) for k in ['Status','Running','ExitCode','Error','OOMKilled']},'pg_permission_failure':name==pg and 'Operation not permitted' in (log.stdout+log.stderr),'bao_logs_omitted':name==bao}
    raise ValueError('companions unavailable')
   docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/fixture-ready','value=synthetic')
   if isolated:
@@ -63,7 +63,7 @@ def main():
     for command in [['-P','OUTPUT','DROP'],['-A','OUTPUT','-o','lo','-d','127.0.0.1','-j','ACCEPT'],['-A','OUTPUT','-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','ACCEPT'],['-A','OUTPUT','-j','REJECT']]:run(ns+['iptables',*command])
     for command in [['-P','OUTPUT','DROP'],['-A','OUTPUT','-o','lo','-j','ACCEPT']]:run(ns+['ip6tables',*command])
     # Host Python joins only network namespace; no installed companion tool needed.
-    probe="import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.5);s.sendto(b'qualification-deny',('127.0.0.11',53));\ntry:s.recvfrom(100)\nexcept (TimeoutError,OSError):pass"
+    probe="import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.5)\ntry:s.sendto(b'qualification-deny',('127.0.0.11',53));s.recvfrom(100)\nexcept (TimeoutError,OSError):pass"
     run(ns+['/usr/bin/python3','-c',probe])
     table=run(ns+['iptables','-t','raw','-nvx','-L','OUTPUT'])
     if not any(len(x.split())>2 and x.split()[2]=='DROP' and int(x.split()[0])>0 for x in table.splitlines()):raise ValueError('companion DNS denial counter missing')
