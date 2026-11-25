@@ -57,11 +57,14 @@ try {
   const metrics=await page.locator('#ai-thread').evaluate(t=>({scroll:t.scrollTop,height:t.clientHeight,total:t.scrollHeight}));
   assert(metrics.total>metrics.height&&metrics.scroll<metrics.total-metrics.height,label+': only thread scrolls');
   const outer=await page.locator('#ai-floating-window .body').evaluate(e=>({top:e.scrollTop,height:e.clientHeight,total:e.scrollHeight}));assert.equal(outer.top,0);assert(outer.total<=outer.height+1,label+': outer body does not scroll');
+  const input=await page.locator('#ai-floating-window textarea').boundingBox(),button=await page.locator('#ai-send').boundingBox();assert(Math.abs(input.y-button.y)<1&&Math.abs(input.height-button.height)<1,label+': input/send exact same top and height');
   const panel=await page.locator('#ai-floating-window').boundingBox();assert(before.y+before.height<=panel.y+panel.height,label+': composer fits panel');
  };
  await checkScroll('desktop');
  await page.screenshot({path:out+'/desktop-light.png'});
  const box=await page.locator('#ai-floating-window textarea').boundingBox(),send=await page.locator('#ai-send').boundingBox();
+ assert.equal(await page.locator('[aria-label="Minimize AI assistant"]').count(),0);
+ assert(Math.abs(send.height-box.height)<1,'send and input have equal height');assert(Math.abs(send.y-box.y)<1,'send and input top edges align');
  assert(send.x>=box.x+box.width,'send beside input');assert(Math.abs(send.y+send.height-box.y-box.height)<3,'send aligned with input');
  await page.getByRole('button',{name:'Close AI assistant',exact:true}).click();await page.locator('#ai-floating-window').waitFor({state:'hidden'});await page.locator('#ai-launcher').click();
  assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
@@ -72,7 +75,7 @@ try {
  await page.locator('[aria-label="Conversation options"]').click();
 
  const el = await page.locator('#ai-floating-window plg-ai-assistant-chat').evaluate(el => (el.dataset.proof='same-instance'));
- await page.locator('[aria-label="Minimize AI assistant"]').click();
+ await page.locator('[aria-label="Close AI assistant"]').click();
  await page.locator('#ai-floating-window').waitFor({state:'hidden'});
  await page.locator('#ai-launcher').click();
  assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
@@ -81,7 +84,7 @@ try {
  assert.equal(await page.locator('#ai-floating-window plg-ai-assistant-chat').getAttribute('data-proof'),'same-instance');
  assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
  const drag = async (selector,x,y) => { const b=await page.locator(selector).boundingBox();await page.mouse.move(b.x+b.width/2,b.y+Math.min(18,b.height/2));await page.mouse.down();await page.mouse.move(x,y,{steps:12});await page.mouse.up(); };
- await page.locator('[aria-label="Minimize AI assistant"]').click();
+ await page.locator('[aria-label="Close AI assistant"]').click();
  for (const [x,y,axis,expected] of [[12,450,'x',8],[680,12,'y',8],[1350,450,'right',1358],[680,888,'bottom',892]]) {
   await drag('#ai-launcher',x,y); const b=await page.locator('#ai-launcher').boundingBox();const actual=axis==='right'?b.x+b.width:axis==='bottom'?b.y+b.height:b[axis];assert(Math.abs(actual-expected)<3,JSON.stringify({axis,actual,expected}));
  }
@@ -97,7 +100,7 @@ try {
  await page.setViewportSize({width:390,height:460});await page.locator('#ai-floating-window textarea').focus();await page.waitForTimeout(200);await checkScroll('keyboard-sized viewport');await page.screenshot({path:out+'/mobile-keyboard-sized.png'});await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:out+'/mobile-dark.png'});
  // Physical touch input through Chrome, not synthetic DOM events.
- await page.locator('[aria-label="Minimize AI assistant"]').click();
+ await page.locator('[aria-label="Close AI assistant"]').click();
  const touch = await page.context().newCDPSession(page);
  const tb = await page.locator('#ai-launcher').boundingBox();
  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:tb.x+30,y:tb.y+30}]});
@@ -108,5 +111,5 @@ try {
  await page.evaluate(()=>{document.documentElement.dataset.theme='light';document.documentElement.style.setProperty('--accent','var(--ok)');document.documentElement.style.setProperty('--accent-ink','var(--card)');document.documentElement.style.setProperty('--accent-soft','var(--ok-soft)');});
  await page.screenshot({path:out+'/mobile-alternate-accent.png'});
  assert.equal(aiLoads,1);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','close and minimize retain instance and draft','top conversation menu with delete confirmation','send aligned beside input','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
+ console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','close retains instance and draft; no redundant minimize button','top conversation menu with delete confirmation','send aligned beside input','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
 } finally { await browser.close();server.close(); }

@@ -40,7 +40,7 @@ const css = `
 :scope[compact] .composer-line{display:flex;gap:.5rem;align-items:flex-end}
 :scope[compact] .composer-line textarea{flex:1;min-width:0;margin:0}
 :scope[compact] .composer-actions{display:flex;flex-shrink:0}
-:scope[compact] #ai-send{min-height:44px;min-width:44px}
+:scope[compact] #ai-send{box-sizing:border-box;height:3.5rem;min-height:3.5rem;min-width:3.5rem;padding:0 .8rem;display:grid;place-items:center}
 :scope[compact] .chat-heading{display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-shrink:0}
 :scope[compact] .chat-heading h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 :scope[compact] .conversation-menu{position:relative;flex-shrink:0}
