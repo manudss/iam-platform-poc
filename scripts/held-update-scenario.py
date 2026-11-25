@@ -303,6 +303,7 @@ def run(x):
                 rec['failurePhase']=phase if re.fullmatch(r'[a-z0-9-]{1,100}',phase) else 'unknown'
                 rec['sourceFrames']=[{'module':m,'line':int(n)} for m,n in re.findall(r'File "[^"\n]*/(held-update-host|ordered-queue|held-update-durable|reviewed-ui-held)\.py", line ([0-9]{1,6})',log)][-16:]
                 rec['exceptionTypes']=re.findall(r'^(ValueError|RuntimeError|FileNotFoundError|PermissionError|TypeError|KeyError|TimeoutError):',log,re.M)[-4:]
+                rec['updaterDiagnostic']=load_module(source/'scripts/held-update-diagnostic.py','held_diagnostic').project(log)
                 for raw in re.findall(r'^QUEUE_DIAG_V1 (\{[^\n]{1,2000}\})$',log,re.M):
                     try:
                         diag=json.loads(raw)
