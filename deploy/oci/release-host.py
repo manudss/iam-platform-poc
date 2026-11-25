@@ -273,12 +273,14 @@ class Host:
   c=json.loads(self.run(['docker','inspect',self.container]))[0]
   if c['Id']!=self.original_container['id'] or c['State']['Running'] or c['Config']['Image']!=self.image:raise ValueError('stopped exact held container required')
   # Remove only the stopped, previously observed container. No volume deletion.
-  self.run(['docker','rm',self.container])
   runtime_path,raw=read_spec(self.m['normal_runtime'])
   cfg=json.loads(raw)
   if cfg['image']!=self.image or cfg['container']!=self.container or cfg['env']!={'path':str(self.env_path),'sha256':hashlib.sha256(self.normal_raw).hexdigest()}:raise ValueError('exact normal launcher binding differs')
   normal=imported(Path(__file__).with_name('normal-runtime.py'),'release_normal_runtime')
-  normal.LOCK_FDS=(self.lock_fd,)
+  normal.LOCK_FDS=(self.lock_fd,);normal.LOCK_PATHS=(self.m['update_lock_path'],)
+  normal.prepare(cfg)
+  # Only now can a failed prepare no longer destroy the original held runtime.
+  self.run(['docker','rm',self.container])
   def effects(proof):
    intent['effects_released']=True;intent['phase']='effects-released';intent['normal_launch']=proof
    intent['events'].append({'phase':'effects-released','at':time.time()});self.persist()
@@ -286,7 +288,7 @@ class Host:
   intent['normal_launch']=self.normal_launch;self.persist()
  def verify_normal_namespace(self,intent):
   normal=imported(Path(__file__).with_name('normal-runtime.py'),'release_normal_postcheck')
-  normal.LOCK_FDS=(self.lock_fd,)
+  normal.LOCK_FDS=(self.lock_fd,);normal.LOCK_PATHS=(self.m['update_lock_path'],)
   cfg=json.loads(read_spec(self.m['normal_runtime'])[1])
   return normal.postcheck(cfg,intent['normal_launch'])
  def verify_normal(self,intent):

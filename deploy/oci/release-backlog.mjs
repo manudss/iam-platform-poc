@@ -10,17 +10,21 @@ const sqlCodes=new Set(['ER_BAD_DB_ERROR','ER_BAD_TABLE_ERROR','ER_NO_SUCH_TABLE
 export function diagnostic(error){
  return {format:1,stage:stages.has(error?.captureStage)?error.captureStage:'unknown',category:sqlCodes.has(error?.code)?error.code:(error?.captureCategory==='moving-roots-or-refs'?'moving-roots-or-refs':'refused-or-unknown')};
 }
-const stages=new Set(['connect','databases','branches','change-session','verify-session','working-root','tables','rows','coherence','coverage','held-setting','close','unknown']);
+const stages=new Set(['connect','databases','database-name','branches','change-session','verify-session','working-root','tables','rows','coherence','coverage','held-setting','close','unknown']);
 export async function capture(c){
  let stage='databases';
  try{
  const query=async(sql,args=[])=>{const [r]=await c.query(sql,args);if(!Array.isArray(r))throw Error('row array required');return r;};
  const inventory=async()=>{
+  // Reset to an exact base before SHOW DATABASES. Dolt exposes the current
+  // branch session as an extra database alias otherwise. No list item is hidden.
+  stage='change-session';await c.query('USE `iam_meta`');
+  stage='verify-session';if((await query('SELECT DATABASE() AS d'))[0]?.d!=='iam_meta')throw Error('base session differs');
   stage='databases';
   const dbs=(await query('SHOW DATABASES')).map(r=>String(Object.values(r)[0])).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
   if(!dbs.includes('iam')||!dbs.includes('iam_meta'))throw Error('both business databases required');
   const refs=[];
-  for(const db of dbs){if(!/^[A-Za-z0-9_]{1,64}$/.test(db))throw Error('database identifier refused');
+  for(const db of dbs){stage='database-name';if(!/^[A-Za-z0-9_]{1,64}$/.test(db))throw Error('database identifier refused');
    stage='branches';
    for(const b of await query('SELECT name, hash FROM `'+db+'`.dolt_branches ORDER BY name')){
     if(typeof b.name!=='string'||!b.name||b.name.length>200||/[`\x00-\x1f]/.test(b.name))throw Error('branch identifier refused');

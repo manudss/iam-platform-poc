@@ -42,7 +42,19 @@ test('finite diagnostic distinguishes SQL stage without leaking raw SQL messages
 
 test('branch session is selected using USE and independently checked, never COM_CHANGE_USER',async()=>{
  const c=fake(),query=c.query.bind(c),uses=[];c.query=async(sql,...a)=>{if(sql.startsWith('USE `'))uses.push(sql);return query(sql,...a);};
- await capture(c);assert.equal(uses.length,8);assert(uses.some(s=>s==='USE `iam/personal/demo-alice`'));
+ await capture(c);assert.equal(uses.length,10);assert(uses.some(s=>s==='USE `iam/personal/demo-alice`'));
  const bad=fake(),prev=bad.query.bind(bad);bad.query=async(sql,...a)=>sql==='SELECT DATABASE() AS d'?[[{d:'wrong'}]]:prev(sql,...a);
- await assert.rejects(capture(bad),/session branch differs/);
+ await assert.rejects(capture(bad),/session.*differs/);
+});
+
+test('Dolt session aliases vanish only by verified base reset, never arbitrary filtering',async()=>{
+ const c=fake(),prev=c.query.bind(c);let current='',listCalls=0;
+ c.query=async(sql,...args)=>{
+  if(sql.startsWith('USE `'))current=sql.slice(5,-1);
+  if(sql==='SHOW DATABASES'){listCalls++;assert.equal(current,'iam_meta');return [[{Database:'iam'},{Database:'iam_meta'}]];}
+  return prev(sql,...args);
+ };
+ await capture(c);assert.equal(listCalls,2);
+ const bad=fake(),q=bad.query.bind(bad);bad.query=async(sql,...args)=>sql==='SHOW DATABASES'?[[{Database:'iam'},{Database:'iam_meta'},{Database:'unknown/branch'}]]:q(sql,...args);
+ await assert.rejects(capture(bad),/database identifier refused/);
 });

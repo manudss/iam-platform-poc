@@ -7,11 +7,12 @@ A successful launch is not a release/backlog/authorization verdict.
 import hashlib,ipaddress,json,os,re,stat,subprocess,time,fcntl
 from pathlib import Path
 
+LOCK_PATHS=()
 LOCK_FDS=()  # configured by the fixed installed parent while it owns updater lock
 FIFO='/tmp/lyam-normal-start.fifo'
 GUARD='set -eu; rm -f '+FIFO+'; mkfifo -m 600 '+FIFO+'; read -r permit < '+FIFO+'; [ "$permit" = start-normal ]; rm -f '+FIFO+'; exec sh /app/demo/start.sh'
 # IPv4 ranges that must never become reachable through the public HTTPS rule.
-NONPUBLIC=('0.0.0.0/8','10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.0.0.0/24','192.0.2.0/24','192.168.0.0/16','198.18.0.0/15','198.51.100.0/24','203.0.113.0/24','224.0.0.0/4','240.0.0.0/4')
+NONPUBLIC=('0.0.0.0/8','10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.0.0.0/24','192.0.2.0/24','192.88.99.0/24','192.168.0.0/16','198.18.0.0/15','198.51.100.0/24','203.0.113.0/24','224.0.0.0/4','240.0.0.0/4')
 
 def call(args,pass_fds=()):
  p=subprocess.run(args,text=True,capture_output=True,timeout=180,pass_fds=tuple(set(pass_fds)|set(LOCK_FDS)))
@@ -25,7 +26,7 @@ def protected(binding):
  for a in [p,*p.parents]:
   st=a.lstat()
   if a.is_symlink() or st.st_uid or st.st_gid or st.st_mode&0o022:raise ValueError('protected file ancestry required')
- if not p.is_file() or p.stat().st_nlink!=1:raise ValueError('regular unique file required')
+ if not p.is_file() or p.stat().st_nlink!=1 or p.stat().st_size>16*1024*1024:raise ValueError('regular unique file required')
  raw=p.read_bytes()
  if sha(raw)!=binding['sha256']:raise ValueError('bound file changed')
  return p,raw
@@ -40,7 +41,7 @@ def env_values(raw):
  return values
 
 def validate(c):
- need={'format','kind','image','image_id','container','data_dir','port','env','backend','frontend','pg','bao','public_probe','source_sha','tls_probe'}
+ need={'format','kind','image','image_id','container','data_dir','port','env','backend','frontend','pg','bao','public_probe','source_sha','tls_probe','dns_upstreams','companion_extra_internal'}
  if set(c)!=need or c['format']!=1 or c['kind']!='normal-two-network':raise ValueError('exact normal runtime contract required')
  if not re.fullmatch('ghcr.io/manudss/iam-platform-poc@sha256:[a-f0-9]{64}',c['image']) or not re.fullmatch('sha256:[a-f0-9]{64}',c['image_id']):raise ValueError('immutable image binding required')
  if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]{0,63}',c['container']):raise ValueError('bounded container name required')
@@ -52,6 +53,10 @@ def validate(c):
   v=c[role]
   if set(v)!={'name','id','ip'} or not re.fullmatch('[a-f0-9]{64}',v['id']) or not ipaddress.IPv4Address(v['ip']).is_private:raise ValueError('private companion identity required')
  if not re.fullmatch('[a-f0-9]{40}',c['source_sha']) or not re.fullmatch('[a-zA-Z0-9.-]+',c['tls_probe']):raise ValueError('exact source and TLS probe hostname required')
+ if not isinstance(c['dns_upstreams'],list) or not 1<=len(c['dns_upstreams'])<=2 or len(set(c['dns_upstreams']))!=len(c['dns_upstreams']) or any(not ipaddress.IPv4Address(v).is_global for v in c['dns_upstreams']):raise ValueError('one or two exact public DNS upstreams required')
+ if not isinstance(c['companion_extra_internal'],list) or len(c['companion_extra_internal'])>1:raise ValueError('at most one transitional internal companion network')
+ for n in c['companion_extra_internal']:
+  if set(n)!={'name','id'} or not re.fullmatch('[a-f0-9]{64}',n['id']):raise ValueError('exact transitional network identity required')
  if not ipaddress.IPv4Address(c['public_probe']).is_global:raise ValueError('global IPv4 probe required')
  p=Path(c['data_dir'])
  if not p.is_absolute() or '..' in p.parts or str(p.resolve())!=str(p) or not p.is_dir():raise ValueError('canonical data directory required')
@@ -62,9 +67,12 @@ def topology(c):
  for role in ('backend','frontend'):
   n=json.loads(call(['docker','network','inspect',c[role]['id']]))[0]
   if n.get('Id')!=c[role]['id'] or n.get('Name')!=c[role]['name'] or n.get('Driver')!='bridge' or n.get('Internal') is not (role=='backend') or n.get('EnableIPv6') is not False:raise ValueError('network topology differs')
+ for extra in c['companion_extra_internal']:
+  n=json.loads(call(['docker','network','inspect',extra['id']]))[0]
+  if n.get('Id')!=extra['id'] or n.get('Name')!=extra['name'] or n.get('Internal') is not True or n.get('EnableIPv6') is not False:raise ValueError('transitional companion network must be internal IPv4')
  for role in ('pg','bao'):
   x=inspect(c[role]['id']);nets=x.get('NetworkSettings',{}).get('Networks',{})
-  if x.get('Id')!=c[role]['id'] or x.get('Name','').lstrip('/')!=c[role]['name'] or x.get('State',{}).get('Running') is not True or set(nets)!={c['backend']['name']} or x.get('HostConfig',{}).get('PortBindings'):raise ValueError('companion must be running only on private backend without published ports')
+  if x.get('Id')!=c[role]['id'] or x.get('Name','').lstrip('/')!=c[role]['name'] or x.get('State',{}).get('Running') is not True or set(nets)!=({c['backend']['name']}|{n['name'] for n in c['companion_extra_internal']}) or x.get('HostConfig',{}).get('PortBindings'):raise ValueError('companion must be running only on private backend without published ports')
   net=nets[c['backend']['name']]
   if net.get('NetworkID')!=c['backend']['id'] or net.get('IPAddress')!=c[role]['ip'] or net.get('IPAMConfig',{}).get('IPv4Address')!=c[role]['ip'] or role not in net.get('Aliases',[]):raise ValueError('companion alias/IP differs')
 
@@ -72,6 +80,8 @@ def rules(c,gateways=()):
  common=[['-P','OUTPUT','DROP'],['-A','OUTPUT','-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','ACCEPT']]
  v4=common+[['-A','OUTPUT','-o','lo','-d','127.0.0.1/32','-j','ACCEPT']]
  for role,port in [('pg',5432),('bao',8200)]:v4.append(['-A','OUTPUT','-d',c[role]['ip'],'-p','tcp','--dport',str(port),'-j','ACCEPT'])
+ for resolver in c['dns_upstreams']:
+  for proto in ('tcp','udp'):v4.append(['-A','OUTPUT','-d',resolver,'-p',proto,'--dport','53','-j','ACCEPT'])
  for proto in ('tcp','udp'):v4.append(['-A','OUTPUT','-d','127.0.0.11','-p',proto,'-m','conntrack','--ctorigdst','127.0.0.11','--ctorigdstport','53','-j','ACCEPT'])
  # Reject private/LAN/host destinations BEFORE the general public443 allow.
  for address in gateways:v4.append(['-A','OUTPUT','-d',str(ipaddress.IPv4Address(address))+'/32','-j','REJECT'])
@@ -86,7 +96,7 @@ def identity(c,cid,pid,ns):
  hc=x['HostConfig'];cfg=x['Config'];nets=x['NetworkSettings']['Networks']
  if x.get('Image')!=c['image_id'] or cfg.get('Image')!=c['image'] or cfg.get('Entrypoint')!=['sh'] or cfg.get('Cmd')!=['-c',GUARD]:raise ValueError('exact FIFO image command differs')
  if set(nets)!={c['backend']['name'],c['frontend']['name']} or any(nets[c[r]['name']].get('NetworkID')!=c[r]['id'] for r in ('backend','frontend')):raise ValueError('app network differs')
- for k,want in {'RestartPolicy':{'Name':'no','MaximumRetryCount':0},'CapDrop':['ALL'],'PortBindings':{'8080/tcp':[{'HostIp':'127.0.0.1','HostPort':str(c['port'])}]},'Sysctls':{'net.ipv6.conf.all.disable_ipv6':'1','net.ipv6.conf.default.disable_ipv6':'1'}}.items():
+ for k,want in {'RestartPolicy':{'Name':'no','MaximumRetryCount':0},'CapDrop':['ALL'],'PortBindings':{'8080/tcp':[{'HostIp':'127.0.0.1','HostPort':str(c['port'])}]},'Dns':c['dns_upstreams'],'Sysctls':{'net.ipv6.conf.all.disable_ipv6':'1','net.ipv6.conf.default.disable_ipv6':'1'}}.items():
   if hc.get(k)!=want:raise ValueError('runtime security or network option differs')
  if hc.get('Privileged') or hc.get('CapAdd') or hc.get('ExtraHosts') or not any(v in ('no-new-privileges','no-new-privileges:true') for v in hc.get('SecurityOpt') or []):raise ValueError('runtime powers differ')
  mounts=x.get('Mounts',[])
@@ -95,12 +105,28 @@ def identity(c,cid,pid,ns):
 
 PROBE="""const net=require('net'),dns=require('dns').promises;async function tcp(h,p){return await new Promise(r=>{const s=net.connect(p,h);let done=false;const end=v=>{if(done)return;done=true;s.destroy();r(v)};s.setTimeout(1500);s.on('connect',()=>end(true));s.on('error',()=>end(false));s.on('timeout',()=>end(false))})};(async()=>{const a=JSON.parse(process.argv[1]);const out={};for(const [k,h,p]of a.tcp)out[k]=await tcp(h,p);for(const [k,h,expected]of a.dns){try{out[k]=(await dns.lookup(h,{family:4})).address===expected}catch{out[k]=false}};console.log(JSON.stringify(out))})().catch(()=>process.exit(1))"""
 
-def launch(c,before_effects):
- validate(c);env_path,raw=protected(c['env']);env=env_values(raw);topology(c)
+def lock_proof():
+ if not LOCK_FDS or len(LOCK_FDS)!=len(LOCK_PATHS):raise ValueError('actual inherited exclusive locks required')
+ for path,fd in zip(LOCK_PATHS,LOCK_FDS):
+  p=Path(path);a=os.fstat(fd);b=p.lstat()
+  if p.is_symlink() or not stat.S_ISREG(a.st_mode) or (a.st_dev,a.st_ino)!=(b.st_dev,b.st_ino):raise ValueError('lock inode differs')
+  with p.open('a') as other:
+   try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   except BlockingIOError:pass
+   else:raise ValueError('exclusive lock absent')
+  fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+
+def prepare(c):
+ lock_proof();validate(c);env_path,raw=protected(c['env']);env=env_values(raw);topology(c)
  image=json.loads(call(['docker','image','inspect',c['image']]))[0]
  if image.get('Id')!=c['image_id'] or c['image'] not in image.get('RepoDigests',[]) or image.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=c['source_sha']:raise ValueError('image identity differs')
+ return env_path,raw,env,image
+
+def launch(c,before_effects):
+ env_path,raw,env,image=prepare(c)
  # Docker refuses an already-existing name. Never replace a possibly live image.
  args=['docker','run','-d','--name',c['container'],'--restart','no','--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1','--network',c['backend']['name'],'-p','127.0.0.1:'+str(c['port'])+':8080','-v',c['data_dir']+':/data','--env-file',str(env_path),'--entrypoint','sh',c['image'],'-c',GUARD]
+ for resolver in c['dns_upstreams']:args[args.index('--entrypoint'):args.index('--entrypoint')]=['--dns',resolver]
  # The reviewed environment is read once. A sealed anonymous descriptor holds
  # those exact bytes for the Docker CLI, not a mutable pathname reread.
  fd=os.memfd_create('lyam-normal-env',os.MFD_ALLOW_SEALING);os.write(fd,raw);os.lseek(fd,0,os.SEEK_SET)
@@ -134,7 +160,7 @@ def launch(c,before_effects):
   def reject_counter(tool):
    rows=[line.split() for line in nscmd(tool,'-nvx','-L','OUTPUT').splitlines() if ' REJECT ' in line]
    return sum(int(row[0]) for row in rows)
-  negative=[('private','10.0.0.1',443),('metadata','169.254.169.254',443),('public_http',c['public_probe'],80),('public_smtp',c['public_probe'],25)]
+  negative=[('private','10.0.0.1',443),('private172','172.16.0.1',443),('private192','192.168.0.1',443),('metadata','169.254.169.254',443),('public_http',c['public_probe'],80),('public_smtp',c['public_probe'],25),('metadata80','169.254.169.254',80),('dns_other','8.8.4.4' if '8.8.4.4' not in c['dns_upstreams'] else '8.8.8.8',53)]
   for role,gateway in zip(('backend','frontend'),gateways):
    ni=x['NetworkSettings']['Networks'][c[role]['name']]
    negative.extend([(role+'_gateway',gateway,443),(role+'_own',ni['IPAddress'],443)])
@@ -181,7 +207,7 @@ def launch(c,before_effects):
   raise
 
 def postcheck(c,proof):
- validate(c);topology(c);env_path,raw=protected(c['env']);env=env_values(raw)
+ lock_proof();validate(c);topology(c);env_path,raw=protected(c['env']);env=env_values(raw)
  if set(proof.get('rules',{}))!={'iptables','ip6tables'}:raise ValueError('complete namespace policy observation required')
  if proof.get('config_sha256')!=sha(json.dumps(c,sort_keys=True).encode()):raise ValueError('launcher contract changed')
  x=identity(c,proof['container_id'],proof['pid'],proof['namespace_inode'])

@@ -1,0 +1,36 @@
+name: Normal runtime namespace harness
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'deploy/oci/normal-runtime*'
+      - 'scripts/normal-runtime-docker-fixture.py'
+      - '.github/workflows/normal-runtime-harness.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: normal-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  namespace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Unit contracts
+        run: python3 deploy/oci/normal-runtime.test.py
+      - name: Exact image, fake PG and Bao, no app effect
+        env:
+          IMAGE: ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904
+          SOURCE_SHA: 276d32d3162c940d7744eca9432e8b914976539f
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-runtime-docker-fixture.py --image "$IMAGE" --source-sha "$SOURCE_SHA" --out /tmp/normal-runtime-proof.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-runtime-network-proof
+          path: /tmp/normal-runtime-proof.json
+          if-no-files-found: warn

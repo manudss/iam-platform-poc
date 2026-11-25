@@ -78,4 +78,16 @@ class Tests(unittest.TestCase):
    host=h.Host({})
    with self.assertRaises(ValueError):host.preflight({}, {},'lyam',{'digest':'sha256:'+'a'*64})
   finally:h.imported=old
+ def test_prepare_failure_never_removes_original_held_container(self):
+  raw=b'IAM_DEMO_SEED_MODE=never\n';manifest={'env':{'sha256':'old'},'normal_runtime':{'path':'runtime'},'update_lock_path':'lock'};host=h.Host(manifest,8);host.env_path=Path('/env');host.normal_raw=raw;host.image='image';host.container='held';host.original_container={'id':'original'};host.persist=lambda:None
+  cfg={'image':'image','container':'held','env':{'path':'/env','sha256':h.hashlib.sha256(raw).hexdigest()}}
+  class Env:
+   def install_env(self,*a):return {}
+  class Normal:
+   def prepare(self,*a):raise ValueError('topology not ready')
+  calls=[]
+  host.run=lambda args:calls.append(args) or h.json.dumps([{'Id':'original','State':{'Running':False},'Config':{'Image':'image'}}])
+  with patch.object(Path,'read_bytes',return_value=raw),patch.object(h,'read_spec',return_value=(Path('/runtime'),h.json.dumps(cfg).encode())),patch.object(h,'imported',side_effect=[Env(),Normal()]):
+   with self.assertRaisesRegex(ValueError,'topology'):host.start_normal({'normal_start_committed':True})
+  self.assertFalse(any(a[:2]==['docker','rm'] for a in calls))
 if __name__=='__main__':unittest.main()

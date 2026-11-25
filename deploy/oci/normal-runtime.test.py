@@ -3,8 +3,10 @@ from pathlib import Path
 from unittest.mock import patch
 s=importlib.util.spec_from_file_location('normal',Path(__file__).with_name('normal-runtime.py'));n=importlib.util.module_from_spec(s);s.loader.exec_module(n)
 class Tests(unittest.TestCase):
+ def setUp(self):
+  self.proof=patch.object(n,'lock_proof');self.proof.start();self.addCleanup(self.proof.stop)
  def config(self,d):
-  return {'format':1,'kind':'normal-two-network','image':'ghcr.io/manudss/iam-platform-poc@sha256:'+'a'*64,'image_id':'sha256:'+'b'*64,'source_sha':'c'*40,'container':'app-normal','data_dir':d,'port':8080,'env':{'path':d+'/env','sha256':'d'*64},'backend':{'name':'backend','id':'e'*64},'frontend':{'name':'front','id':'f'*64},'pg':{'name':'pg','id':'1'*64,'ip':'172.19.0.10'},'bao':{'name':'bao','id':'2'*64,'ip':'172.19.0.11'},'public_probe':'1.1.1.1','tls_probe':'example.com'}
+  return {'format':1,'kind':'normal-two-network','image':'ghcr.io/manudss/iam-platform-poc@sha256:'+'a'*64,'image_id':'sha256:'+'b'*64,'source_sha':'c'*40,'container':'app-normal','data_dir':d,'port':8080,'env':{'path':d+'/env','sha256':'d'*64},'backend':{'name':'backend','id':'e'*64},'frontend':{'name':'front','id':'f'*64},'pg':{'name':'pg','id':'1'*64,'ip':'172.19.0.10'},'bao':{'name':'bao','id':'2'*64,'ip':'172.19.0.11'},'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':['1.1.1.1','9.9.9.9'],'companion_extra_internal':[]}
  def test_closed_default_ipv4_order_and_ipv6_drop(self):
   with tempfile.TemporaryDirectory() as d:
    c=self.config(d);n.validate(c);rules=n.rules(c)
@@ -63,7 +65,7 @@ class Tests(unittest.TestCase):
       if args[-1].endswith("console.log('IPV6_DISABLED')"):return 'IPV6_DISABLED'
       if 'CapEff' in args[-1]:return 'CapEff: 0000\nCapBnd: 0000\nNoNewPrivs: 1'
       if args[3]=='sh':return ''
-      tests=json.loads(args[-1]);return json.dumps({**{k:not k.startswith(('private','metadata','public_','backend_','frontend_')) for k,h,p in tests['tcp']},**{k:True for k,h,expected in tests['dns']}})
+      tests=json.loads(args[-1]);return json.dumps({**{k:not k.startswith(('private','metadata','public_','backend_','frontend_','dns_other')) for k,h,p in tests['tcp']},**{k:True for k,h,expected in tests['dns']}})
      if args[:2] in (['docker','stop'],['docker','rm']):return ''
      raise AssertionError(args[:4])
     def marker(proof):
@@ -77,4 +79,20 @@ class Tests(unittest.TestCase):
       result=n.launch(c,marker);self.assertEqual(result['namespace_inode'],42)
       release=next(i for i,a in enumerate(trace) if a[:4]==['docker','exec','new-container','sh'])
       self.assertLess(trace.index(['MARKER']),release)
+ def test_real_lock_proof_absent_unheld_wrong_inode_and_held(self):
+  self.proof.stop()
+  import fcntl
+  oldfds,oldpaths=n.LOCK_FDS,n.LOCK_PATHS
+  try:
+   n.LOCK_FDS=();n.LOCK_PATHS=()
+   with self.assertRaises(ValueError):n.lock_proof()
+   with tempfile.TemporaryDirectory() as d:
+    path=Path(d)/'lock';path.touch()
+    with path.open('a') as f:
+     n.LOCK_FDS=(f.fileno(),);n.LOCK_PATHS=(str(path),)
+     with self.assertRaises(ValueError):n.lock_proof()
+     fcntl.flock(f,fcntl.LOCK_EX);n.lock_proof()
+     other=Path(d)/'other';other.touch();n.LOCK_PATHS=(str(other),)
+     with self.assertRaises(ValueError):n.lock_proof()
+  finally:n.LOCK_FDS=oldfds;n.LOCK_PATHS=oldpaths
 if __name__=='__main__':unittest.main()
