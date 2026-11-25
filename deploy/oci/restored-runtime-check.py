@@ -77,6 +77,10 @@ def verify(spec,lock_bindings,run=subprocess.run):
  if live.get('liveVerified') is not True:raise ValueError('live closed confinement unknown')
  x=json.loads(command(['docker','inspect','--type','container',spec['container']]))[0]
  if x.get('Id')!=spec['expected_container_id'] or x.get('Config',{}).get('Image')!=image or not x.get('State',{}).get('Running') or x.get('RestartCount')!=0:raise ValueError('exact stable held container required')
+ image_info=json.loads(command(['docker','image','inspect',image]))[0]
+ if image not in image_info.get('RepoDigests',[]) or x.get('Image')!=image_info.get('Id') or image_info.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=target['sha']:raise ValueError('held image ID or source differs')
+ runtime_env=x.get('Config',{}).get('Env',[]);hc=x.get('HostConfig',{})
+ if 'IAM_AUTOMATION_HOLD=1' not in runtime_env or 'IAM_DEMO_SEED_MODE=never' not in runtime_env or hc.get('RestartPolicy',{}).get('Name')!='no' or 'ALL' not in (hc.get('CapDrop') or []) or hc.get('CapAdd') or hc.get('Privileged') or not any(v in ('no-new-privileges','no-new-privileges:true') for v in hc.get('SecurityOpt') or []):raise ValueError('held runtime powers/settings differ')
  tls=[tls_local(origin,address) for origin,address in spec['local_tls'].items()]
  for field in ('env','config','helper','launch_proof','policy'):read(spec[field])
  for value in spec['gates'].values():read(value)
