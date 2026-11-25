@@ -34,8 +34,12 @@ def main():
    ids[role]=docker(*args,name);nets.append(name)
   pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app';old=prefix+'-old'
   for name in [pg,bao,seed,app,old]:owned.append(name)
+  pg_extra=[]
+  if isolated:
+   pgdata=root/'pg-data';pgdata.mkdir(mode=0o700);os.chown(pgdata,999,999)
+   pg_extra=['-v',str(pgdata)+':/var/lib/postgresql/data','--tmpfs','/var/run/postgresql:uid=999,gid=999,mode=0700']
   companion_safety=['--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1'] if isolated else []
-  docker('run','-d',*companion_safety,*(['--user','999:999'] if isolated else []),'--name',pg,'--network',nets[0],'--ip','172.27.0.10','--network-alias','pg','--memory','512m','--pids-limit','128','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam','postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
+  docker('run','-d',*companion_safety,*(['--user','999:999'] if isolated else []),*pg_extra,'--name',pg,'--network',nets[0],'--ip','172.27.0.10','--network-alias','pg','--memory','512m','--pids-limit','128','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam','postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
   docker('run','-d',*companion_safety,*(['--user','100:1000'] if isolated else []),'--name',bao,'--network',nets[0],'--ip','172.27.0.11','--network-alias','bao','--memory','256m','--pids-limit','64','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-fixture-only','openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315','server','-dev','-dev-listen-address=0.0.0.0:8200')
   for _ in range(60):
    r=subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=5)
@@ -47,7 +51,7 @@ def main():
    for name in [pg,bao]:
     x=json.loads(docker('inspect',name))[0]
     log=subprocess.run(['docker','logs','--tail','25',name],capture_output=True,text=True,timeout=10)
-    result['companion_diagnostics'][name]={'state':{k:x['State'].get(k) for k in ['Status','Running','ExitCode','Error','OOMKilled']},'synthetic_only_log':(log.stdout+log.stderr)[-6000:]}
+    result['companion_diagnostics'][name]={'state':{k:x['State'].get(k) for k in ['Status','Running','ExitCode','Error','OOMKilled']},'synthetic_pg_log':(log.stdout+log.stderr)[-6000:] if name==pg else 'Bao log omitted to avoid ephemeral unseal material'}
    raise ValueError('companions unavailable')
   docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/fixture-ready','value=synthetic')
   if isolated:
@@ -91,6 +95,11 @@ def main():
     try:proof=l.launch(cfg,str(root/('normal-attempt-'+str(generation)+'.json')),n)
     finally:n.call=original
     wait(app,3000,'/health');wait(app,8080,'/healthz');n.postcheck(cfg,proof);l.postcheck(cfg,str(root/('normal-attempt-'+str(generation)+'.json')),n)
+    if generation==2 and '--synthetic-account' in __import__('sys').argv:
+     docker('cp',str(repo/'scripts/qualification-account-synthetic.mjs'),app+':/tmp/qualification-account-synthetic.mjs')
+     account=json.loads(docker('exec',app,'node','/tmp/qualification-account-synthetic.mjs'))
+     if account.get('first_access_changed') is not True or account.get('no_role_smoke') is not True:raise ValueError('synthetic account contract failed')
+     result['dedicated_account']=account
     # Persist in real PG and Bao to prove unchanged companions survive app swap.
     docker('exec',pg,'psql','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1','-c','CREATE TABLE IF NOT EXISTS lifecycle_fixture(id int primary key); INSERT INTO lifecycle_fixture VALUES('+str(generation)+');')
     docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/lifecycle-fixture','generation='+str(generation))
