@@ -35,8 +35,8 @@ def execute(a,host_fixture=False,checkpoint=None):
   stage='fake-companion-readiness'
   for role,port in [('pg',5432),('bao',8200)]:
    for attempt in range(30):
-    check=subprocess.run(['docker','exec',peers[role]['id'],'node','-e',"const s=require('net').connect(Number(process.argv[1]),'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1000)",str(port)],capture_output=True,timeout=5)
-    if check.returncode==0:break
+    readiness=subprocess.run(['docker','exec',peers[role]['id'],'node','-e',"const s=require('net').connect(Number(process.argv[1]),'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1000)",str(port)],capture_output=True,timeout=5)
+    if readiness.returncode==0:break
     time.sleep(1)
    else:raise ValueError('fake companion not ready')
   data=root/'data';data.mkdir(mode=0o700);env=root/'lyam.env';raw=b'IAM_DEMO_SEED_MODE=never\n';env.write_bytes(raw);env.chmod(0o600);lock=root/'lock';lock.touch(mode=0o600)
