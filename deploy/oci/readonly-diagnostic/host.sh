@@ -4,6 +4,7 @@
 # Does NOT execute ordered-queue.py (it appends/chmods state.json.lock and takes flock): state.json is only read and parsed.
 # Never reads lyam.env, never prints env values, state content, DB rows or messages.
 set -u
+echo "transport.host_enter=true"
 ROOT=/opt/lyam
 C=lyam
 main() {
