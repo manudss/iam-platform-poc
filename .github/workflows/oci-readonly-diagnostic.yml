@@ -1,0 +1,59 @@
+name: oci-readonly-diagnostic
+
+# Manual, read-only diagnostic of the Oracle host. No inputs, no push/PR trigger, fixed scripts only.
+# Reuses the four existing SSH secrets unchanged. It never deploys, drains, pauses, restarts or writes on the host.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-readonly-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    # Only the reviewed main copy of the scripts may run against the host.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: deploy/oci/readonly-diagnostic
+          persist-credentials: false
+      - name: Prepare strict SSH
+        env:
+          OCI_SSH_HOST: ${{ secrets.OCI_DEPLOY_SSH_HOST }}
+          OCI_SSH_USER: ${{ secrets.OCI_DEPLOY_SSH_USER }}
+          OCI_SSH_KEY: ${{ secrets.OCI_DEPLOY_SSH_KEY }}
+          OCI_SSH_KNOWN_HOSTS: ${{ secrets.OCI_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          for v in OCI_SSH_HOST OCI_SSH_USER OCI_SSH_KEY OCI_SSH_KNOWN_HOSTS; do
+            eval "val=\${$v:-}"
+            [ -n "$val" ] || { echo "missing required secret for $v"; exit 1; }
+          done
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$OCI_SSH_KEY" > ~/.ssh/oci_diag
+          chmod 600 ~/.ssh/oci_diag
+          printf '%s\n' "$OCI_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts_oci_diag
+          chmod 600 ~/.ssh/known_hosts_oci_diag
+      - name: Host runtime, image, journal, locks (read-only)
+        shell: bash
+        env:
+          OCI_SSH_HOST: ${{ secrets.OCI_DEPLOY_SSH_HOST }}
+          OCI_SSH_USER: ${{ secrets.OCI_DEPLOY_SSH_USER }}
+        run: |
+          bash deploy/oci/readonly-diagnostic/transport.sh host
+      - name: Aggregated backlog inventory (read-only, counts only)
+        shell: bash
+        env:
+          OCI_SSH_HOST: ${{ secrets.OCI_DEPLOY_SSH_HOST }}
+          OCI_SSH_USER: ${{ secrets.OCI_DEPLOY_SSH_USER }}
+        run: |
+          bash deploy/oci/readonly-diagnostic/transport.sh inventory
+      - name: Remove key material
+        if: always()
+        run: rm -f ~/.ssh/oci_diag ~/.ssh/known_hosts_oci_diag

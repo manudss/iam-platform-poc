@@ -194,6 +194,7 @@ jobs:
       - name: Fail-closed verdict and candidate deployment-control regressions
         run: |
           python3 scripts/delivery-contract.test.py
+          python3 scripts/closed-helper-docker-diagnostic.test.py
           python3 scripts/delivery-receipt.test.py
           python3 scripts/delivery-baseline.test.py
           find deploy/oci -maxdepth 1 -name '*.test.py' -print0 | sort -z | xargs -0 -n 1 python3

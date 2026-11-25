@@ -1,0 +1,114 @@
+name: Held-update chain harness
+# Manual, disposable GitHub-hosted runner only. Synthetic data, no production, no deploy, no secrets beyond GITHUB_TOKEN for GHCR.
+# base_digest: exact digest of an already built candidate app image (for example the Candidate delivery build output).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'scripts/held-update-*'
+      - 'scripts/delivery-docker-integration.py'
+      - 'scripts/closed-helper-docker-fixture.py'
+      - 'deploy/oci/held-update*'
+      - 'deploy/oci/ordered-queue.py'
+      - 'deploy/oci/update.sh'
+      - '.github/workflows/held-update-harness.yml'
+  workflow_dispatch:
+    inputs:
+      base_digest:
+        description: 'exact ghcr.io/manudss/iam-platform-poc@sha256:... app image used as the fixture base'
+        required: true
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: held-update-harness-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  held_update_chain:
+    name: Held-update 1 and 3 successors, real closed updater, interruptions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [clean, interruptions, orphan]
+    env:
+      NODE_PATH: /tmp/delivery-pw/node_modules
+      HELD_SOURCE_SHA: ${{ github.sha }}
+      HELD_RUN_ATTEMPT: ${{ github.run_attempt }}
+      HELD_SCENARIO_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deterministic unit checks (no Docker)
+        run: |
+          python3 deploy/oci/held-update.test.py
+          python3 deploy/oci/held-update-durable.test.py
+          python3 scripts/held-update-progress.test.py
+          python3 scripts/held-update-verdict.test.py
+          python3 deploy/oci/ordered-queue.test.py
+          node --test deploy/oci/update.test.mjs
+      - name: Build four distinct real fixture images and the first-parent repo
+        id: fx
+        run: |
+          set -eu
+          export DOCKER_CONFIG="$HOME/.docker"
+          sudo --preserve-env=DOCKER_CONFIG python3 scripts/held-update-fixture-build.py --base "ghcr.io/${{ github.repository }}@$(echo '${{ inputs.base_digest || 'sha256:29c7af7a349a79b9432a077d32ed681a25a8443f9d84b74db3c82aa98e38a7e1' }}' | sed 's/.*@//')" --repo /root/held-fixture-repo --out /root/held-fixture.json --tag-prefix "held-fixture-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "sha0=$(sudo jq -r '.images[0].sha' /root/held-fixture.json)" >> "$GITHUB_OUTPUT"
+          echo "digest0=$(sudo jq -r '.images[0].digest' /root/held-fixture.json)" >> "$GITHUB_OUTPUT"
+      - name: Install browser-free dependencies
+        run: sudo apt-get update && sudo apt-get install -y libnss3-tools
+      - name: Real closed updater, queue, gates and supervision (private /opt namespace)
+        env:
+          DELIVERY_SHA: ${{ steps.fx.outputs.sha0 }}
+          HELD_FIXTURE_JSON: /root/held-fixture.json
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,HELD_FIXTURE_JSON,NODE_PATH,HELD_SCENARIO_SHARD,HELD_SOURCE_SHA,HELD_RUN_ATTEMPT unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "ghcr.io/${{ github.repository }}@${{ steps.fx.outputs.digest0 }}" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario held-update --delivery-extension scripts/delivery-docker-integration.py --out /tmp/held-update-proof
+      - name: Publish only the bounded diagnostic for the unprivileged artifact uploader
+        if: always()
+        run: sudo python3 scripts/held-update-progress.py --publish-diagnostic /tmp/held-update-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: held-update-proof-${{ matrix.shard }}
+          path: |
+            /tmp/held-update-proof/execution-evidence.json
+            /tmp/held-update-proof/delivery-receipt.json
+            /tmp/held-update-proof/closed-helper-fixture-failure.json
+            /tmp/held-update-proof/held-progress.json
+            /tmp/held-update-proof/held-update/*.json
+          if-no-files-found: warn
+
+  held_update_verdict:
+    name: Complete held-update chain evidence
+    if: always()
+    needs: held_update_chain
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: held-update-proof-*
+          path: /tmp/held-update-shards
+      - name: Require all independently completed scenarios
+        env:
+          HELD_EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          HELD_EXPECTED_RUN_ID: ${{ github.run_id }}
+          HELD_EXPECTED_ATTEMPT: ${{ github.run_attempt }}
+          HELD_JOBS_RESULT: ${{ needs.held_update_chain.result }}
+        run: python3 scripts/held-update-verdict.py /tmp/held-update-shards --out /tmp/held-update-verdict.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: held-update-verdict
+          path: /tmp/held-update-verdict.json
