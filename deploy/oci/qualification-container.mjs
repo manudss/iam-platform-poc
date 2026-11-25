@@ -151,10 +151,15 @@ async function smoke(){
 }
 try{
  if(mode==='capture'){diagnosticStage='capture-dolt';const d=dolt();diagnosticStage='capture-bao';const b=await bao();console.log(JSON.stringify({dolt:d,bao:b}));}
- else if(mode==='held-state-check'){
+ else if(mode==='held-state-check'||mode==='epoch-pre-smoke-check'){
   const log=readFileSync('/data/api.log','utf8');const captured=/automation hold: (\{[^\n]+\})/.exec(log);
   if(process.env.IAM_AUTOMATION_HOLD!=='1'||!captured||JSON.parse(captured[1]).held!==true)throw Error('captured hold required');
   const hashes=await workflowHashes();if(!Object.keys(hashes).length)throw Error('workflow coverage empty');
+  if(mode==='epoch-pre-smoke-check'){
+   const ledger=JSON.parse(readFileSync('/data/migrations/journal.json','utf8'));
+   const manifest=JSON.parse(readFileSync('/app/migration-source/data/migrations/manifest.json','utf8'));
+   if(ledger.format!==1||ledger.pending||!Array.isArray(ledger.entries)||!ledger.entries.length||!Array.isArray(manifest.versions)||manifest.versions.length!==ledger.entries.length||manifest.versions.some((v,i)=>v.id!==ledger.entries[i].id||v.checksum!==ledger.entries[i].checksum))throw Error('pre-smoke migration ledger mismatch');
+  }
   console.log(JSON.stringify({held:true,hashes}));
  }
  else if(mode==='smoke')console.log(JSON.stringify(await smoke()));

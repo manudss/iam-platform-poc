@@ -15,6 +15,25 @@ def smoke_projection(value):
  if value['held'] is not True or value['workflowPreserved'] is not True:raise ValueError('smoke hold coverage differs')
  return value
 
+def evidence_projection(component,value):
+ # Exact raw comparator inputs stay in memory. Persist only hashes/counts, never
+ # SQL defaults/functions, ledger payloads, database values or credential bytes.
+ if component=='stores' and (not isinstance(value,dict) or set(value)!={'dolt','bao'}):raise ValueError('store evidence shape differs')
+ if component=='postgres' and (not isinstance(value,dict) or set(value)!={'rows','schema','sequences','sequenceDefinitions'}):raise ValueError('postgres evidence shape differs')
+ if component=='credentials' and (not isinstance(value,dict) or any(v is not None and not re.fullmatch('[a-f0-9]{64}',str(v)) for v in value.values())):raise ValueError('credential hash evidence differs')
+ encoded=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+ result={'format':1,'kind':'non-secret-epoch-component-digest','component':component,'sha256':hashlib.sha256(encoded).hexdigest(),'serialized_bytes':len(encoded),'top_level_count':len(value) if isinstance(value,(dict,list)) else None,'raw_values_persisted':False}
+ if component=='postgres':
+  result['row_multiset_sha256']=hashlib.sha256(json.dumps(value['rows'],sort_keys=True).encode()).hexdigest()
+  result['row_count']=sum(sum(rows.values()) for rows in value['rows'].values())
+  result['sequence_count']=len(value['sequences'])
+ return result
+
+def bounded_source(source):
+ return ("const {spawn:epochSpawn}=await import('node:child_process');"
+  "const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},120000)\",String(process.pid)],{stdio:'ignore'});"
+  "process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
+
 def load_fixed(binding,name,reader):
  path,_=reader(binding)
  if path!=Path(__file__).with_name(name).absolute():raise ValueError('fixed installed epoch module required')
@@ -55,12 +74,21 @@ def _execute(spec,lock_bindings):
  smoke_error=None;after={};smoke=None
  q.private_json(evidence/'epoch-attempt.json',{'kind':'fresh-held-smoke-attempt','started_at':time.time(),'may_mutate_sessions_audit':True,'restoration_admissible':False})
  # Bound the remote Node process itself, not just docker exec's client.
- bounded_source=("const {spawn:epochSpawn}=await import('node:child_process');"
-  "const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},120000)\",String(process.pid)],{stdio:'ignore'});"
-  "process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
+ executed_source=bounded_source(source)
+ executed_sha256=hashlib.sha256(executed_source.encode()).hexdigest()
+ try:
+  ledger_file=Path(env['LYAM_DATA_DIR'])/'migrations/journal.json'
+  if not ledger_file.is_file():raise ValueError('existing migration ledger required before smoke')
+  pre=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',executed_source,'epoch-pre-smoke-check'],json.dumps(policy)))
+  if pre.get('held') is not True or not isinstance(pre.get('hashes'),dict) or not pre['hashes'] or any(not re.fullmatch('[a-f0-9]{64}',str(v)) for v in pre['hashes'].values()):raise ValueError('pre-smoke readable log/workflow coverage required')
+  q.private_json(evidence/'epoch-pre-smoke.json',{'held':True,'workflow_count':len(pre['hashes']),'executed_source_sha256':executed_sha256,'capture_source_sha256':spec['capture']['sha256'],'timeout_prefix_bound_by_controller':True})
+ except BaseException:
+  q.CAPTURE_LOCK_FDS=()
+  raise
+
  try:
   try:
-   smoke=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',bounded_source,'smoke'],json.dumps({**policy,'auth':json.loads(authraw),'reviewedLegacyRollback':False})))
+   smoke=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',executed_source,'smoke'],json.dumps({**policy,'auth':json.loads(authraw),'reviewedLegacyRollback':False})))
    # Whitelist only non-secret smoke facts. Never persist raw stdout/stderr.
    safe=smoke_projection(smoke)
    q.private_json(evidence/'epoch-smoke.json',safe)
@@ -77,7 +105,7 @@ def _execute(spec,lock_bindings):
    failures=[];recovery_deadline=time.monotonic()+120
    for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
    for name,read_state in (
-    ('stores',lambda:json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',bounded_source,'capture'],json.dumps({**policy,'running':True,'baoToken':tokenraw.decode().strip()})))),
+    ('stores',lambda:json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',executed_source,'capture'],json.dumps({**policy,'running':True,'baoToken':tokenraw.decode().strip()})))),
     ('postgres',lambda:q.postgres(policy)),
     ('credentials',lambda:q.credential_hashes(Path(env['LYAM_DATA_DIR']),policy)),
     ('migrationLedger',lambda:json.loads((Path(env['LYAM_DATA_DIR'])/'migrations/journal.json').read_text()))):
@@ -85,14 +113,14 @@ def _execute(spec,lock_bindings):
      remaining=recovery_deadline-time.monotonic()
      if remaining<=0:raise TimeoutError('recovery capture budget exhausted')
      signal.alarm(math.ceil(remaining))
-     value=read_state();q.private_json(evidence/('epoch-after-'+name+'.json'),value)
+     value=read_state();q.private_json(evidence/('epoch-after-'+name+'.json'),evidence_projection(name,value))
      if name=='stores':after.update(value)
      else:after[name]=value
     except Exception:failures.append(name)
    signal.alarm(0)
    q.private_json(evidence/'epoch-attempt-outcome.json',{'smoke_returned':smoke is not None,'smoke_refused_or_interrupted':smoke_error is not None,'capture_failed_components':failures,'restoration_admissible':False,'may_have_mutated':True})
    after.update(image=image,policyHash=hashlib.sha256(policyraw).hexdigest(),transportCoverage='LOCAL_TLS_SNI_EPOCH_NOT_PUBLIC')
-   q.private_json(evidence/'epoch-after.json',after)
+   q.private_json(evidence/'epoch-after-summary.json',{'format':1,'complete':not failures,'failed_components':failures,'components':{key:evidence_projection(key,value) for key,value in after.items()},'raw_comparison_inputs_persisted':False})
   signal.alarm(120)
   if smoke_error:raise ValueError('smoke refused or interrupted; inspect non-secret epoch evidence') from None
   if failures:raise ValueError('post-smoke capture incomplete; retained partial evidence')
@@ -106,7 +134,7 @@ def _execute(spec,lock_bindings):
  audit_before=before['postgres']['rows'].get('public.decision_audit',{});audit_after=after['postgres']['rows'].get('public.decision_audit',{})
  added=sum(audit_after.values())-sum(audit_before.values())
  if not 0<=added<=1000:raise ValueError('epoch smoke audit change beyond bound')
- result={'audit_added_rows':added,'format':1,'kind':'fresh-restored-held-epoch-result','started_at':start,'completed_at':time.time(),'container_id':runtime['expected_container_id'],'target':target,'historical_tls_baseline_missing':True,'transport':'LOCAL_TLS_SNI_NOT_PUBLIC','restoration_admissible':False,'effect_authority':False,'session_audit_smoke_executed':True,'source_hashes':{key:spec[key]['sha256'] for key in ('runtime_controller','qualifier','capture')},'evidence_hashes':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in evidence.iterdir() if p.is_file()}}
+ result={'audit_added_rows':added,'format':1,'kind':'fresh-restored-held-epoch-result','started_at':start,'completed_at':time.time(),'container_id':runtime['expected_container_id'],'target':target,'historical_tls_baseline_missing':True,'transport':'LOCAL_TLS_SNI_NOT_PUBLIC','restoration_admissible':False,'effect_authority':False,'session_audit_smoke_executed':True,'executed_source_sha256':executed_sha256,'source_hashes':{key:spec[key]['sha256'] for key in ('runtime_controller','qualifier','capture')},'evidence_hashes':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in evidence.iterdir() if p.is_file()}}
  q.private_json(evidence/'epoch-result.json',result)
  return result
 

@@ -6,7 +6,8 @@ s=importlib.util.spec_from_file_location('epochflow',Path(__file__).with_name('r
 class Tests(unittest.TestCase):
  def test_actual_orchestrator_fresh_files_fixed_direct_check_and_no_admission(self):self.flow(False)
  def test_smoke_refusal_keeps_after_and_attempt_evidence(self):self.flow(True)
- def flow(self,fail):
+ def test_pre_smoke_failure_never_calls_smoke(self):self.flow(False,True)
+ def flow(self,fail,pre_fail=False):
   with tempfile.TemporaryDirectory() as d:
    root=Path(d);data=root/'data';data.mkdir();(data/'migrations').mkdir();(data/'migrations/journal.json').write_text('[1]');env=root/'env';env.write_text('LYAM_DATA_DIR='+str(data)+'\n');policy=root/'policy';auth=root/'auth';token=root/'token';source=root/'capture';auth.write_text('{}');token.write_text('fixture');source.write_text('synthetic capture');policy.write_text(json.dumps({'authFile':str(auth),'baoTokenFile':str(token),'appendOnlyTables':['public.decision_audit']}))
    runtime_path=Path(m.__file__).with_name('restored-runtime-check.py').absolute();capture_binding={'path':str(source),'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
@@ -22,6 +23,8 @@ class Tests(unittest.TestCase):
      closed();evidence.mkdir();prior={'dolt':[],'bao':{},'credentials':{},'postgres':copy.deepcopy(pg),'migrationLedger':[1],'image':image,'policyHash':hashlib.sha256(policy.read_bytes()).hexdigest(),'transportCoverage':transport_coverage,'kind':'held-running-baseline','epoch':'postrotation-current','originalPreservationReplaced':False};(evidence/'held-running-baseline.json').write_text(json.dumps(prior));closed()
     def cmd(self,args,stdin):
      calls.append(args[-1]);self_outer.assertEqual(self.CAPTURE_LOCK_FDS,(8,9))
+     if args[-1]=='epoch-pre-smoke-check' and pre_fail:raise ValueError('read-only prerequisite absent')
+     if args[-1]=='epoch-pre-smoke-check':return json.dumps({'held':True,'hashes':{'iam.workflow_test':'a'*64}})
      if args[-1]=='smoke' and fail:raise TimeoutError('synthetic smoke interruption')
      if args[-1]=='smoke':return json.dumps({'journal':{'count':14,'checksum':'a'*64},'ledger':[{'id':'0003','checksum':'b'*64}],'held':True,'workflowPreserved':True})
      return json.dumps({'dolt':[],'bao':{}})
@@ -37,9 +40,12 @@ class Tests(unittest.TestCase):
     def exec_module(self,module):module.parse_env=lambda raw:dict(line.split('=',1) for line in raw.decode().splitlines());module.read=r.read;module.locks=r.locks;module.verify=r.verify
    fake=type('Spec',(),{'loader':Loader()})()
    with patch.object(Path,'lstat',ls),patch.object(m.importlib.util,'spec_from_file_location',return_value=fake),patch.object(m.importlib.util,'module_from_spec',return_value=type('Runtime',(),{})()),patch.object(m,'load_fixed',return_value=q):
+    if pre_fail:
+     with self_outer.assertRaisesRegex(ValueError,'prerequisite absent'):m.execute(spec,{'journal':('j',8),'updater':('u',9)})
+     self_outer.assertNotIn('smoke',calls);self_outer.assertEqual(q.CAPTURE_LOCK_FDS,());return
     if fail:
      with self_outer.assertRaisesRegex(ValueError,'smoke refused'):m.execute(spec,{'journal':('j',8),'updater':('u',9)})
-     for name in ('epoch-after.json','epoch-after-postgres.json','epoch-attempt-outcome.json'):self_outer.assertTrue((root/'evidence'/name).is_file())
+     for name in ('epoch-after-summary.json','epoch-after-postgres.json','epoch-attempt-outcome.json'):self_outer.assertTrue((root/'evidence'/name).is_file())
      self_outer.assertTrue(json.loads((root/'evidence/epoch-attempt-outcome.json').read_text())['may_have_mutated']);return
     result=m.execute(spec,{'journal':('j',8),'updater':('u',9)})
    self.assertEqual(calls.count('smoke'),1);self.assertEqual(calls.count('capture'),1);self.assertEqual(len(observed),3);self.assertFalse(result['restoration_admissible']);self.assertTrue(result['historical_tls_baseline_missing']);self.assertEqual(q.CAPTURE_LOCK_FDS,())
