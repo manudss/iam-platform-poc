@@ -55,4 +55,11 @@ class Tests(unittest.TestCase):
     self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(result.stdout,'a'*40+'\n')
     result=subprocess.run(m.plan('lyam-drain',root),input='{}',capture_output=True,text=True)
     self.assertEqual(result.returncode,1,result.stderr);self.assertNotIn('unrecognized arguments',result.stderr);self.assertEqual(state.read_text(),raw)
+    # A valid successor reaches the real queue deploy path and the fixed child.
+    # Deliberate updater99 exercises refusal without claiming a real deployment.
+    updater.write_text('#!/usr/bin/python3\nimport sys\nassert sys.argv[-2:]==["--env-file",'+repr(str(root/'lyam.env'))+']\nraise SystemExit(99)\n')
+    successor={'format':1,'base':'a'*40,'entries':[{'parent':'a'*40,'sha':'c'*40,'digest':'sha256:'+'d'*64}]}
+    result=subprocess.run(m.plan('lyam-drain',root),input=json.dumps(successor),capture_output=True,text=True)
+    self.assertEqual(result.returncode,1,result.stderr)
+    failed=json.loads(state.read_text());self.assertEqual(failed['failed']['exit'],99);self.assertEqual(len(failed['history']),1)
 if __name__=='__main__':unittest.main()
