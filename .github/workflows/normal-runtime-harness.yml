@@ -133,7 +133,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Synthetic copy independent host fence before first normal app instruction
+      - name: Explicit isolated-copy networks, DNS deny counter and bounded runtime
         run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-copy-isolation-fixture.py
       - uses: actions/upload-artifact@v4
         if: always()

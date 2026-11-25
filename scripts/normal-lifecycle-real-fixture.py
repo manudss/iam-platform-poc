@@ -12,6 +12,7 @@ def run(args,input=None,timeout=300):
  return r.stdout.strip()
 def main():
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable runner only')
+ isolated=os.environ.get('LYAM_SYNTHETIC_ISOLATED_COPY')=='1'
  repo=Path(__file__).resolve().parents[1];root=Path('/root/normal-real-'+secrets.token_hex(8));root.mkdir(mode=0o700);prefix=root.name;owned=[];nets=[];result={'kind':'synthetic-three-store-normal-lifecycle','production_data_used':False,'passed':False,'stage':'setup','same_image_twice':True,'update_shell_exercised':False,'queue_exercised':False,'boot_exercised':False}
  def docker(*args):return run(['docker',*args])
  def wait(name,port,path):
@@ -27,7 +28,7 @@ def main():
   ids={}
   for role,subnet in [('backend','172.27.0.0/24'),('frontend','172.28.0.0/24')]:
    name=prefix+'-'+role;args=['network','create','--subnet',subnet,'--gateway',subnet.split('/')[0].rsplit('.',1)[0]+'.1']
-   if role=='backend':args+=['--internal']
+   if role=='backend' or isolated:args+=['--internal']
    ids[role]=docker(*args,name);nets.append(name)
   pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app';old=prefix+'-old'
   for name in [pg,bao,seed,app,old]:owned.append(name)
@@ -47,11 +48,12 @@ def main():
   # Fictional generated data only. Real external providers are not configured.
   env=root/'normal.env';env.write_text('IAM_DEMO_SEED_MODE=never\nIAM_PG_URL=postgres://lyam@pg:5432/lyam\nIAM_BAO_ADDR=http://bao:8200\nIAM_BAO_TOKEN=synthetic-fixture-only\nIAM_PUBLIC_ORIGIN=http://localhost:18088\n');env.chmod(0o600)
   code=root/'code';code.mkdir(mode=0o700)
-  for filename in ['normal-runtime.py','normal-lifecycle.py']:shutil.copyfile(repo/'deploy/oci'/filename,code/filename)
+  for filename in ['normal-runtime.py','normal-lifecycle.py']:shutil.copyfile(repo/'deploy/oci'/('isolated-runtime.py' if isolated and filename=='normal-runtime.py' else filename),code/filename)
   def load(filename):
    s=importlib.util.spec_from_file_location(filename.replace('.','_'),code/filename);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
   n=load('normal-runtime.py');l=load('normal-lifecycle.py');im=json.loads(docker('image','inspect',IMAGE))[0]
   cfg={'format':1,'kind':'normal-two-network','image':IMAGE,'image_id':im['Id'],'source_sha':SHA,'container':app,'data_dir':str(data),'port':18088,'env':{'path':str(env),'sha256':hashlib.sha256(env.read_bytes()).hexdigest()},'backend':{'name':nets[0],'id':ids['backend']},'frontend':{'name':nets[1],'id':ids['frontend']},'pg':{'name':pg,'id':json.loads(docker('inspect',pg))[0]['Id'],'ip':'172.27.0.10'},'bao':{'name':bao,'id':json.loads(docker('inspect',bao))[0]['Id'],'ip':'172.27.0.11'},'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':['1.1.1.1','9.9.9.9'],'companion_extra_internal':[]}
+  if isolated:cfg.update(kind='isolated-copy',dns_upstreams=[],resources={'memory_bytes':2147483648,'pids':256,'nano_cpus':1000000000});result['runtime_kind']='isolated-copy'
   lock=root/'update.lock';lock.touch(mode=0o600);attempts=[]
   with lock.open('rb') as f:
    fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);n.LOCK_FDS=(f.fileno(),);n.LOCK_PATHS=(str(lock),)
