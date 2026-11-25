@@ -107,7 +107,11 @@ try {
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:out+'/desktop-dark-moved.png'});
  await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>document.documentElement.dataset.theme='light');
- const win=await page.locator('#ai-floating-window').boundingBox();assert(win.x>=0&&win.y>=0&&win.x+win.width<=390&&win.y+win.height<=844);
+ // setViewportSize can resolve before the browser resize event and Angular's geometry render.
+ // Wait for the real invariant (not a fixed delay), retaining a bounded failure with actual pixels/metrics.
+ try { await page.waitForFunction(()=>{const b=document.querySelector('#ai-floating-window').getBoundingClientRect();return b.x>=0&&b.y>=0&&b.right<=innerWidth&&b.bottom<=innerHeight;},undefined,{timeout:3000}); }
+ catch(e){await page.screenshot({path:out+'/resize-failure.png'});console.error('resize geometry',await page.locator('#ai-floating-window').boundingBox());throw e;}
+ const win=await page.locator('#ai-floating-window').boundingBox();assert(win.x>=0&&win.y>=0&&win.x+win.width<=390&&win.y+win.height<=844,JSON.stringify(win));
  await checkScroll('mobile');
  await page.screenshot({path:out+'/mobile-light.png'});
  // Short viewport represents keyboard-reduced space, not a claim of native keyboard testing.
