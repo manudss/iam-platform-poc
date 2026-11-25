@@ -3,8 +3,47 @@
 Does not copy source, start a database/app server, migrate, or admit restoration.
 The reviewed spec binds all work-tree bytes. Failures preserve private output.
 """
-import hashlib,importlib.util,json,os,re,shutil,signal,subprocess,time
+import hashlib,importlib.util,json,os,re,shutil,signal,subprocess,time,threading
 from pathlib import Path
+
+class ResourceMonitor:
+ """Host-side sampled cgroup peak plus final Docker state, before removal.
+ Sampling is observational, not a bound; an early kill can evade peak sampling.
+ """
+ def __init__(self,name):
+  self.name=name;self.done=threading.Event();self.peak=None;self.samples=0;self.thread=None
+ def start(self):
+  self.thread=threading.Thread(target=self.sample,daemon=True);self.thread.start();return self
+ def sample(self):
+  path=None
+  while not self.done.is_set():
+   try:
+    if path is None:
+     r=subprocess.run(['docker','inspect',self.name],capture_output=True,text=True,timeout=3)
+     if r.returncode==0:
+      pid=json.loads(r.stdout)[0]['State']['Pid']
+      if type(pid) is int and pid>0:
+       entries=Path('/proc/'+str(pid)+'/cgroup').read_text().splitlines()
+       relative=next(row[3:] for row in entries if row.startswith('0::'))
+       candidate=Path('/sys/fs/cgroup')/relative.lstrip('/')
+       if '..' in candidate.parts:raise ValueError('cgroup path differs')
+       path=candidate/'memory.peak'
+    if path is not None:
+     n=int(path.read_text().strip())
+     if n<0:raise ValueError('memory peak differs')
+     self.peak=max(self.peak or 0,n);self.samples+=1
+   except Exception:pass
+   self.done.wait(0.05)
+ def finish(self):
+  self.done.set()
+  if self.thread:self.thread.join(timeout=4)
+  result={'sampled_memory_peak_bytes':self.peak,'samples':self.samples,'measurement_is_upper_bound':False,'docker_state_available':False}
+  try:
+   r=subprocess.run(['docker','inspect',self.name],capture_output=True,text=True,timeout=5)
+   state=json.loads(r.stdout)[0]['State']
+   result.update(docker_state_available=True,oom_killed=state['OOMKilled'],exit_code=state['ExitCode'],running=state['Running'])
+  except Exception:pass
+  return result
 
 def digest_tree(root):
  if not root.is_dir() or root.is_symlink():raise ValueError('real work directory required')
@@ -21,6 +60,38 @@ def digest_tree(root):
     for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
    rows.append([str(p.relative_to(root)),s.st_size,h.hexdigest()])
  return hashlib.sha256(json.dumps(rows,separators=(',',':')).encode()).hexdigest(),total,len(rows)
+
+def prepare_work_copy(incoming,work):
+ """Inventory an operator-staged input; create NEW normalized work, input intact.
+ Never reads the original recovery mount, follows links, or changes incoming.
+ """
+ incoming,work=Path(incoming),Path(work)
+ if incoming.name!='incoming' or incoming.parent!=work.parent or work.name!='work' or not re.fullmatch(r'/root/dolt-evidence-[a-f0-9]{16}',str(work.parent)) or work.exists():raise ValueError('new sibling work copy required')
+ def inventory(root):
+  rows=[];total=0
+  for p in [root,*sorted(root.rglob('*'))]:
+   st=p.lstat()
+   if p.is_symlink() or not(p.is_file() or p.is_dir()) or (p.is_file() and st.st_nlink!=1):raise ValueError('unlinked regular staged tree required')
+   h=None
+   if p.is_file():
+    total+=st.st_size
+    if total>384*1024**2:raise ValueError('staged tree too large')
+    h=hashlib.sha256(p.read_bytes()).hexdigest()
+   rows.append({'path':str(p.relative_to(root)),'uid':st.st_uid,'gid':st.st_gid,'mode':st.st_mode&0o7777,'size':st.st_size if p.is_file() else None,'sha256':h})
+   if len(rows)>100000:raise ValueError('too many staged entries')
+  return rows
+ before=inventory(incoming)
+ shutil.copytree(incoming,work,symlinks=True)
+ for p in [work,*work.rglob('*')]:
+  if p.is_symlink():raise ValueError('copy link differs')
+  os.chown(p,0,0);p.chmod(0o700 if p.is_dir() else 0o600)
+ after=inventory(work)
+ content=lambda rows:[(r['path'],r['size'],r['sha256']) for r in rows]
+ if before!=inventory(incoming) or content(before)!=content(after):raise ValueError('staged input or copied bytes changed')
+ report={'format':1,'kind':'new-work-copy-preparation','incoming_unchanged':True,'content_equal':True,'before':before,'after':after}
+ fd=os.open(work.parent/'preparation.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+ with os.fdopen(fd,'w') as f:json.dump(report,f);f.flush();os.fsync(f.fileno())
+ return report
 
 def command(spec,source):
  work=Path(spec['work_dir'])
@@ -54,6 +125,7 @@ def execute(spec,reader):
  if hashlib.sha256(executed.encode()).hexdigest()!=spec['executed_source_sha256']:raise ValueError('executed source binding differs')
  existing=subprocess.run(['docker','ps','-a','--format','{{.Names}}'],capture_output=True,text=True,timeout=15)
  if existing.returncode or spec['container'] in existing.stdout.splitlines():raise ValueError('cannot exclude preexisting capture container')
+ monitor=ResourceMonitor(spec['container']).start()
  result={'format':1,'kind':'work-copy-dolt-capture-attempt','completed':False,'scratch_tmpfs_max_bytes':1073741824,'source_copy_max_bytes':384*1024**2,'restoration_admissible':False,'source_tree_sha256':h,'source_files':count,'source_bytes':total,'executed_source_sha256':hashlib.sha256(executed.encode()).hexdigest()};failure=None
  try:
   # Python timeout kills docker CLIENT only. Finally forcibly removes this exact
@@ -76,6 +148,7 @@ def execute(spec,reader):
  finally:
   signal.alarm(0)
   for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
+  result['host_resource_measurement']=monitor.finish()
   try:cleanup=subprocess.run(['docker','rm','-f',spec['container']],text=True,capture_output=True,timeout=20)
   except Exception:cleanup=type('Cleanup',(),{'returncode':1})()
   # A failed remove, even if container absent, remains an unverified refusal.

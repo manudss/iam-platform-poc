@@ -11,34 +11,30 @@ def run(args,stdin=None):
  return r.stdout.strip()
 def main():
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable hosted root runner required')
- repo=Path(__file__).resolve().parents[1];root=Path('/root/dolt-evidence-'+os.urandom(8).hex());root.mkdir(mode=0o700);work=root/'work';work.mkdir(mode=0o700);code=root/'code';code.mkdir(mode=0o700)
+ repo=Path(__file__).resolve().parents[1];root=Path('/root/dolt-evidence-'+os.urandom(8).hex());root.mkdir(mode=0o700);work=root/'work';incoming=root/'incoming';incoming.mkdir(mode=0o700);code=root/'code';code.mkdir(mode=0o700)
  name='dolt-copy-'+os.urandom(8).hex();server='dolt-server-'+os.urandom(8).hex();out=root/'capture.json';proof={'format':1,'kind':'synthetic-dolt-copy-runner-proof','synthetic_copy_run_completed':False,'production_data_used':False,'held_path_exercised':False,'verifier_exercised':False,'source_version_established':False};destination=Path('/tmp/dolt-copy-runner-proof.json')
  try:
   started=time.monotonic()
   files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py','dolt-held-capture.py']
   for file in files:
    p=code/file;shutil.copyfile(repo/'deploy/oci'/file,p);p.chmod(0o700)
-  # Build an offline multidir Dolt fixture with one dirty business table.
-  seed="const f=require('fs'),{execFileSync:x}=require('child_process');for(const db of ['iam','iam_meta']){const cwd='/fixture/'+db;f.mkdirSync(cwd);x('dolt',['init','--name','Fixture','--email','fixture@example.invalid'],{cwd});x('dolt',['sql','-q','CREATE TABLE fixture_rows (id INT PRIMARY KEY, note VARCHAR(20)); INSERT INTO fixture_rows VALUES (1,\\'synthetic\\')'],{cwd});}"
-  run(['docker','run','--rm','--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','64','-v',str(work)+':/fixture','--entrypoint','node',IMAGE,'-e',seed])
-  # Physical20MiB padding exercises cpSync/tmpfs at source-scale without
-  # introducing secret or unstable SQL data. SQL table richness stays separate.
-  with (work/'synthetic-padding.bin').open('wb') as f:
+  # Real tables, view, procedure, four refs per database. Dirty main is kept.
+  seed="""const f=require('fs'),{execFileSync:x}=require('child_process');for(const db of ['iam','iam_meta']){const cwd='/fixture/'+db;f.mkdirSync(cwd);const sql=q=>x('dolt',['sql','-q',q],{cwd});x('dolt',['init','--name','Fixture','--email','fixture@example.invalid'],{cwd});sql('CREATE TABLE fixture_rows (id INT PRIMARY KEY, note LONGTEXT); CREATE TABLE fixture_extra (id INT PRIMARY KEY, n INT); CREATE VIEW fixture_view AS SELECT id FROM fixture_rows; CREATE PROCEDURE fixture_proc() SELECT 1');x('dolt',['sql'],{cwd,input:'INSERT INTO fixture_rows VALUES '+Array.from({length:1024},(_,i)=>"("+i+",'"+'x'.repeat(16384)+"')").join(',')+';'});sql('INSERT INTO fixture_extra VALUES(1,7)');x('dolt',['add','.'],{cwd});x('dolt',['commit','-m','synthetic baseline'],{cwd});for(const branch of ['personal','wf_run_1','wf_run_2'])x('dolt',['branch',branch],{cwd});sql("INSERT INTO fixture_rows VALUES(9999,'dirty synthetic')");}"""
+  run(['docker','run','--rm','--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','64','-v',str(incoming)+':/fixture','--entrypoint','node',IMAGE,'-e',seed])
+  # Physical padding separately exercises copy/tmpfs, not SQL query scale.
+  with (incoming/'synthetic-padding.bin').open('wb') as f:
    for _ in range(20):f.write(os.urandom(1024*1024))
-  # Init output is owned root, copied code reads only this synthetic tree.
-  # Synthetic Dolt init may create group-writable files. Normalize ONLY this
-  # generated fixture tree, never a source or operator copy.
-  for p in work.rglob('*'):
-   if p.is_symlink():raise ValueError('unexpected synthetic symlink')
-   p.chmod(0o700 if p.is_dir() else 0o600)
-  s=importlib.util.spec_from_file_location('copy_runner',code/'dolt-copy-capture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+  module=importlib.util.spec_from_file_location('copy_runner',code/'dolt-copy-capture.py');m=importlib.util.module_from_spec(module);module.loader.exec_module(m)
+  prepared=m.prepare_work_copy(incoming,work)
+  proof['work_preparation']={k:prepared[k] for k in ('incoming_unchanged','content_equal')}
+  proof['work_preparation']['inventory_sha256']=hashlib.sha256((root/'preparation.json').read_bytes()).hexdigest()
   tree_hash,size,count=m.digest_tree(work);image_id=json.loads(run(['docker','image','inspect',IMAGE]))[0]['Id']
   spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':tree_hash,'image_id':image_id,'dolt_version':'2.6.1','source':{'path':str(code/'qualification-container.mjs'),'sha256':hashlib.sha256((code/'qualification-container.mjs').read_bytes()).hexdigest()},'executed_source_sha256':hashlib.sha256(m.executed_source((code/'qualification-container.mjs').read_bytes()).encode()).hexdigest(),'container':name,'out':str(out)}
   path=root/'spec.json';path.write_text(json.dumps(spec));path.chmod(0o600)
   raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
   result=json.loads(raw);capture=json.loads(out.read_text())
-  if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=2 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
-  proof.update(synthetic_copy_run_completed=True,ref_count=2,capture_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),copy_runner_sha256=hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),capture_source_sha256=spec['source']['sha256'],cleanup_confirmed=True,source_copy_bytes=size)
+  if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=8 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
+  proof.update(synthetic_copy_run_completed=True,ref_count=8,capture_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),copy_runner_sha256=hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),capture_source_sha256=spec['source']['sha256'],cleanup_confirmed=True,source_copy_bytes=size)
   # Running=true capture against a REAL disposable Dolt server, no app.
   after_work=root/'after';shutil.copytree(work,after_work)
   run(['docker','run','-d','--name',server,'--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','1536m','--memory-swap','1536m','--pids-limit','128','--cpus','1','--restart','no','-v',str(after_work)+':/data/dolt','--workdir','/data/dolt','--entrypoint','dolt',IMAGE,'sql-server','--host','0.0.0.0','--port','3307','--data-dir','/data/dolt'])
@@ -47,17 +43,32 @@ def main():
    if ready.returncode==0:break
    time.sleep(1)
   else:raise ValueError('synthetic Dolt server not ready')
-  store=(repo/'apps/api/src/workflows/store.ts').read_text()
-  match=__import__('re').search(r"private async pieceTable.*?c.query\('([^']+)'\)",store)
-  if not match:raise ValueError('actual migration DDL not found')
+  # Read dist from EXACT image, never execute the application module.
+  dist=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','128m','--pids-limit','32','--entrypoint','node',image_id,'-e',"process.stdout.write(require('fs').readFileSync('/app/api/dist/workflows/store.js','utf8'))"])
+  match=__import__('re').search(r"async pieceTable\(c\).*?c.query\('([^']+)'\)",dist,__import__('re').S)
+  if not match:raise ValueError('exact image migration DDL not found')
   ddl=match[1]
-  proof['migration_source_sha256']=hashlib.sha256(store.encode()).hexdigest()
+  proof['migration_image_id']=image_id
+  proof['migration_dist_sha256']=hashlib.sha256(dist.encode()).hexdigest()
+  proof['migration_ddl_sha256']=hashlib.sha256(ddl.encode()).hexdigest()
   run(['docker','exec',server,'dolt','--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','','--use-db=iam_meta','sql','-q',ddl])
 
   def mod(file,name):
    spec=importlib.util.spec_from_file_location(name,code/file);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
   helper=mod('dolt-held-capture.py','helper')
-  after=helper.capture_once(server,image_id,helper.executed_source((code/'qualification-container.mjs').read_bytes()),{})
+  # Host enters ONLY disposable server netns; loopback allowed, other egress refused.
+  pid=json.loads(run(['docker','inspect',server]))[0]['State']['Pid']
+  for rule in [['-P','OUTPUT','DROP'],['-A','OUTPUT','-o','lo','-j','ACCEPT'],['-A','OUTPUT','-m','conntrack','--ctstate','ESTABLISHED,RELATED','-j','ACCEPT'],['-A','OUTPUT','-j','REJECT']]:run(['nsenter','-t',str(pid),'-n','iptables',*rule])
+  proof['synthetic_netns_output_drop_loopback_accept']=True
+  server_monitor=m.ResourceMonitor(server).start();held_measurements=[]
+  capture_started=time.monotonic()
+  try:after=helper.capture_once(server,image_id,helper.executed_source((code/'qualification-container.mjs').read_bytes()),{},held_measurements)
+  finally:
+   proof['held_helper_measurements']=held_measurements
+   proof['server_capture_measurement']=server_monitor.finish()
+  proof['sql_capture_duration_seconds']=time.monotonic()-capture_started
+  proof['table_entries_captured']=sum(len(r['tables']) for r in after['dolt'])
+  proof['rows_per_main_fixture_table']=1025
   adapter=mod('dolt-migration-evidence.py','adapter');verifier=mod('qualification-dolt-piece-storage-verifier.py','verifier')
   anchors=lambda env:[{k:row[k] for k in ('database','branch','head','root')} for row in env['dolt']]
   verdict=adapter.evaluate(capture,after,anchors(capture),anchors(after),verifier.verify)

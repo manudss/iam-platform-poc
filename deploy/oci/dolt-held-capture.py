@@ -13,9 +13,16 @@ def load_fixed(binding,name,reader):
 def executed_source(source):
  return ("const {spawn:epochSpawn}=await import('node:child_process');const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},150000)\",String(process.pid)],{stdio:'ignore'});epochWatch.unref();process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
 
-def capture_once(container_id,image_id,executed,bindings):
+def resource_monitor(name):
+ module_path=Path(__file__).with_name('dolt-copy-capture.py')
+ spec=importlib.util.spec_from_file_location('bounded_copy_resources',module_path);resources=importlib.util.module_from_spec(spec);spec.loader.exec_module(resources)
+ return resources.ResourceMonitor(name)
+
+def capture_once(container_id,image_id,executed,bindings,measurements=None):
   name='dolt-held-reader-'+secrets.token_hex(8)
   args=['docker','run','-i','--name',name,'--restart','no','--user','0:0','--network','container:'+container_id,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--entrypoint','node',image_id,'--input-type=module','-e',executed,'dolt-only']
+  monitor=resource_monitor(name).start()
+  started=__import__('time').monotonic()
   try:
    value=subprocess.run(args,input='{"running":true}',text=True,capture_output=True,timeout=180,pass_fds=tuple(fd for _,fd in bindings.values()))
    if value.returncode:raise ValueError('held isolated Dolt read refused')
@@ -23,7 +30,13 @@ def capture_once(container_id,image_id,executed,bindings):
    if set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not True or not envelope['dolt']:raise ValueError('held Dolt envelope differs')
    return envelope
   finally:
-   cleanup=subprocess.run(['docker','rm','-f',name],text=True,capture_output=True,timeout=20)
+   prior={sig:signal.signal(sig,signal.SIG_IGN) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
+   try:
+    metric=monitor.finish();metric['duration_seconds']=__import__('time').monotonic()-started
+    if measurements is not None:measurements.append(metric)
+    cleanup=subprocess.run(['docker','rm','-f',name],text=True,capture_output=True,timeout=20)
+   finally:
+    for sig,handler in prior.items():signal.signal(sig,handler)
    if cleanup.returncode:raise ValueError('held reader cleanup unverified')
 
 def execute(spec,bindings,reader):
