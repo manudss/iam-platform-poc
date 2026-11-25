@@ -124,7 +124,7 @@ class Host:
   if 'IAM_AUTOMATION_HOLD=1' not in c.get('Config',{}).get('Env',[]):raise ValueError('live held environment required')
   self.image_config=json.loads(self.run(['docker','image','inspect',self.image]))[0]['Config']
   self.verify_config(c,envraw,held=True)
-  self.original_container={'id':c['Id'],'image':c['Image'],'created':c['Created'],'name':c['Name']} 
+  self.original_container={'id':c['Id'],'image':c['Image'],'created':c['Created'],'name':c['Name']}
   # Normal launch arguments are constructed, not taken from free-form manifest.
   self.front=Path(self.env.get('LYAM_FRONT_BARRIER_FILE','/var/lib/lyam-front-gate/MAINTENANCE'))
   self.ops=Path(self.env.get('LYAM_OPS_BARRIER_FILE','/var/lib/lyam-front-gate/OPS-MAINTENANCE'))
