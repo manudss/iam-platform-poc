@@ -75,9 +75,47 @@ def main():
     attempts.append({'generation':generation,'container_id':observed['Id'],'image':observed['Image'],'healthy':True,'postcheck':True,'effects_marker_exists':Path(str(root/('normal-attempt-'+str(generation)+'.json'))+'.effects').is_file()})
     l.atomic_new(Path(str(root/('normal-attempt-'+str(generation)+'.json'))+'.completed'),{'fixture_completed':True})
     if generation==1:docker('stop','-t','30',app);docker('rename',app,old)
+  if '--updater' in __import__('sys').argv:
+   result['stage']='actual-updater-shell'
+   from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+   import threading,urllib.request
+   backup=root/'backups';backup.mkdir(mode=0o700);gate=root/'front/MAINTENANCE';gate.parent.mkdir(mode=0o755)
+   class Front(BaseHTTPRequestHandler):
+    def do_GET(self):
+     if gate.exists():self.send_response(503);self.end_headers();return
+     try:
+      with urllib.request.urlopen('http://127.0.0.1:18088/healthz',timeout=3) as response:code=response.status
+     except Exception:code=502
+     self.send_response(code);self.end_headers()
+    def log_message(self,*args):pass
+   front=ThreadingHTTPServer(('127.0.0.1',18089),Front);threading.Thread(target=front.serve_forever,daemon=True).start()
+   for f in (repo/'deploy/oci').iterdir():
+    if f.is_file():shutil.copyfile(f,code/f.name)
+   (code/'update.sh').chmod(0o700)
+   profile=root/'normal-profile.json';profile.write_text(json.dumps(cfg));profile.chmod(0o600)
+   # This fixture-only checker tests real shell/checker ordering and local health.
+   # It is NOT the full application qualification.py/OIDC/preservation policy.
+   checker=root/'fixture-check.py'
+   checker.write_text("#!/usr/bin/python3\nimport sys,subprocess,json\nfrom pathlib import Path\na=sys.argv;get=lambda k:a[a.index(k)+1];phase=get('--phase');x=json.loads(subprocess.check_output(['docker','inspect',get('--container')]))[0];assert Path(get('--barrier-file')).is_file();assert x['State']['Running'] is (phase=='after')\n")
+   checker.chmod(0o700)
+   settings={'LYAM_CONTAINER':app,'LYAM_DATA_DIR':str(data),'LYAM_BACKUP_DIR':str(backup),'LYAM_PORT':'18088','LYAM_LOCK_FILE':str(lock),'LYAM_PAUSE_FILE':str(root/'PAUSE'),'LYAM_FRONT_BARRIER_FILE':str(gate),'LYAM_NORMAL_RUNTIME':str(profile),'LYAM_NORMAL_RUNTIME_SHA256':hashlib.sha256(profile.read_bytes()).hexdigest(),'LYAM_NORMAL_LIFECYCLE_SHA256':hashlib.sha256((code/'normal-lifecycle.py').read_bytes()).hexdigest(),'LYAM_NORMAL_LAUNCHER_SHA256':hashlib.sha256((code/'normal-runtime.py').read_bytes()).hexdigest(),'LYAM_POST_UPDATE_CHECK':str(checker),'LYAM_HEALTH_TIMEOUT':'120'}
+   values=dict(line.split('=',1) for line in env.read_text().splitlines());values.update(settings);values['IAM_PUBLIC_ORIGIN']='http://127.0.0.1:18089';env.write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
+   try:
+    process=subprocess.run(['sh',str(code/'update.sh'),'--image',IMAGE,'--env-file',str(env),'--require-qualification'],capture_output=True,text=True,timeout=700)
+    result['updater_exit']=process.returncode
+    if process.returncode:raise ValueError('actual updater shell refused')
+    if gate.exists():raise ValueError('fixture front not reopened')
+    archives=list(backup.glob('lyam-data-*.tar.gz'))
+    if len(archives)!=1:raise ValueError('actual cold data archive missing')
+    records=list(backup.glob('normal-attempt-*.json.completed'))
+    if len(records)!=1:raise ValueError('actual lifecycle completion missing')
+    names=docker('ps','-a','--format','{{.Names}}').splitlines()
+    owned.extend(name for name in names if name.startswith(app+'-preserved-'))
+    result.update(update_shell_exercised=True,updater_cold_data_archives=1,updater_completed_attempts=1,updater_front_reopened=True,updater_qualification='fixture ordering/stopped-before/running-after checker only; NOT full qualification/OIDC',updater_same_image=True)
+   finally:front.shutdown();front.server_close()
   count=docker('exec',pg,'psql','-U','lyam','-d','lyam','-Atc','SELECT count(*) FROM lifecycle_fixture;')
   if count!='2':raise ValueError('PG continuity differs')
-  result.update(passed=True,stage='completed',attempts=attempts,pg_fixture_rows=2,bao_real=True,dolt_real=True,limits='fixture app2GiB/PID256/CPU2,PG512MiB,Bao256MiB',limitation='Same exact image twice, lifecycle Python only. No update.sh/queue/new-SHA/boot proof; Bao dev not durable restart proof.')
+  result.update(passed=True,stage='completed',attempts=attempts,pg_fixture_rows=2,bao_real=True,dolt_real=True,limits='fixture app2GiB/PID256/CPU2,PG512MiB,Bao256MiB',limitation='Same exact image lifecycle; optional updater shell uses fixture checker, no full qualification/queue/new-SHA/boot proof; Bao dev not durable restart proof.')
  finally:
   failures=[]
   for name in reversed(owned):
