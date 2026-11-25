@@ -48,7 +48,7 @@ def main():
    debug_spec={**spec,'container':'dolt-copy-'+os.urandom(8).hex()}
    diagnostic=subprocess.run(m.command(debug_spec,spec['source'])+[m.executed_source(debug.encode()),'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=120)
    subprocess.run(['docker','rm','-f',debug_spec['container']],text=True,capture_output=True,timeout=20)
-   print('SYNTHETIC_DIAGNOSTIC_NOT_PROOF '+str(diagnostic.returncode)+' stderr '+diagnostic.stderr[-5000:]+' stdout '+diagnostic.stdout[-1000:])
+   print('SYNTHETIC_DIAGNOSTIC_NOT_PROOF '+str(diagnostic.returncode)+' stderr '+diagnostic.stderr[:7000]+' stdout '+diagnostic.stdout[-1000:])
    raise
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=8 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
