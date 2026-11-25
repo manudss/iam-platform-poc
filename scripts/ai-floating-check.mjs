@@ -48,6 +48,18 @@ try {
  await page.locator('#ai-floating-window #ai-thread').waitFor();
  await page.locator('#ai-floating-window textarea').fill('Keep this draft while I check another page.');
  await page.locator('#ai-floating-window .layout>div>details').evaluate(el=>el.open=false);
+ const checkScroll = async label => {
+  await page.locator('#ai-thread').evaluate(t=>{for(let i=0;i<35;i++){const m=document.createElement('div');m.className='m assistant';m.textContent='Fixture message '+i+': a long conversation must scroll without moving the composer.';t.append(m);}t.scrollTop=t.scrollHeight;});
+  const before=await page.locator('#ai-floating-window .composer').boundingBox();
+  await page.locator('#ai-thread').hover();await page.mouse.wheel(0,-900);await page.waitForTimeout(100);
+  const after=await page.locator('#ai-floating-window .composer').boundingBox();
+  assert(Math.abs(before.y-after.y)<1,JSON.stringify({label,before,after}));
+  const metrics=await page.locator('#ai-thread').evaluate(t=>({scroll:t.scrollTop,height:t.clientHeight,total:t.scrollHeight}));
+  assert(metrics.total>metrics.height&&metrics.scroll<metrics.total-metrics.height,label+': only thread scrolls');
+  const outer=await page.locator('#ai-floating-window .body').evaluate(e=>({top:e.scrollTop,height:e.clientHeight,total:e.scrollHeight}));assert.equal(outer.top,0);assert(outer.total<=outer.height+1,label+': outer body does not scroll');
+  const panel=await page.locator('#ai-floating-window').boundingBox();assert(before.y+before.height<=panel.y+panel.height,label+': composer fits panel');
+ };
+ await checkScroll('desktop');
  await page.screenshot({path:out+'/desktop-light.png'});
  const el = await page.locator('#ai-floating-window plg-ai-assistant-chat').evaluate(el => (el.dataset.proof='same-instance'));
  await page.locator('[aria-label="Minimize AI assistant"]').click();
@@ -69,7 +81,10 @@ try {
  await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>document.documentElement.dataset.theme='light');
  const win=await page.locator('#ai-floating-window').boundingBox();assert(win.x>=0&&win.y>=0&&win.x+win.width<=390&&win.y+win.height<=844);
+ await checkScroll('mobile');
  await page.screenshot({path:out+'/mobile-light.png'});
+ // Short viewport represents keyboard-reduced space, not a claim of native keyboard testing.
+ await page.setViewportSize({width:390,height:460});await page.locator('#ai-floating-window textarea').focus();await page.waitForTimeout(200);await checkScroll('keyboard-sized viewport');await page.screenshot({path:out+'/mobile-keyboard-sized.png'});await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:out+'/mobile-dark.png'});
  // Physical touch input through Chrome, not synthetic DOM events.
  await page.locator('[aria-label="Minimize AI assistant"]').click();
@@ -83,5 +98,5 @@ try {
  await page.evaluate(()=>{document.documentElement.dataset.theme='light';document.documentElement.style.setProperty('--accent','var(--ok)');document.documentElement.style.setProperty('--accent-ink','var(--card)');document.documentElement.style.setProperty('--accent-soft','var(--ok-soft)');});
  await page.screenshot({path:out+'/mobile-alternate-accent.png'});
  assert.equal(aiLoads,1);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','minimize retains instance and draft','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','light/dark desktop/mobile'],screenshots:out}));
+ console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','minimize retains instance and draft','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
 } finally { await browser.close();server.close(); }

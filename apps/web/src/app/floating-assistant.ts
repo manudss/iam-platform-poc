@@ -46,6 +46,8 @@ export class FloatingAssistant {
       for (const kind of ['launcher', 'panel'] as const) if (Number.isFinite(saved?.[kind]?.x) && Number.isFinite(saved?.[kind]?.y)) this[kind] = saved[kind];
     } catch { /* geometry is optional */ }
     this.resize();
+    window.visualViewport?.addEventListener('resize', this.viewportChanged);
+    window.visualViewport?.addEventListener('scroll', this.viewportChanged);
     this.router.events.pipe(takeUntilDestroyed()).subscribe(e => {
       if (e instanceof NavigationEnd && !isPersonalArea(e.urlAfterRedirects) && !this.available()) void this.discover(this.request);
     });
@@ -107,8 +109,9 @@ export class FloatingAssistant {
     if (!delta[e.key]) return; e.preventDefault();
     const [x, y] = delta[e.key]; this[kind] = { x: this[kind].x + x, y: this[kind].y + y }; this.clamp(kind); this.save();
   }
+  private viewportChanged = () => this.resize();
   private bounds(kind: 'launcher' | 'panel') {
-    return { x: Math.max(8, (typeof innerWidth === 'undefined' ? 1024 : innerWidth) - (kind === 'launcher' ? 60 : Math.min(420, (typeof innerWidth === 'undefined' ? 1024 : innerWidth) - 16)) - 8), y: Math.max(8, (typeof innerHeight === 'undefined' ? 768 : innerHeight) - (kind === 'launcher' ? 60 : Math.min(640, (typeof innerHeight === 'undefined' ? 768 : innerHeight) - 16)) - 8) };
+    return { x: Math.max(8, (typeof innerWidth === 'undefined' ? 1024 : innerWidth) - (kind === 'launcher' ? 60 : Math.min(420, (typeof innerWidth === 'undefined' ? 1024 : innerWidth) - 16)) - 8), y: Math.max(8, (typeof window === 'undefined' ? 768 : (window.visualViewport?.height ?? innerHeight)) - (kind === 'launcher' ? 60 : Math.min(640, (typeof window === 'undefined' ? 768 : (window.visualViewport?.height ?? innerHeight)) - 16)) - 8) };
   }
   private clamp(kind: 'launcher' | 'panel') { const b = this.bounds(kind), p = this[kind]; this[kind] = { x: Math.min(b.x, Math.max(8, p.x)), y: Math.min(b.y, Math.max(8, p.y)) }; }
   private snap(kind: 'launcher' | 'panel') {
@@ -118,8 +121,8 @@ export class FloatingAssistant {
     this[kind] = { x: side === 0 ? 8 : side === 1 ? b.x : p.x, y: side === 2 ? 8 : side === 3 ? b.y : p.y };
   }
   private save() { try { localStorage.setItem('iam-chat-positions', JSON.stringify({ launcher: this.launcher, panel: this.panel })); } catch { /* no persistence required */ } }
-  @HostListener('window:resize') resize() { this.clamp('launcher'); this.clamp('panel'); }
+  @HostListener('window:resize') resize() { if (typeof document !== 'undefined') document.documentElement.style.setProperty('--ai-viewport-height', `${window.visualViewport?.height ?? innerHeight}px`); this.clamp('launcher'); this.clamp('panel'); }
   @HostListener('document:keydown.escape') escape() { if (this.opened()) this.minimize(); }
   private dispose() { this.element?.remove(); this.element = undefined;  }
-  ngOnDestroy() { ++this.request; this.dispose(); }
+  ngOnDestroy() { window.visualViewport?.removeEventListener('resize', this.viewportChanged); window.visualViewport?.removeEventListener('scroll', this.viewportChanged); ++this.request; this.dispose(); }
 }

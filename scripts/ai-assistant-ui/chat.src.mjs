@@ -25,12 +25,21 @@ class ScreenChat extends AbstractChat {
 }
 
 const css = `
-:scope[compact]{display:block;container-type:inline-size}
+:scope[compact]{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;container-type:inline-size}
 :scope[compact] .lead,:scope[compact] #ai-models{display:none}
-:scope[compact] .layout{display:flex;flex-direction:column;gap:0}
+:scope[compact] .layout{display:flex;flex-direction:column;gap:0;flex:1;min-height:0;overflow:hidden}
 :scope[compact] .layout>div{width:100%;min-width:0}
 :scope[compact] .card{margin:.35rem 0;padding:.6rem}
-:scope[compact] .thread{max-height:28vh}
+:scope[compact] .layout>div:last-child{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+:scope[compact] #ai-chatcard{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+:scope[compact] #ai-chatcard h3{margin:0 0 .35rem;flex-shrink:0}
+:scope[compact] .rights{flex-shrink:0}
+:scope[compact] .thread{flex:1;min-height:0;max-height:none;overscroll-behavior:contain}
+:scope[compact] .composer{flex-shrink:0;padding-top:.5rem;border-top:1px solid var(--line)}
+:scope[compact] .composer textarea{display:block;resize:none;height:3.5rem;min-height:0;max-height:6rem;margin:0 0 .4rem}
+:scope[compact] .composer-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+:scope[compact] .composer-actions button{margin:0}
+:scope[compact] .m{flex-shrink:0}
 :scope[compact] .convs{max-height:6rem;overflow:auto}
 :scope[compact] .row{margin:.3rem 0}
 :scope[compact] textarea{min-height:3rem}
@@ -173,10 +182,10 @@ class AiAssistantScreen extends HTMLElement {
     return `<div class="card" id="ai-chatcard"><h3>${this.esc(this._cur.title)}</h3>
         ${compact ? '<details class="rights"><summary>Working branch and tool rights</summary>' : ''}<p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.</p>${compact ? '</details>' : ''}
         <div class="thread" id="ai-thread" aria-live="polite">${chat.messages.map((m) => this.renderMsg(m)).join('') || '<p class="hint">Ask a question about the platform, for example: who has the accountant role?</p>'}${busy ? '<p class="hint">Working...</p>' : ''}</div>
-        ${err}
+        <div class="composer">${err}
         <textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
-        <button id="ai-send" ${busy || t?.active === false ? 'disabled' : ''}>Send</button>
-        <button class="secondary" id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button>
+        <div class="composer-actions"><button id="ai-send" ${busy || t?.active === false ? 'disabled' : ''}>Send</button>
+        <button class="secondary" id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button></div></div>
       </div>`;
   }
   render() {
