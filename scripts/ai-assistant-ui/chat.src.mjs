@@ -25,6 +25,21 @@ class ScreenChat extends AbstractChat {
 }
 
 const css = `
+:scope[compact]{position:relative}
+:scope[compact] .compact-topbar{display:flex;align-items:center;gap:2px;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--line);flex-shrink:0;cursor:grab;touch-action:none}
+:scope[compact] .compact-title{flex:1;min-width:0}
+:scope[compact] #ai-history{display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0;padding:3px 4px;min-height:30px}
+:scope[compact] .compact-subtitle{display:block;padding:0 4px;font-size:.75rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+:scope[compact] .compact-icon{display:grid;place-items:center;flex-shrink:0;width:36px;height:40px;min-width:36px;margin:0;border:0;background:none;color:var(--ink);padding:0;font-size:1.4rem}
+:scope[compact] .compact-topbar .conversation-menu>summary{height:40px}
+:scope[compact] .conversation-menu-panel{max-height:min(380px,65dvh);overflow:auto;width:min(300px,calc(100vw - 48px));font-size:.85rem;cursor:auto;touch-action:auto}
+:scope[compact] .compact-drawer{position:absolute;z-index:3;top:70px;left:10px;right:10px;max-height:65%;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:0 4px 12px var(--shadow-color)}
+:scope[compact] .compact-drawer h3{margin:0 0 8px}
+:scope[compact] .compact-drawer .drawer-close{float:right;margin:0}
+:scope[compact] .layout{padding:10px}
+:scope[compact] #ai-chatcard{border:0;border-radius:0;padding:0;margin:0}
+:scope[compact] #ai-chatcard>.hint{margin:.5rem}
+
 :scope[compact]{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;container-type:inline-size}
 :scope[compact] .lead,:scope[compact] #ai-models{display:none}
 :scope[compact] .layout{display:flex;flex-direction:column;gap:0;flex:1;min-height:0;overflow:hidden}
@@ -121,7 +136,7 @@ class AiAssistantScreen extends HTMLElement {
   async open(id) {
     const r = await this.call('GET', `/conversations/${encodeURIComponent(id)}`);
     if (this.fail(r)) { this.render(); return; }
-    this._cur = r.data.conversation; this._thread = { branch: r.data.branch, active: r.data.sessionActive };
+    this._compactPanel = null; this._cur = r.data.conversation; this._thread = { branch: r.data.branch, active: r.data.sessionActive };
     const convId = this._cur.id;
     // The AI SDK chat client: the server streams UI messages; only the LAST message is sent, the server keeps the history.
     this._chat = new ScreenChat({
@@ -184,6 +199,10 @@ class AiAssistantScreen extends HTMLElement {
   }
   outputText(o) { const parts = Array.isArray(o?.content) ? o.content : null; const t = parts ? parts.map((c) => (c?.type === 'text' ? c.text : `[${c?.type}]`)).join('\n') : typeof o === 'string' ? o : JSON.stringify(o ?? ''); return String(t).slice(0, 1500); }
   renderMsg(m) { return `<div class="m ${m.role}" data-role="${m.role}">${m.parts.map((p) => this.renderPart(p)).join('')}</div>`; }
+  rightsText() {
+    const t = this._thread;
+    return `Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.`;
+  }
   chatCard() {
     const t = this._thread; const chat = this._chat;
     if (!this._cur || !chat) return '<div class="card" id="ai-chatcard"><p class="hint">Open a conversation or start a new one.</p></div>';
@@ -191,8 +210,7 @@ class AiAssistantScreen extends HTMLElement {
     const err = chat.error ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(String(chat.error.message ?? chat.error).slice(0, 300))}</p>` : '';
     const compact = this.hasAttribute('compact');
     const deletion = `<button class="secondary" id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button>`;
-    return `<div class="card" id="ai-chatcard">${compact ? `<div class="chat-heading"><h3>${this.esc(this._cur.title)}</h3><details class="conversation-menu" ${this._confirmDelete ? 'open' : ''}><summary aria-label="Conversation options" title="Conversation options">⋯</summary><div class="conversation-menu-panel">${deletion}</div></details></div>` : `<h3>${this.esc(this._cur.title)}</h3>`}
-        ${compact ? '<details class="rights"><summary>Working branch and tool rights</summary>' : ''}<p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.</p>${compact ? '</details>' : ''}
+    return `<div class="card" id="ai-chatcard">${compact ? '' : `<h3>${this.esc(this._cur.title)}</h3><p class="hint">${this.rightsText()}</p>`}
         <div class="thread" id="ai-thread" aria-live="polite">${chat.messages.map((m) => this.renderMsg(m)).join('') || '<p class="hint">Ask a question about the platform, for example: who has the accountant role?</p>'}${busy ? '<p class="hint">Working...</p>' : ''}</div>
         <div class="composer">${err}
         <div class="composer-line"><textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
@@ -211,6 +229,20 @@ class AiAssistantScreen extends HTMLElement {
       <td>${m.builtin ? '' : `<button class="secondary" data-test="${this.esc(m.id)}">Test</button><button class="secondary" data-toggle="${this.esc(m.id)}">${m.enabled ? 'Disable' : 'Enable'}</button><button class="secondary" data-delmodel="${this.esc(m.id)}">${this._del === m.id ? 'Confirm delete' : 'Delete'}</button>`}</td></tr>`).join('');
     const presets = PRESETS.map((x) => `<option value="${x.id}" ${x.id === this._preset ? 'selected' : ''}>${this.esc(x.label)}</option>`).join('');
     const compact = this.hasAttribute('compact');
+    const controls = `<section><h3>New conversation</h3><div class="row"><label>Model<select name="aimodel">${opts || '<option value="">No model yet</option>'}</select></label></div><div class="row"><label>Title<input name="aititle" maxlength="100" placeholder="optional"></label></div><button id="ai-new">Start</button></section>`;
+    if (compact) {
+      const model = this._models.find(m => m.id === this._cur?.modelId);
+      this.innerHTML = `<style>@scope (plg-ai-assistant-chat) { ${css} }</style>
+      <div class="compact-topbar"><div class="compact-title"><button id="ai-history" aria-label="Choose conversation" aria-expanded="${this._compactPanel === 'history'}" aria-controls="ai-conversation-drawer">${this.esc(this._cur?.title || 'Conversations')} ▾</button><span class="compact-subtitle" tabindex="0" role="button" data-ai-move aria-label="Move chat window with arrow keys">AI assistant${model ? ' · ' + this.esc(model.name) : ''}</span></div>
+      <button class="compact-icon" id="ai-plus" aria-label="New conversation" title="New conversation" aria-expanded="${this._compactPanel === 'new'}" aria-controls="ai-conversation-drawer">+</button>
+      <details class="conversation-menu" ${this._confirmDelete ? 'open' : ''}><summary aria-label="Conversation options" title="Conversation options">⋯</summary><div class="conversation-menu-panel"><p class="hint">${this.rightsText()}</p>${this._cur ? `<button id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button>` : '<p class="hint">No active conversation</p>'}</div></details>
+      <button class="compact-icon" id="ai-close" aria-label="Close AI assistant" title="Close. Conversation and draft are kept.">×</button></div>
+      ${this._compactPanel ? `<div class="compact-drawer" id="ai-conversation-drawer"><button class="secondary drawer-close" id="ai-drawer-close" aria-label="Close conversations">×</button>${this._compactPanel === 'new' ? controls : `<h3>Conversations</h3><ul class="convs">${convs || '<li class="hint">None yet.</li>'}</ul><button id="ai-start-new">New conversation</button>`}</div>` : ''}
+      ${this._note ? `<p role="status" class="msg ok">${this.esc(this._note)}</p>` : ''}${this._problem ? `<p role="alert" class="msg bad">${this.esc(this._problem)}</p>` : ''}
+      <div class="layout"><div>${chat}</div></div>`;
+      this.wire(); if (this.querySelector('[name=aimsg]')) this.querySelector('[name=aimsg]').value = draft;
+      return;
+    }
     this.innerHTML = `<style>@scope (plg-ai-assistant-chat) { ${css} }</style>
     <p class="lead">AI assistant. Chat with a model that can use the platform tools. It works on its own branch and can only prepare changes: it acts with your MCP session rights. Platform changes go to its own working branch and a human publishes; tools relayed from external servers act on those servers under the MCP rights, the branch does not isolate them.</p>
     ${this._note ? `<p role="status" class="msg ok" id="ai-note">${this.esc(this._note)}</p>` : ''}${this._problem ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(this._problem)}</p>` : ''}
@@ -242,10 +274,17 @@ class AiAssistantScreen extends HTMLElement {
     const q = (s) => this.querySelector(s);
     q('#ai-send')?.addEventListener('click', () => void this.send());
     q('[name=aimsg]')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void this.send(); });
-    q('#ai-delete')?.addEventListener('click', () => void this.removeConversation());
+    if (!this.hasAttribute('compact')) q('#ai-delete')?.addEventListener('click', () => void this.removeConversation());
   }
   wire() {
     const q = (s) => this.querySelector(s);
+    if (this.hasAttribute('compact')) q('#ai-delete')?.addEventListener('click', () => void this.removeConversation());
+    const panel = (kind) => { this._compactPanel = this._compactPanel === kind ? null : kind; this.render(); this.querySelector(kind === 'new' ? '[name=aititle]' : '[data-open]')?.focus(); };
+    q('#ai-history')?.addEventListener('click', () => panel('history'));
+    q('#ai-plus')?.addEventListener('click', () => panel('new'));
+    q('#ai-start-new')?.addEventListener('click', () => panel('new'));
+    q('#ai-drawer-close')?.addEventListener('click', () => { this._compactPanel = null; this.render(); this.querySelector('#ai-history')?.focus(); });
+    q('#ai-close')?.addEventListener('click', () => this.dispatchEvent(new CustomEvent('ai-close', { bubbles: true })));
     q('#ai-new')?.addEventListener('click', () => void this.newConversation());
     q('#ai-addmodel')?.addEventListener('click', () => void this.addModel());
     q('[name=mpreset]')?.addEventListener('change', (e) => { this._preset = e.target.value; this.render(); });

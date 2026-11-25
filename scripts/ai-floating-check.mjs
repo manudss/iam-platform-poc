@@ -14,7 +14,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN ?
 const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 const errors = [];page.on('pageerror', e => errors.push(e.message));
 const token = 'demo.' + Buffer.from(JSON.stringify({sub:'camille.martin',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url') + '.demo';
-let aiLoads = 0;
+let aiLoads = 0; const created = [];
 await page.route('**/*', async route => {
  const url = new URL(route.request().url()), p = url.pathname;
  const json = data => route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
@@ -32,8 +32,9 @@ await page.route('**/*', async route => {
   if (p.endsWith('/plugins/screens')) return json({screens:[{plugin:'ai-assistant',id:'chat',render:'component',component:'screens/chat.mjs'}]});
   if (p.endsWith('/plugins/menu')) return json({entries:[{plugin:'ai-assistant',id:'chat',title:'AI assistant',area:'admin',group:'Extensions',path:'/screens/ai-assistant/chat'}]});
   if (p.endsWith('/ai/models')) return json({models:[{id:'demo-model',name:'Demo model',kind:'google',model:'demo',enabled:true,local:false,lastStatus:'not checked'}]});
+  if (p.endsWith('/ai/conversations') && route.request().method()==='POST') { created.push(route.request().postDataJSON()); return json({conversation:{id:'cv-demo'}}); }
   if (p.endsWith('/ai/conversations')) return json({conversations:[{id:'cv-demo',title:'Review access',autoApproveWrites:false}]});
-  if (p.endsWith('/ai/conversations/cv-demo')) return json({conversation:{id:'cv-demo',title:'Review access'},branch:'ai/mcp-demo',sessionActive:true,messages:[{id:'u1',role:'user',parts:[{type:'text',text:'What can you help me check?'}]},{id:'a1',role:'assistant',parts:[{type:'text',text:'I can help review users and roles. Changes stay on a working branch until a person publishes them.'}]}]});
+  if (p.endsWith('/ai/conversations/cv-demo')) return json({conversation:{id:'cv-demo',title:'Review access',modelId:'demo-model'},branch:'ai/mcp-demo',sessionActive:true,messages:[{id:'u1',role:'user',parts:[{type:'text',text:'What can you help me check?'}]},{id:'a1',role:'assistant',parts:[{type:'text',text:'I can help review users and roles. Changes stay on a working branch until a person publishes them.'}]}]});
   return json({entries:[],users:[],roles:[],assignments:[],activations:[],plugins:[],data:[],stats:{}});
  }
  return route.continue();
@@ -43,11 +44,11 @@ try {
  await page.locator('#ai-launcher').waitFor();
  await page.waitForFunction(()=>[...document.querySelectorAll('.brandlogo img')].every(el=>el.complete&&el.naturalWidth>0)); await page.locator('#ai-launcher').click();
  await page.locator('#ai-floating-window plg-ai-assistant-chat').waitFor();
- await page.locator('#ai-floating-window summary').click();
+ await page.locator('#ai-history').click();
  await page.locator('#ai-floating-window [data-open="cv-demo"]').click();
  await page.locator('#ai-floating-window #ai-thread').waitFor();
  await page.locator('#ai-floating-window textarea').fill('Keep this draft while I check another page.');
- await page.locator('#ai-floating-window .layout>div>details').evaluate(el=>el.open=false);
+
  const checkScroll = async label => {
   await page.locator('#ai-thread').evaluate(t=>{for(let i=0;i<35;i++){const m=document.createElement('div');m.className='m assistant';m.textContent='Fixture message '+i+': a long conversation must scroll without moving the composer.';t.append(m);}t.scrollTop=t.scrollHeight;});
   const before=await page.locator('#ai-floating-window .composer').boundingBox();
@@ -60,6 +61,19 @@ try {
   const input=await page.locator('#ai-floating-window textarea').boundingBox(),button=await page.locator('#ai-send').boundingBox();assert(Math.abs(input.y-button.y)<1&&Math.abs(input.height-button.height)<1,label+': input/send exact same top and height');
   const panel=await page.locator('#ai-floating-window').boundingBox();assert(before.y+before.height<=panel.y+panel.height,label+': composer fits panel');
  };
+ assert.equal(await page.locator('#ai-floating-window > header').isVisible(),false);
+ assert.equal(await page.locator('#ai-floating-window .chat-heading').count(),0);
+ await page.locator('#ai-plus').click();
+ await page.locator('#ai-new').waitFor();
+ assert.equal(await page.locator('[name=aimodel]').inputValue(),'demo-model');
+ await page.screenshot({path:out+'/new-conversation.png'});
+ await page.locator('[name=aititle]').fill('New review');await page.locator('#ai-new').click();await page.locator('#ai-conversation-drawer').waitFor({state:'detached'});await page.locator('#ai-thread').waitFor();
+ assert.deepEqual(created,[{modelId:'demo-model',title:'New review'}]);assert.equal(await page.locator('#ai-conversation-drawer').count(),0);
+ await page.locator('#ai-plus').click();await page.locator('#ai-new').waitFor();
+ await page.locator('#ai-drawer-close').click();
+ assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
+ await page.locator('#ai-history').click();await page.locator('[data-open="cv-demo"]').waitFor();await page.locator('#ai-drawer-close').click();
+ await page.screenshot({path:out+'/desktop-clean.png'});
  await checkScroll('desktop');
  await page.screenshot({path:out+'/desktop-light.png'});
  const box=await page.locator('#ai-floating-window textarea').boundingBox(),send=await page.locator('#ai-send').boundingBox();
@@ -75,7 +89,7 @@ try {
  await page.locator('[aria-label="Conversation options"]').click();
 
  const el = await page.locator('#ai-floating-window plg-ai-assistant-chat').evaluate(el => (el.dataset.proof='same-instance'));
- await page.locator('[aria-label="Close AI assistant"]').click();
+ await page.getByRole('button',{name:'Close AI assistant',exact:true}).click();
  await page.locator('#ai-floating-window').waitFor({state:'hidden'});
  await page.locator('#ai-launcher').click();
  assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
@@ -84,12 +98,12 @@ try {
  assert.equal(await page.locator('#ai-floating-window plg-ai-assistant-chat').getAttribute('data-proof'),'same-instance');
  assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
  const drag = async (selector,x,y) => { const b=await page.locator(selector).boundingBox();await page.mouse.move(b.x+b.width/2,b.y+Math.min(18,b.height/2));await page.mouse.down();await page.mouse.move(x,y,{steps:12});await page.mouse.up(); };
- await page.locator('[aria-label="Close AI assistant"]').click();
+ await page.getByRole('button',{name:'Close AI assistant',exact:true}).click();
  for (const [x,y,axis,expected] of [[12,450,'x',8],[680,12,'y',8],[1350,450,'right',1358],[680,888,'bottom',892]]) {
   await drag('#ai-launcher',x,y); const b=await page.locator('#ai-launcher').boundingBox();const actual=axis==='right'?b.x+b.width:axis==='bottom'?b.y+b.height:b[axis];assert(Math.abs(actual-expected)<3,JSON.stringify({axis,actual,expected}));
  }
  await page.screenshot({path:out+'/launcher-bottom.png'});
- await page.locator('#ai-launcher').click();await page.locator('#ai-floating-window').waitFor({state:'visible'});await drag('#ai-floating-window header',225,80);
+ await page.locator('#ai-launcher').click();await page.locator('#ai-floating-window').waitFor({state:'visible'});await drag('#ai-floating-window .compact-topbar',225,80);
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:out+'/desktop-dark-moved.png'});
  await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>document.documentElement.dataset.theme='light');
@@ -100,7 +114,7 @@ try {
  await page.setViewportSize({width:390,height:460});await page.locator('#ai-floating-window textarea').focus();await page.waitForTimeout(200);await checkScroll('keyboard-sized viewport');await page.screenshot({path:out+'/mobile-keyboard-sized.png'});await page.setViewportSize({width:390,height:844});
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:out+'/mobile-dark.png'});
  // Physical touch input through Chrome, not synthetic DOM events.
- await page.locator('[aria-label="Close AI assistant"]').click();
+ await page.getByRole('button',{name:'Close AI assistant',exact:true}).click();
  const touch = await page.context().newCDPSession(page);
  const tb = await page.locator('#ai-launcher').boundingBox();
  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:tb.x+30,y:tb.y+30}]});
@@ -111,5 +125,5 @@ try {
  await page.evaluate(()=>{document.documentElement.dataset.theme='light';document.documentElement.style.setProperty('--accent','var(--ok)');document.documentElement.style.setProperty('--accent-ink','var(--card)');document.documentElement.style.setProperty('--accent-soft','var(--ok-soft)');});
  await page.screenshot({path:out+'/mobile-alternate-accent.png'});
  assert.equal(aiLoads,1);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','close retains instance and draft; no redundant minimize button','top conversation menu with delete confirmation','send aligned beside input','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
+ console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','close retains instance and draft; no redundant minimize button','single header, history dropdown, plus form actual POST payload, rights and delete confirmation','send aligned beside input','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
 } finally { await browser.close();server.close(); }

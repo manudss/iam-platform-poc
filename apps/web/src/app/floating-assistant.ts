@@ -14,8 +14,8 @@ import { PluginScreenLoader } from './plugin-screen';
       [attr.aria-expanded]="opened()" aria-controls="ai-floating-window" [style.left.px]="launcher.x" [style.top.px]="launcher.y"
       (pointerdown)="begin($event, 'launcher')" (click)="toggle()" (keydown)="key($event, 'launcher')">✦<span>AI</span></button>
     <section id="ai-floating-window" role="dialog" aria-label="AI assistant" [hidden]="!opened()"
-      [style.left.px]="panel.x" [style.top.px]="panel.y">
-      <header (pointerdown)="begin($event, 'panel')">
+      [style.left.px]="panel.x" [style.top.px]="panel.y" (pointerdown)="panelPointer($event)" (keydown)="panelKey($event)">
+      <header>
         <span tabindex="0" role="button" aria-label="Move chat window with arrow keys" (keydown)="key($event, 'panel')">⠿ AI assistant</span>
         <div class="window-actions"><button type="button" aria-label="Close AI assistant" title="Close. Conversation and draft are kept." (click)="minimize()">×</button></div>
       </header>
@@ -83,14 +83,17 @@ export class FloatingAssistant {
       const el = document.createElement(mod.default) as HTMLElement & { context?: unknown };
       el.setAttribute('compact', '');
       el.context = { tenant: this.s.api.tenant, api: `/api/tenants/${this.s.api.tenant}`, token: this.s.api.bearerToken, adminToken: this.s.adminToken(), branch: this.s.branch() };
+      el.addEventListener('ai-close', () => this.minimize());
       this.element = el; mount.replaceChildren(el);
     } catch { if (req === this.request) this.problem.set('Chat could not be loaded. Minimize and reopen to retry.'); }
     finally { if (this.loading === req) this.loading = 0; }
   }
   toggle() { if (this.suppressClick) { this.suppressClick = false; return; } this.opened.update(v => !v); }
   minimize() { this.opened.set(false); document.getElementById('ai-launcher')?.focus(); }
+  panelPointer(e: PointerEvent) { if ((e.target as HTMLElement).closest('header, .compact-topbar')) this.begin(e, 'panel'); }
+  panelKey(e: KeyboardEvent) { if ((e.target as HTMLElement).closest('[data-ai-move]')) this.key(e, 'panel'); }
   begin(e: PointerEvent, kind: 'launcher' | 'panel') {
-    if (e.button !== 0 || (kind === 'panel' && (e.target as HTMLElement).closest('button'))) return;
+    if (e.button !== 0 || (kind === 'panel' && (e.target as HTMLElement).closest('button, summary, details, input, select, textarea'))) return;
     this.drag = { kind, x: e.clientX, y: e.clientY, startX: this[kind].x, startY: this[kind].y, moved: false };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }

@@ -27,6 +27,12 @@ describe('Floating assistant', () => {
     f.componentInstance.minimize(); await settle(); expect(f.nativeElement.querySelector('test-floating-chat')).toBe(el);
     f.componentInstance.toggle(); await settle(); expect(f.nativeElement.querySelector('textarea').value).toBe('Unsent draft'); expect(mounts()).toBe(1);
   });
+  it('accepts the packaged compact header close event without losing the instance', async () => {
+    const { f, settle } = await setup(); f.componentInstance.toggle(); await settle();
+    const el = f.nativeElement.querySelector('test-floating-chat');
+    el.dispatchEvent(new CustomEvent('ai-close', { bubbles: true })); await settle();
+    expect(f.componentInstance.opened()).toBe(false); expect(f.nativeElement.querySelector('test-floating-chat')).toBe(el);
+  });
   it('resets on branch, disable and sign-out, never carrying context to next session', async () => {
     const { s, f, settle } = await setup(); f.componentInstance.toggle(); await settle();
     expect((f.nativeElement.querySelector('test-floating-chat') as any).context.branch).toBe('b1');
