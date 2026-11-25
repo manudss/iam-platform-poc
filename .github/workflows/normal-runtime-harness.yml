@@ -7,6 +7,7 @@ on:
       - 'deploy/oci/dolt-current*'
       - 'scripts/dolt-current-cleanup-fixture.py'
       - 'scripts/normal-lifecycle-real-fixture.py'
+      - 'scripts/normal-copy-isolation-fixture.py'
       - 'scripts/normal-runtime-docker-fixture.py'
       - '.github/workflows/normal-runtime-harness.yml'
       - 'scripts/normal-runtime-host*.py'
@@ -122,5 +123,21 @@ jobs:
         if: always()
         with:
           name: normal-updater-full-qualification-proof
+          path: /tmp/normal-lifecycle-real-proof.json
+          if-no-files-found: warn
+
+  copy-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Synthetic copy independent host fence before first normal app instruction
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-copy-isolation-fixture.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-copy-isolation-proof
           path: /tmp/normal-lifecycle-real-proof.json
           if-no-files-found: warn
