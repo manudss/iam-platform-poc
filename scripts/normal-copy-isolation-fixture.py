@@ -25,7 +25,7 @@ def launch(c,evidence,n):
    # Docker NAT can hand the query to its host-side resolver.
    for proto in ['udp','tcp']:
     n.call(['nsenter','-t',pid,'-n','iptables','-t','raw','-I','OUTPUT','1','-p',proto,'--dport','53','-j','DROP'])
-   hosts="require('fs').appendFileSync('/etc/hosts','\\n172.27.0.10 pg\\n172.27.0.11 bao\\n')"
+   hosts="require('fs').appendFileSync('/etc/hosts',['','172.27.0.10 pg','172.27.0.11 bao',''].join(String.fromCharCode(10)))"
    n.call(['docker','exec',proof['container_id'],'node','-e',hosts])
    ips=[v['IPAddress'] for v in x['NetworkSettings']['Networks'].values()]
    for ip in ips:
