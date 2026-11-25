@@ -199,7 +199,13 @@ def main():
         smoke=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'smoke']
         stage('auth-load');auth=json.loads(Path(p['authFile']).read_text())
         stage('smoke');smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth,'reviewedLegacyRollback':legacy_rollback})))
-    stage('capture');state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
+    stage('capture');capture_input=json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})
+    if a.phase=='before' and p.get('isolatedCopy') is True:
+        if not a.isolated_loopback_test or p.get('isolatedLoopbackTest') is not True:raise ValueError('copy helper only in explicit loopback qualification')
+        import importlib.util
+        helper=Path(__file__).with_name('isolated-capture.py');hs=importlib.util.spec_from_file_location('isolated_capture',helper);hm=importlib.util.module_from_spec(hs);hs.loader.exec_module(hm)
+        state=json.loads(hm.capture(cmd,a.image,a.env_file,a.data_dir,p['network'],source,capture_input))
+    else:state=json.loads(cmd(node,capture_input))
     stage('ledger-load');ledger=Path(a.data_dir)/'migrations/journal.json'
     state['migrationLedger']=json.loads(ledger.read_text()) if ledger.exists() else None
     stage('credentials');state['credentials']=credential_hashes(Path(a.data_dir),p)
