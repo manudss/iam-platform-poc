@@ -90,4 +90,19 @@ class Tests(unittest.TestCase):
   with patch.object(Path,'read_bytes',return_value=raw),patch.object(h,'read_spec',return_value=(Path('/runtime'),h.json.dumps(cfg).encode())),patch.object(h,'imported',side_effect=[Env(),Normal()]):
    with self.assertRaisesRegex(ValueError,'topology'):host.start_normal({'normal_start_committed':True})
   self.assertFalse(any(a[:2]==['docker','rm'] for a in calls))
+ def test_second_prepare_failure_preserves_stopped_held_by_rename(self):
+  raw=b'IAM_DEMO_SEED_MODE=never\n';manifest={'env':{'sha256':'old'},'normal_runtime':{'path':'runtime'},'update_lock_path':'lock'};host=h.Host(manifest,8);host.env_path=Path('/env');host.normal_raw=raw;host.image='image';host.container='held';host.original_container={'id':'original'};host.persist=lambda:None
+  cfg={'image':'image','container':'held','env':{'path':'/env','sha256':h.hashlib.sha256(raw).hexdigest()}}
+  class Env:
+   def install_env(self,*a):return {}
+  class Normal:
+   def prepare(self,*a):pass
+   def launch(self,*a):raise ValueError('second prepare refused')
+  calls=[];intent={'normal_start_committed':True}
+  host.run=lambda args:calls.append(args) or h.json.dumps([{'Id':'original','State':{'Running':False},'Config':{'Image':'image'}}])
+  with patch.object(Path,'read_bytes',return_value=raw),patch.object(h,'read_spec',return_value=(Path('/runtime'),h.json.dumps(cfg).encode())),patch.object(h,'imported',side_effect=[Env(),Normal()]):
+   with self.assertRaisesRegex(ValueError,'second prepare'):host.start_normal(intent)
+  self.assertIn(['docker','rename','held','held-held-original'],calls)
+  self.assertFalse(any(a[:2] in (['docker','rm'],['docker','start']) for a in calls))
+  self.assertEqual(intent['preserved_held']['id'],'original')
 if __name__=='__main__':unittest.main()
