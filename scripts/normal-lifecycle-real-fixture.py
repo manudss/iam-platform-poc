@@ -34,8 +34,9 @@ def main():
    ids[role]=docker(*args,name);nets.append(name)
   pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app';old=prefix+'-old'
   for name in [pg,bao,seed,app,old]:owned.append(name)
-  docker('run','-d','--name',pg,'--network',nets[0],'--ip','172.27.0.10','--network-alias','pg','--memory','512m','--pids-limit','128','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam','postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
-  docker('run','-d','--name',bao,'--network',nets[0],'--ip','172.27.0.11','--network-alias','bao','--memory','256m','--pids-limit','64','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-fixture-only','openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315','server','-dev','-dev-listen-address=0.0.0.0:8200')
+  companion_safety=['--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1'] if isolated else []
+  docker('run','-d',*companion_safety,*(['--user','999:999'] if isolated else []),'--name',pg,'--network',nets[0],'--ip','172.27.0.10','--network-alias','pg','--memory','512m','--pids-limit','128','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam','postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
+  docker('run','-d',*companion_safety,*(['--user','100:1000'] if isolated else []),'--name',bao,'--network',nets[0],'--ip','172.27.0.11','--network-alias','bao','--memory','256m','--pids-limit','64','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-fixture-only','openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315','server','-dev','-dev-listen-address=0.0.0.0:8200')
   for _ in range(60):
    r=subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=5)
    b=subprocess.run(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','status'],capture_output=True,timeout=5)
