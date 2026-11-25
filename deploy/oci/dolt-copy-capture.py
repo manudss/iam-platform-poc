@@ -31,7 +31,8 @@ def command(spec,source):
  return ['docker','run','-i','--name',spec['container'],'--restart','no','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--oom-score-adj','1000','--user','0:0','--memory','1536m','--memory-swap','1536m','--pids-limit','96','--cpus','0.5','--mount','type=bind,src='+str(work)+',dst=/data/dolt,readonly','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=0700','--workdir','/tmp','--env','HOME=/tmp','--entrypoint','node',spec['image_id'],'--input-type=module','-e']
 
 def executed_source(raw):
- return ("const {execFileSync:epochExec}=await import('node:child_process');"
+ return ("const {readFileSync:epochRead,statfsSync:epochStat}=await import('node:fs');process.on('exit',()=>{try{const peak=epochRead('/sys/fs/cgroup/memory.peak','utf8').trim();const st=epochStat('/tmp');console.error('DOLT_RESOURCE_V1:'+peak+':'+((st.blocks-st.bfree)*st.bsize))}catch{}});"
+  "const {execFileSync:epochExec}=await import('node:child_process');"
   "if(!/\\bdolt version 2\\.6\\.1\\b/.test(epochExec('dolt',['version'],{encoding:'utf8',timeout:10000})))throw Error('version differs');\n"+raw.decode())
 
 def execute(spec,reader):
@@ -58,6 +59,8 @@ def execute(spec,reader):
   # Python timeout kills docker CLIENT only. Finally forcibly removes this exact
   # disposable container before returning; no auto-remove obscures its outcome.
   r=subprocess.run(args+[executed,'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=300)
+  metrics=re.findall(r'^DOLT_RESOURCE_V1:([0-9]{1,16}):([0-9]{1,16})$',r.stderr,re.M)
+  result['resource_measurement']=dict(zip(('memory_peak_bytes','tmpfs_used_bytes'),map(int,metrics[-1]))) if len(metrics)==1 else None
   if r.returncode:
    result['container_exit_code']=r.returncode
    stages=re.findall(r'^QUALIFICATION_DIAG_V1:(capture-dolt|init)$',r.stderr,re.M)

@@ -10,6 +10,22 @@ def load_fixed(binding,name,reader):
  if path!=Path(__file__).with_name(name).absolute():raise ValueError('fixed reviewed module required')
  s=importlib.util.spec_from_file_location('held_'+name.replace('.','_'),path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
+def executed_source(source):
+ return ("const {spawn:epochSpawn}=await import('node:child_process');const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},150000)\",String(process.pid)],{stdio:'ignore'});epochWatch.unref();process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
+
+def capture_once(container_id,image_id,executed,bindings):
+  name='dolt-held-reader-'+secrets.token_hex(8)
+  args=['docker','run','-i','--name',name,'--restart','no','--user','0:0','--network','container:'+container_id,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--entrypoint','node',image_id,'--input-type=module','-e',executed,'dolt-only']
+  try:
+   value=subprocess.run(args,input='{"running":true}',text=True,capture_output=True,timeout=180,pass_fds=tuple(fd for _,fd in bindings.values()))
+   if value.returncode:raise ValueError('held isolated Dolt read refused')
+   envelope=json.loads(value.stdout)
+   if set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not True or not envelope['dolt']:raise ValueError('held Dolt envelope differs')
+   return envelope
+  finally:
+   cleanup=subprocess.run(['docker','rm','-f',name],text=True,capture_output=True,timeout=20)
+   if cleanup.returncode:raise ValueError('held reader cleanup unverified')
+
 def execute(spec,bindings,reader):
  if set(spec)!={'format','kind','runtime_controller','runtime','source','out','executed_source_sha256'} or spec['format']!=1 or spec['kind']!='reviewed-held-dolt-only-capture':raise ValueError('exact held capture spec required')
  runtime=load_fixed(spec['runtime_controller'],'restored-runtime-check.py',reader)
@@ -18,33 +34,21 @@ def execute(spec,bindings,reader):
  out=Path(spec['out'])
  if not re.fullmatch(r'/root/dolt-held-evidence-[a-f0-9]{16}\.json',str(out)) or out.exists():raise ValueError('fresh private bounded held output required')
  runtime.locks(bindings);before=runtime.verify(spec['runtime'],bindings)
- executed_source=("const {spawn:epochSpawn}=await import('node:child_process');const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},150000)\",String(process.pid)],{stdio:'ignore'});epochWatch.unref();process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
- if hashlib.sha256(executed_source.encode()).hexdigest()!=spec['executed_source_sha256']:raise ValueError('held executed source binding differs')
+ executed=executed_source(source)
+ if hashlib.sha256(executed.encode()).hexdigest()!=spec['executed_source_sha256']:raise ValueError('held executed source binding differs')
  # SQL clients run in a NEW bounded cgroup, not in the app's cgroup. Only the
  # existing held network namespace is shared. No production filesystem mount.
  observed=subprocess.run(['docker','inspect',spec['runtime']['container']],text=True,capture_output=True,timeout=15)
  if observed.returncode:raise ValueError('held resource metadata unavailable')
  identity=json.loads(observed.stdout)[0];image_id=identity['Image']
  if next(int(l.split()[1]) for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemAvailable:'))<3*1024*1024:raise ValueError('held read requires 3GiB host headroom')
- rows=[]
- for _ in range(2):
-  name='dolt-held-reader-'+secrets.token_hex(8)
-  args=['docker','run','-i','--name',name,'--restart','no','--user','0:0','--network','container:'+spec['runtime']['expected_container_id'],'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--entrypoint','node',image_id,'--input-type=module','-e',executed_source,'dolt-only']
-  try:
-   value=subprocess.run(args,input='{"running":true}',text=True,capture_output=True,timeout=180,pass_fds=tuple(fd for _,fd in bindings.values()))
-   if value.returncode:raise ValueError('held isolated Dolt read refused')
-   envelope=json.loads(value.stdout)
-   if set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not True or not envelope['dolt']:raise ValueError('held Dolt envelope differs')
-   rows.append(envelope)
-  finally:
-   cleanup=subprocess.run(['docker','rm','-f',name],text=True,capture_output=True,timeout=20)
-   if cleanup.returncode:raise ValueError('held reader cleanup unverified')
+ rows=[capture_once(spec['runtime']['expected_container_id'],image_id,executed,bindings) for _ in range(2)]
  if rows[0]!=rows[1]:raise ValueError('held Dolt moving between captures')
  if runtime.verify(spec['runtime'],bindings)!=before:raise ValueError('held identity/gates changed')
  runtime.locks(bindings);reader(spec['source']);reader(spec['runtime_controller'])
  fd=os.open(out,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  with os.fdopen(fd,'w') as f:json.dump(rows[0],f,sort_keys=True);f.flush();os.fsync(f.fileno())
- return {'format':1,'kind':'held-dolt-only-capture-result','sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'source_sha256':spec['source']['sha256'],'executed_source_sha256':hashlib.sha256(executed_source.encode()).hexdigest(),'restoration_admissible':False,'effect_authority':False,'stable_double_capture':True}
+ return {'format':1,'kind':'held-dolt-only-capture-result','sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'source_sha256':spec['source']['sha256'],'executed_source_sha256':hashlib.sha256(executed.encode()).hexdigest(),'restoration_admissible':False,'effect_authority':False,'stable_double_capture':True}
 
 def main():
  import argparse

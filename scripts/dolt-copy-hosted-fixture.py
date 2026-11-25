@@ -15,12 +15,16 @@ def main():
  name='dolt-copy-'+os.urandom(8).hex();server='dolt-server-'+os.urandom(8).hex();out=root/'capture.json';proof={'format':1,'kind':'synthetic-dolt-copy-runner-proof','synthetic_copy_run_completed':False,'production_data_used':False,'held_path_exercised':False,'verifier_exercised':False,'source_version_established':False};destination=Path('/tmp/dolt-copy-runner-proof.json')
  try:
   started=time.monotonic()
-  files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py']
+  files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py','dolt-held-capture.py']
   for file in files:
    p=code/file;shutil.copyfile(repo/'deploy/oci'/file,p);p.chmod(0o700)
   # Build an offline multidir Dolt fixture with one dirty business table.
   seed="const f=require('fs'),{execFileSync:x}=require('child_process');for(const db of ['iam','iam_meta']){const cwd='/fixture/'+db;f.mkdirSync(cwd);x('dolt',['init','--name','Fixture','--email','fixture@example.invalid'],{cwd});x('dolt',['sql','-q','CREATE TABLE fixture_rows (id INT PRIMARY KEY, note VARCHAR(20)); INSERT INTO fixture_rows VALUES (1,\\'synthetic\\')'],{cwd});}"
   run(['docker','run','--rm','--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','64','-v',str(work)+':/fixture','--entrypoint','node',IMAGE,'-e',seed])
+  # Physical20MiB padding exercises cpSync/tmpfs at source-scale without
+  # introducing secret or unstable SQL data. SQL table richness stays separate.
+  with (work/'synthetic-padding.bin').open('wb') as f:
+   for _ in range(20):f.write(os.urandom(1024*1024))
   # Init output is owned root, copied code reads only this synthetic tree.
   # Synthetic Dolt init may create group-writable files. Normalize ONLY this
   # generated fixture tree, never a source or operator copy.
@@ -31,12 +35,6 @@ def main():
   tree_hash,size,count=m.digest_tree(work);image_id=json.loads(run(['docker','image','inspect',IMAGE]))[0]['Id']
   spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':tree_hash,'image_id':image_id,'dolt_version':'2.6.1','source':{'path':str(code/'qualification-container.mjs'),'sha256':hashlib.sha256((code/'qualification-container.mjs').read_bytes()).hexdigest()},'executed_source_sha256':hashlib.sha256(m.executed_source((code/'qualification-container.mjs').read_bytes()).encode()).hexdigest(),'container':name,'out':str(out)}
   path=root/'spec.json';path.write_text(json.dumps(spec));path.chmod(0o600)
-  # Synthetic-only diagnostics: same command/source, no production values.
-  probe=m.command(spec,spec['source'])+[m.executed_source((code/'qualification-container.mjs').read_bytes()),'dolt-only']
-  debug=subprocess.run(probe,input='{"running":false}',text=True,capture_output=True,timeout=300)
-  proof['synthetic_debug_exit']=debug.returncode
-  if debug.returncode:print('SYNTHETIC_CAPTURE_STDERR '+debug.stderr[-8000:])
-  run(['docker','rm','-f',name])
   raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=2 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
@@ -49,16 +47,22 @@ def main():
    if ready.returncode==0:break
    time.sleep(1)
   else:raise ValueError('synthetic Dolt server not ready')
-  ddl='CREATE TABLE workflow_piece_state (tenant VARCHAR(64) NOT NULL, scope_id VARCHAR(200) NOT NULL, state_key VARCHAR(200) NOT NULL, value_json LONGTEXT NOT NULL, PRIMARY KEY(tenant,scope_id,state_key))'
+  store=(repo/'apps/api/src/workflows/store.ts').read_text()
+  match=__import__('re').search(r"private async pieceTable.*?c.query\('([^']+)'\)",store)
+  if not match:raise ValueError('actual migration DDL not found')
+  ddl=match[1]
+  proof['migration_source_sha256']=hashlib.sha256(store.encode()).hexdigest()
   run(['docker','exec',server,'dolt','--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','','--use-db=iam_meta','sql','-q',ddl])
-  after=json.loads(run(['docker','exec','-i',server,'node','--input-type=module','-e',(code/'qualification-container.mjs').read_text(),'dolt-only'],'{"running":true}'))
+
   def mod(file,name):
    spec=importlib.util.spec_from_file_location(name,code/file);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
+  helper=mod('dolt-held-capture.py','helper')
+  after=helper.capture_once(server,image_id,helper.executed_source((code/'qualification-container.mjs').read_bytes()),{})
   adapter=mod('dolt-migration-evidence.py','adapter');verifier=mod('qualification-dolt-piece-storage-verifier.py','verifier')
   anchors=lambda env:[{k:row[k] for k in ('database','branch','head','root')} for row in env['dolt']]
   verdict=adapter.evaluate(capture,after,anchors(capture),anchors(after),verifier.verify)
-  if not verdict['migration0003_shape_consistent_with_operator_anchor'] or verdict['restoration_admissible']:raise ValueError('synthetic migration verdict differs')
-  proof.update(verifier_exercised=True,synthetic_server_capture_completed=True,synthetic_migration_shape_passed=True,anchors_in_fixture_are_self_derived=True,held_path_exercised=False)
+  if not verdict['migration0003_shape_consistent_with_operator_anchor_refs_only'] or verdict['restoration_admissible']:raise ValueError('synthetic migration verdict differs')
+  proof.update(verifier_exercised=True,synthetic_server_capture_completed=True,isolated_held_helper_exercised=True,synthetic_migration_shape_passed=True,anchors_in_fixture_are_self_derived=True,held_path_exercised=False)
 
  finally:
   # Only synthetic tree, never original or operator data. Bounded exact-name cleanup.
