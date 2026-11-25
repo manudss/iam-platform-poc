@@ -18,6 +18,7 @@ let aiLoads = 0;
 await page.route('**/*', async route => {
  const url = new URL(route.request().url()), p = url.pathname;
  const json = data => route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
+ if (/\/branding\/logo-horizontal-(light|dark)\.svg$/.test(p)) return route.fulfill({contentType:'image/svg+xml',body:readFileSync(root+'/scripts/fixtures/lyam-logo-dark.svg','utf8')});
  if (p === '/session/bootstrap') return json({ id_token: token });
  if (p.endsWith('/assets/screens/chat.mjs')) { aiLoads++; return route.fulfill({contentType:'text/javascript',body:readFileSync(root+'/plugins/ai-assistant/screens/chat.mjs','utf8')}); }
  if (p.startsWith('/api/')) {
@@ -39,7 +40,8 @@ await page.route('**/*', async route => {
 });
 try {
  await page.goto(origin+'/overview');
- await page.locator('#ai-launcher').waitFor(); await page.locator('#ai-launcher').click();
+ await page.locator('#ai-launcher').waitFor();
+ await page.waitForFunction(()=>[...document.querySelectorAll('.brandlogo img')].every(el=>el.complete&&el.naturalWidth>0)); await page.locator('#ai-launcher').click();
  await page.locator('#ai-floating-window plg-ai-assistant-chat').waitFor();
  await page.locator('#ai-floating-window summary').click();
  await page.locator('#ai-floating-window [data-open="cv-demo"]').click();
