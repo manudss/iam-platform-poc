@@ -6,7 +6,7 @@ s=importlib.util.spec_from_file_location('hf',ROOT/'scripts/normal-runtime-host-
 class Tests(unittest.TestCase):
  def test_preflight_no_pull_no_writes_and_refuses_overlap_memory_or_inventory(self):
   with tempfile.TemporaryDirectory() as d:
-   p=Path(d)/'spec';names=['scripts/normal-runtime-host-fixture.py','scripts/normal-runtime-docker-fixture.py','deploy/oci/normal-runtime.py'];spec={'format':1,'kind':'reviewed-host-pre-fifo-fixture','image':h.IMAGE,'source_sha':h.SOURCE,'files':{n:hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in names},'out':'/root/normal-host-proof-0123456789abcdef.json'};p.write_text(json.dumps(spec));p.chmod(0o600);calls=[];overlap=[False]
+   p=Path(d)/'spec';names=['scripts/normal-runtime-host-fixture.py','scripts/normal-runtime-docker-fixture.py','deploy/oci/normal-runtime.py'];spec={'format':1,'kind':'reviewed-host-pre-fifo-fixture','image':h.IMAGE,'source_sha':h.SOURCE,'files':{n:hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in names},'out':'/root/normal-host-proof-0123456789abcdef.json','held_id':'a'*64};p.write_text(json.dumps(spec));p.chmod(0o600);calls=[];overlap=[False]
    def docker(args,**kwargs):
     calls.append(args)
     self.assertNotIn('pull',args)
@@ -24,6 +24,17 @@ class Tests(unittest.TestCase):
     with self.assertRaisesRegex(ValueError,'overlap'):h.preflight(p)
     overlap[0]=False;spec['files']['deploy/oci/normal-runtime.py']='0'*64;p.write_text(json.dumps(spec))
     with self.assertRaisesRegex(ValueError,'code changed'):h.preflight(p)
+ def test_postcomparison_refuses_any_nonfixture_change_and_records_memory(self):
+  with tempfile.TemporaryDirectory() as d:
+   out=Path(d)/'result.json';spec={'out':str(out),'image':h.IMAGE,'source_sha':h.SOURCE,'held_id':'a'*64}
+   base={'containers':[{'id':'held'}],'networks':[],'held_namespace':{'rules':'same'},'host_filter_rules':{'iptables':'same'},'memory_available_kib':2000000}
+   class Engine:
+    def execute(self,*a,**kw):out.write_text(json.dumps({'result':'pre-fifo-network-qualified','app_started':False}))
+   with patch.object(h,'snapshot',side_effect=[base,{**base,'containers':[{'id':'held','restart':1}]}]):
+    with self.assertRaisesRegex(ValueError,'production or host'):h.execute_reviewed(spec,Engine())
+   result=json.loads(out.read_text());self.assertEqual(result['result'],'refused');self.assertFalse(result['production_observation']['comparisons']['containers'])
+   with patch.object(h,'memory_available',return_value=500000):
+    with self.assertRaisesRegex(ValueError,'pressure'):h.checkpoint()
  def test_github_guard_cannot_be_disabled_by_env_on_normal_entry(self):
   s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   with patch.object(m.os,'geteuid',return_value=0),patch.dict(os.environ,{'GITHUB_ACTIONS':'false'}):

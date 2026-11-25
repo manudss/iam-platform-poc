@@ -10,11 +10,13 @@ def run(args):
  p=subprocess.run(args,text=True,capture_output=True,timeout=240)
  if p.returncode:raise ValueError('fixture command failed')
  return p.stdout.strip()
-def execute(a,host_fixture=False):
+def execute(a,host_fixture=False,checkpoint=None):
  if os.geteuid()!=0:raise ValueError('root fixture required')
  if not host_fixture:
   if os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted':raise ValueError('disposable hosted root runner required')
   if Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('production marker present')
+ check=checkpoint or (lambda:None)
+ check()
  out=Path(a.out);out.parent.mkdir(parents=True,exist_ok=True)
  root=Path(tempfile.mkdtemp(prefix='normal-fixture-',dir='/root'));root.chmod(0o700);prefix=('normal-host-' if host_fixture else 'normal-ci-')+secrets.token_hex(8);created=[];networks=[];stage='pull';result={'format':1,'result':'refused','app_started':False,'stage':stage}
  spec=importlib.util.spec_from_file_location('normal',Path(__file__).resolve().parents[1]/'deploy/oci/normal-runtime.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n)
@@ -23,13 +25,13 @@ def execute(a,host_fixture=False):
   image=json.loads(run(['docker','image','inspect',a.image]))[0]
   ids={};stage='networks'
   for role,subnet in [('backend','172.29.0.0/24'),('frontend','172.30.0.0/24')]:
-   name=prefix+'-'+role;args=['docker','network','create','--driver','bridge','--subnet',subnet,'--gateway',subnet.rsplit('.',1)[0]+'.1']
+   check();name=prefix+'-'+role;args=['docker','network','create','--driver','bridge','--subnet',subnet,'--gateway',subnet.rsplit('.',1)[0]+'.1']
    if role=='backend':args+=['--internal']
    ids[role]=run(args+[name]);networks.append(name)
   peers={};stage='fake-companions'
   for role,ip,port in [('pg','172.29.0.10',5432),('bao','172.29.0.11',8200)]:
-   name=prefix+'-'+role;code="require('net').createServer(s=>s.end()).listen("+str(port)+",'0.0.0.0')"
-   cid=run(['docker','run','-d',*(['--memory','96m','--memory-swap','96m','--pids-limit','64','--cpus','0.25'] if host_fixture else []),'--name',name,'--restart','no','--network',prefix+'-backend','--ip',ip,'--network-alias',role,'--entrypoint','node',a.image,'-e',code]);created.append(cid);peers[role]={'name':name,'id':cid,'ip':ip}
+   check();name=prefix+'-'+role;code="require('net').createServer(s=>s.end()).listen("+str(port)+",'0.0.0.0')"
+   cid=run(['docker','run','-d',*(['--oom-score-adj','1000','--memory','96m','--memory-swap','96m','--pids-limit','64','--cpus','0.25'] if host_fixture else []),'--name',name,'--restart','no','--network',prefix+'-backend','--ip',ip,'--network-alias',role,'--entrypoint','node',a.image,'-e',code]);created.append(cid);peers[role]={'name':name,'id':cid,'ip':ip}
   stage='fake-companion-readiness'
   for role,port in [('pg',5432),('bao',8200)]:
    for attempt in range(30):
@@ -46,10 +48,10 @@ def execute(a,host_fixture=False):
   original_call=n.call
   command_count=[0]
   def traced_call(args,pass_fds=()):
-   command_count[0]+=1
+   check();command_count[0]+=1
    result['launcher_command_count']=command_count[0]
    result['launcher_command_kind']=next((v for v in ('docker','nsenter') if args[0]==v),'other')
-   if host_fixture and args[:2]==['docker','run']:args=args[:2]+['--memory','256m','--memory-swap','256m','--pids-limit','128','--cpus','0.5']+args[2:]
+   if host_fixture and args[:2]==['docker','run']:args=args[:2]+['--oom-score-adj','1000','--memory','256m','--memory-swap','256m','--pids-limit','128','--cpus','0.5']+args[2:]
    try:return original_call(args,pass_fds=pass_fds)
    except Exception:
     result['command_failed']=True
@@ -74,13 +76,30 @@ def execute(a,host_fixture=False):
   result['error_type']=type(error).__name__ if type(error).__name__ in ('ValueError','TimeoutExpired','KeyError','FileNotFoundError','TypeError') else 'other'
   raise
  finally:
-  out.write_text(json.dumps(result,indent=2));out.chmod(0o644)
-  # Prefix-owned resources only, including an app created before an exception.
-  names=run(['docker','ps','-a','--format','{{.Names}}']).splitlines()
+  # Cleanup never stops at the first error. Retain bounded owned-resource facts.
+  failures=0
+  try:names=run(['docker','ps','-a','--format','{{.Names}}']).splitlines()
+  except Exception:names=[];failures+=1
   for name in names:
-   if name.startswith(prefix+'-'):run(['docker','rm','-f',name])
-  for network in reversed(networks):run(['docker','network','rm',network])
-  shutil.rmtree(root)
+   if name.startswith(prefix+'-'):
+    try:run(['docker','rm','-f',name])
+    except Exception:failures+=1
+  for network in reversed(networks):
+   try:run(['docker','network','rm',network])
+   except Exception:failures+=1
+  try:shutil.rmtree(root)
+  except Exception:failures+=1
+  remaining={}
+  for kind,args in [('containers',['docker','ps','-a','--format','{{.Names}}']),('networks',['docker','network','ls','--format','{{.Name}}'])]:
+   try:remaining[kind]=[name for name in run(args).splitlines() if name.startswith(prefix+'-')]
+   except Exception:remaining[kind]=['unverified'];failures+=1
+  remaining['temporary_dirs']=[str(root)] if root.exists() else []
+  result['cleanup_failures']=failures;result['remaining_owned_resources']=remaining
+  if failures or any(remaining.values()):result['result']='refused';result['cleanup_complete']=False
+  else:result['cleanup_complete']=True
+  out.write_text(json.dumps(result,indent=2));out.chmod(0o600 if host_fixture else 0o644)
+  if not result['cleanup_complete']:raise ValueError('fixture cleanup incomplete')
+
 def main():
  p=argparse.ArgumentParser();p.add_argument('--image',required=True);p.add_argument('--source-sha',required=True);p.add_argument('--out',required=True)
  execute(p.parse_args())
