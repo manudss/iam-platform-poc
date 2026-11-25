@@ -40,4 +40,19 @@ class Tests(unittest.TestCase):
    with self.assertRaises(ValueError):m.main()
   with patch.object(m.os,'geteuid',return_value=0),patch.dict(os.environ,{'SSH_ORIGINAL_COMMAND':'id'}):
    with self.assertRaises(ValueError):m.main()
+ def test_dispatch_plan_runs_real_packaged_queue_cli_status_and_malformed_drain(self):
+  import subprocess,sys,json
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);(root/'bin').mkdir();(root/'deploy-queue').mkdir()
+   for name in ['release-paths.py','ordered-queue.py']:(root/'bin'/name).write_bytes(Path(__file__).with_name(name).read_bytes())
+   ps=importlib.util.spec_from_file_location('paths_real',root/'bin/release-paths.py');paths=importlib.util.module_from_spec(ps);ps.loader.exec_module(paths)
+   env=paths.plan(str(root),'app',str(root/'backups'),'/var/lib/fixture/MAINT','/var/lib/fixture/OPS')
+   (root/'lyam.env').write_text(''.join(k+'='+v+'\n' for k,v in env.items()));(root/'lyam.env').chmod(0o600)
+   state=root/'deploy-queue/state.json';raw=json.dumps({'format':1,'history':[{'sha':'a'*40,'digest':'sha256:'+'b'*64}]});state.write_text(raw)
+   (root/'.update.lock').touch();updater=root/'bin/update.sh';updater.write_text('#!/bin/sh\nexit 99\n');updater.chmod(0o700)
+   with patch.object(m,'protected',side_effect=lambda p:p):
+    result=subprocess.run(m.plan('lyam-status',root),capture_output=True,text=True)
+    self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(result.stdout,'a'*40+'\n')
+    result=subprocess.run(m.plan('lyam-drain',root),input='{}',capture_output=True,text=True)
+    self.assertEqual(result.returncode,1,result.stderr);self.assertNotIn('unrecognized arguments',result.stderr);self.assertEqual(state.read_text(),raw)
 if __name__=='__main__':unittest.main()

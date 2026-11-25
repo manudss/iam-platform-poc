@@ -46,7 +46,7 @@ def validate(plan):
         seen.add(e['sha']); parent=e['sha']
     return entries
 
-def deploy(path, plan, updater, runner=subprocess.run):
+def deploy(path, plan, updater, runner=subprocess.run, env_file=None):
     entries=validate(plan); state=load(path)
     if state.get('opening_intent') or state.get('pending') or state.get('failed') or state.get('resume_required'): raise ValueError('prior deployment unresolved, operator review required')
     confirmed=[e['sha'] for e in state['history']]
@@ -67,7 +67,7 @@ def deploy(path, plan, updater, runner=subprocess.run):
         raise ValueError('noncontiguous plan')
     for entry in entries[overlap:]:
         state['pending']=entry; atomic(path,state)
-        result=runner([updater,'--image','ghcr.io/manudss/iam-platform-poc@'+entry['digest'],'--require-qualification'],check=False)
+        result=runner([updater,'--image','ghcr.io/manudss/iam-platform-poc@'+entry['digest'],'--require-qualification']+(['--env-file',str(env_file)] if env_file else []),check=False)
         if result.returncode:
             state['failed']={'sha':entry['sha'],'digest':entry['digest'],'exit':result.returncode,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
             atomic(path,state)
@@ -482,7 +482,7 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening'])
     p.add_argument('--state',default='/opt/lyam/deploy-queue/state.json');p.add_argument('--sha');p.add_argument('--digest')
     p.add_argument('--pause-file',default='/opt/lyam/UPDATE_PAUSED');p.add_argument('--update-lock',default='/opt/lyam/.update.lock')
-    p.add_argument('--repository');p.add_argument('--container')
+    p.add_argument('--repository');p.add_argument('--container');p.add_argument('--env-file')
     p.add_argument('--updater',default='/opt/lyam/bin/update.sh');a=p.parse_args();path=Path(a.state);pause=Path(a.pause_file)
     if not path.parent.is_dir(): raise ValueError('operator must create private queue directory first')
     with open(str(path)+'.lock','a') as lock:
@@ -536,7 +536,7 @@ def main():
             return
         if pause.exists(): raise ValueError('deployment paused; no pending entry written')
         if not os.path.isfile(a.updater) or not os.access(a.updater,os.X_OK): raise ValueError('qualified updater must be preinstalled')
-        plan=json.load(sys.stdin);deploy(path,plan,a.updater)
+        plan=json.load(sys.stdin);deploy(path,plan,a.updater,env_file=a.env_file)
         print('ordered deployment plan confirmed')
 
 def failure_diagnostic(error):
