@@ -47,3 +47,37 @@ child stdin/stdout/exit10/environment contract, and main inheriting standard
 streams with shell disabled. Actual SSH/authorized_keys/sudo route is NOT tested
 locally. Revert this PR only reverts workflow tokens, not a host transaction;
 first pause queue and keep gates closed if transport or update fails.
+
+## Proposed dedicated account contract, no host installation implied
+
+The existing ubuntu operator key has broad sudo and no forced command. It must
+NOT become the CI key, be copied into GitHub secrets, or be narrowed in place.
+Root SSH login is disabled on the observed host, so direct root-key installation
+is not the chosen route.
+
+Prepare a separate deployment account and separately generated CI key. Its one
+root-owned authorized_keys entry uses restrict and a forced command that invokes
+sudo noninteractively for ONLY the fixed root-owned dispatcher, with no command
+arguments. Account cannot write its authorized_keys, dispatcher, active root,
+sudo policy or parent directories. Keep operator ubuntu access unchanged.
+SSH must preserve the requested protocol token as SSH_ORIGINAL_COMMAND through
+that exact sudo command. The sudo rule must use command-scoped env_keep for
+SSH_ORIGINAL_COMMAND, with no general SETENV, shell, Python interpreter, env
+binary, wildcard arguments or broader passwordless rights. Dispatcher rejects
+all values except the two exact tokens before invoking the queue. If installed
+sudo cannot provide this exact scope, stop for an alternative reviewed helper;
+do not compensate by accepting arguments or granting arbitrary environment.
+
+Operator evidence must show the effective dedicated account SSH configuration,
+forced command and sudo listing without key material; all ownership/modes; and
+actual noninteractive transport proving the variable survives with no extra
+sudo arguments. Test the same dedicated CI key, not the operator key. An empty,
+multiline or shell-like token must refuse without a queue mutation. A normal
+interactive shell, forwarding and PTY must not be available. Key generation,
+GitHub secret replacement and host account/policy installation are separate
+coordinated steps, not performed or authorized by this contract.
+
+Required active env bindings remain exactly release-paths.plan output. Existing
+live env is not presumed to contain them. Operator should return key-presence
+and reviewed path values only, never application secrets. Missing path bindings
+must be staged and reviewed as an explicit env migration before readiness.
