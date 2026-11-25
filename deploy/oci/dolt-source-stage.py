@@ -36,10 +36,18 @@ def check_source():
  for p in [SOURCE,*SOURCE.parents]:
   if p.is_symlink():raise ValueError('source ancestor link')
  mount=json.loads(subprocess.run(['findmnt','-J','-T',str(SOURCE),'-o','TARGET,SOURCE,OPTIONS'],text=True,capture_output=True,check=True,timeout=10).stdout)['filesystems']
- if len(mount)!=1 or mount[0]['target']!='/mnt/lyam-source' or 'ro' not in mount[0]['options'].split(','):raise ValueError('cold read-only source mount required')
+ if len(mount)!=1 or mount[0]['target']!='/mnt/lyam-source' or mount[0]['source']!='/dev/sdb1' or not {'ro','nosuid','nodev','noexec','norecovery'}<=set(mount[0]['options'].split(',')):raise ValueError('exact cold read-only source mount required')
+ for device in ['/dev/sdb','/dev/sdb1']:
+  if subprocess.run(['blockdev','--getro',device],capture_output=True,text=True,check=True,timeout=10).stdout.strip()!='1':raise ValueError('block device not read-only')
+ byid=Path('/dev/disk/by-id/wwn-0x600059cb967a419fae6dada104f26d19')
+ if byid.resolve()!=Path('/dev/sdb'):raise ValueError('source disk identity differs')
  return mount[0]
 def make_plan():
  mount=check_source();rows=inventory(SOURCE)
+ if SOURCE==Path('/mnt/lyam-source/opt/lyam/data/dolt'):
+  files=[r for r in rows if r['size'] is not None];dirs=[r for r in rows if r['size'] is None]
+  from collections import Counter
+  if len(files)!=32 or len(dirs)!=22 or sum(r['size'] for r in files)!=15069538 or any(r['uid'] or r['gid'] for r in rows) or Counter(r['mode'] for r in files)!=Counter({0o777:9,0o600:6,0o644:16,0o660:1}) or any(r['mode']!=0o755 for r in dirs):raise ValueError('source totals or metadata differ from operator inventory')
  if rows!=inventory(SOURCE):raise ValueError('source changed between passes')
  return {'format':1,'kind':'cold-dolt-source-stage-plan','source':str(SOURCE),'mount':mount,'source_inventory_sha256':fingerprint(rows),'source_files':sum(r['size'] is not None for r in rows),'source_directories':sum(r['size'] is None for r in rows),'source_bytes':sum(r['size'] or 0 for r in rows),'inventory':rows,'source_clean_exit_proven':False}
 def stage(plan,root):

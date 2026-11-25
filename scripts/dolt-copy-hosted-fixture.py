@@ -40,16 +40,7 @@ def main():
   tree_hash,size,count=m.digest_tree(work);image_id=json.loads(run(['docker','image','inspect',IMAGE]))[0]['Id']
   spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':tree_hash,'image_id':image_id,'dolt_version':'2.6.1','source':{'path':str(code/'qualification-container.mjs'),'sha256':hashlib.sha256((code/'qualification-container.mjs').read_bytes()).hexdigest()},'executed_source_sha256':hashlib.sha256(m.executed_source((code/'qualification-container.mjs').read_bytes()).encode()).hexdigest(),'container':name,'out':str(out)}
   path=root/'spec.json';path.write_text(json.dumps(spec));path.chmod(0o600)
-  try:
-   raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
-  except Exception:
-   # TEMPORARY synthetic-only diagnosis, never a qualification capture.
-   debug=(code/'qualification-container.mjs').read_text().replace("}catch(error){const known=","}catch(error){console.error(String(error?.message));console.error(String(error?.stdout));console.error(String(error?.stderr));const known=")
-   debug_spec={**spec,'container':'dolt-copy-'+os.urandom(8).hex()}
-   diagnostic=subprocess.run(m.command(debug_spec,spec['source'])+[m.executed_source(debug.encode()),'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=120)
-   subprocess.run(['docker','rm','-f',debug_spec['container']],text=True,capture_output=True,timeout=20)
-   print('SYNTHETIC_DIAGNOSTIC_NOT_PROOF '+str(diagnostic.returncode)+' stderr '+diagnostic.stderr[:7000]+' stdout '+diagnostic.stdout[-1000:])
-   raise
+  raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=8 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
   proof.update(synthetic_copy_run_completed=True,ref_count=8,capture_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),copy_runner_sha256=hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),capture_source_sha256=spec['source']['sha256'],cleanup_confirmed=True,source_copy_bytes=size)
