@@ -84,7 +84,7 @@ class Host:
   self.target=target;self.container=container;self.image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
   # Bind the complete installed controller set, including host boot and systemd
   # supervision, BEFORE upgrading the journal. An old format3 controller refuses4.
-  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py'}
+  expected={'ordered-queue.py','release-held.py','release-host.py','release-boot-guard.py','host-boot.sh','qualification.py','qualification-container.mjs','release-supervision.py','held-update-durable.py','reviewed-ui-held.py','release-paths.py','release-backlog.mjs','reconcile-restored-held.py','restored-held-qualification.py'}
   bindings=manifest.get('installed')
   if not isinstance(bindings,list) or {Path(x.get('path','')).name for x in bindings}!=expected:raise ValueError('complete installed release toolchain required')
   if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',container):raise ValueError('bounded container name required')

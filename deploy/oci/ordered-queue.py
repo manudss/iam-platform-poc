@@ -553,9 +553,10 @@ def main():
                     rearm_release_held(path)
                     print('Release access rearmed only; no start, replay, environment reversal or rollback')
                 elif a.command=='reconcile-restored-held':
+                    if manifest.get('update_lock_path')!=a.update_lock:raise ValueError('exact updater lock binding required')
                     if not a.repository:raise ValueError('reviewed repository required')
                     rm=bound_module(manifest.get('reconcile_controller'),'reconcile-restored-held.py','restored held reconciler')
-                    rm.reconcile(sys.modules[__name__],path,manifest,a.repository,a.container,pause)
+                    rm.reconcile(sys.modules[__name__],path,manifest,a.repository,a.container,pause,locks={'journal':lock.fileno(),'updater':updater_lock.fileno()})
                     print('Restored held target appended; format5 fences legacy readers; pause/HOLD retained, no startup')
                 elif a.command in ['record-reviewed-recovery','record-reviewed-in-place']:
                     if not a.repository: raise ValueError('reviewed local source repository required')

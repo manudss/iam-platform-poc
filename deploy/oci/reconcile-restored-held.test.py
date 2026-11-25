@@ -1,4 +1,4 @@
-import copy,hashlib,importlib.util,json,subprocess,tempfile,unittest
+import time,fcntl,copy,hashlib,importlib.util,json,subprocess,tempfile,unittest
 from pathlib import Path
 HERE=Path(__file__).parent
 
@@ -11,14 +11,19 @@ class Tests(unittest.TestCase):
   p=Path(d)/'state';pause=Path(d)/'pause';pause.write_bytes(b'original pause')
   state={'format':3,'history':[{'sha':OLD,'digest':'sha256:'+'e'*64,'mode':'ui-open-automation-held','automation_held':True}],'recovery_fence':OLD,'recoveries':[{'target':{'sha':OLD}}],'resume_required':True};q.atomic(p,state)
   m={'format':1,'kind':'reviewed-restored-held','state_fingerprint':q.fingerprint(state),'expected_delivered':{'sha':OLD,'digest':'sha256:'+'e'*64},'target':{'sha':NEW,'digest':DIG},'chain':[{'sha':MID,'parent':OLD,'outcome':'restored-over-not-delivered'},{'sha':NEW,'parent':MID,'outcome':'restored-automation-held'}],'qualification_receipt':{'fixture':'not a real receipt'},'authorization_ref':'unverified test claim','evidence_refs':['fixture'],'opening':{'closed_receipt':{'fixture':True}}}
+  locks={}
+  for key,lp in [('journal',str(p)+'.lock'),('updater',str(Path(d)/'update.lock'))]:
+   f=open(lp,'a');fcntl.flock(f,fcntl.LOCK_EX);self.addCleanup(f.close);locks[key]=f.fileno()
+  m['update_lock_path']=str(Path(d)/'update.lock')
   calls=[]
   class Controller:
    def verify(self,m,c,t,public=503):
     calls.append(('closed',public));return {'IAM_AUTOMATION_HOLD':'1','LYAM_PAUSE_FILE':str(pause)},{}
   def verify(repo,base,chain):calls.append(('chain',base,copy.deepcopy(chain)))
-  def qualify(proof,target):calls.append(('qualify',target))
+  def qualify(proof,target):
+   calls.append(('qualify',target));return {'kind':'direct-installed-held-qualification','completed_at':time.time(),'observed_running':observe('app',target)}
   def observe(container,target):calls.append(('observe',container));return {**target,'running':True,'image_id':'same','container_id':'immutable','container':container}
-  return p,pause,state,m,calls,{'verify':verify,'qualify':qualify,'observe':observe,'controller':Controller()}
+  return p,pause,state,m,calls,{'verify':verify,'qualify':qualify,'observe':observe,'controller':Controller(),'locks':locks}
  def test_append_only_explicit_restored_mode_legacy_readers_refuse(self):
   with tempfile.TemporaryDirectory() as d:
    p,pause,old,m,calls,kw=self.fixture(d);s=r.reconcile(q,p,m,'repo','app',pause,**kw)
@@ -31,6 +36,7 @@ class Tests(unittest.TestCase):
    with self.assertRaises(ValueError):q.check_held_update(s,{},pause_present=True)
    with self.assertRaises(ValueError):q.resume_reviewed(p,{},'app')
    legacy=subprocess.check_output(['git','show','276d32:deploy/oci/ordered-queue.py'],cwd=HERE).decode();file=Path(d)/'legacy.py';file.write_text(legacy)
+   fcntl.flock(kw['locks']['journal'],fcntl.LOCK_UN)
    run=subprocess.run(['python3',str(file),'status','--state',str(p),'--pause-file',str(pause)],capture_output=True);self.assertNotEqual(run.returncode,0)
  def test_missing_qualification_changed_runtime_chain_or_pause_never_write(self):
   for bad in ('qualification','runtime','chain','pause'):
@@ -42,6 +48,14 @@ class Tests(unittest.TestCase):
     if bad=='pause':pause.unlink()
     with self.assertRaises(ValueError):r.reconcile(q,p,m,'repo','app',pause,**kw)
     self.assertEqual(p.read_bytes(),raw)
+ def test_real_lock_descriptors_absent_unheld_or_wrong_file_refuse(self):
+  with tempfile.TemporaryDirectory() as d:
+   p,pause,old,m,calls,kw=self.fixture(d);raw=p.read_bytes()
+   actual=kw.pop('locks')
+   with self.assertRaises(ValueError):r.reconcile(q,p,m,'repo','app',pause,**kw)
+   fcntl.flock(actual['updater'],fcntl.LOCK_UN)
+   with self.assertRaises(ValueError):r.reconcile(q,p,m,'repo','app',pause,locks=actual,**kw)
+   self.assertEqual(p.read_bytes(),raw);self.assertEqual(calls,[])
  def test_actual_source_chain_rejects_manifest_fiction(self):
   # Real git operations on a disposable repository, not a production source.
   with tempfile.TemporaryDirectory() as d:

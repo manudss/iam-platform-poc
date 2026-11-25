@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {capture,diagnostic} from './release-backlog.mjs';
 function fake({move=false,omit=false}={}){
  let ref='',roots=0;
- return {async changeUser(x){ref=x.database;},async query(sql){
+ return {async query(sql){
+  if(sql.startsWith('USE `')){ref=sql.slice(5,-1);return [{affectedRows:0}];}
   if(sql==='SHOW DATABASES')return [[{Database:'iam'},{Database:'iam_meta'}]];
   if(sql.includes('dolt_branches'))return [[{name:'main',hash:'head'},{name:'personal/demo-alice',hash:'branch'}]];
   if(sql==='SELECT DATABASE() AS d')return [[{d:ref}]];
@@ -33,8 +34,15 @@ test('finite diagnostic distinguishes SQL stage without leaking raw SQL messages
    if((fail==='branches'&&sql.includes('dolt_branches'))||(fail==='root'&&sql.includes('DOLT_HASHOF_DB'))||(fail==='rows'&&sql.startsWith('SELECT *')))throw Object.assign(Error('PRIVATE SQL WITH SECRET'),{code:'ER_PARSE_ERROR'});
    return query(sql,...args);
   };
-  if(fail==='session')c.changeUser=async()=>{throw Error('PRIVATE PASSWORD');};
+  if(fail==='session'){const prev=c.query;c.query=async(sql,...args)=>{if(sql.startsWith('USE `'))throw Error('PRIVATE PASSWORD');return prev(sql,...args);};}
   try{await capture(c);assert.fail('expected refusal');}catch(e){const d=diagnostic(e);assert.equal(d.stage,{branches:'branches',session:'change-session',root:'working-root',rows:'rows'}[fail]);assert(!JSON.stringify(d).includes('PRIVATE'));}
  }
  assert.equal(diagnostic({code:'SECRET',message:'SECRET'}).category,'refused-or-unknown');
+});
+
+test('branch session is selected using USE and independently checked, never COM_CHANGE_USER',async()=>{
+ const c=fake(),query=c.query.bind(c),uses=[];c.query=async(sql,...a)=>{if(sql.startsWith('USE `'))uses.push(sql);return query(sql,...a);};
+ await capture(c);assert.equal(uses.length,8);assert(uses.some(s=>s==='USE `iam/personal/demo-alice`'));
+ const bad=fake(),prev=bad.query.bind(bad);bad.query=async(sql,...a)=>sql==='SELECT DATABASE() AS d'?[[{d:'wrong'}]]:prev(sql,...a);
+ await assert.rejects(capture(bad),/session branch differs/);
 });

@@ -25,7 +25,7 @@ export async function capture(c){
    for(const b of await query('SELECT name, hash FROM `'+db+'`.dolt_branches ORDER BY name')){
     if(typeof b.name!=='string'||!b.name||b.name.length>200||/[`\x00-\x1f]/.test(b.name))throw Error('branch identifier refused');
     const ref=db+'/'+b.name;
-    stage='change-session';await c.changeUser({database:ref});
+    stage='change-session';await c.query('USE `'+ref+'`');
     stage='verify-session';
     if((await query('SELECT DATABASE() AS d'))[0]?.d!==ref)throw Error('session branch differs');
     stage='working-root';const root=(await query("SELECT DOLT_HASHOF_DB('WORKING') AS root"))[0]?.root;
