@@ -16,6 +16,18 @@ def host_resource_args(args):
  if any(v==flag or v.startswith(flag+'=') for v in args[2:] for flag in flags):raise ValueError('ambiguous preexisting fixture resource flags')
  return args[:2]+['--oom-score-adj','1000','--memory','256m','--memory-swap','256m','--pids-limit','128','--cpus','0.5']+args[2:]
 
+def bounded_positive_probe(args,output,probe_source):
+ # Observe only the exact controller's fixed positive probe. Never retain argv,
+ # arbitrary stdout, addresses, environment, credentials or Docker diagnostics.
+ if len(args)!=7 or args[:2]!=['docker','exec'] or args[3:5]!=['node','-e'] or args[5]!=probe_source:return None
+ try:
+  tests=json.loads(args[6]);value=json.loads(output)
+  keys={'pg','bao','https','pg_alias','bao_alias'}
+  if set(tests)!={'tcp','dns'} or {row[0] for row in tests['tcp']}!={'pg','bao','https'} or {row[0] for row in tests['dns']}!={'pg_alias','bao_alias'}:return None
+  if set(value)!=keys or any(type(v) is not bool for v in value.values()):return {'schema_valid':False}
+  return {'schema_valid':True,'checks':{k:value[k] for k in sorted(keys)}}
+ except (ValueError,TypeError,KeyError,IndexError):return {'schema_valid':False}
+
 def execute(a,host_fixture=False,checkpoint=None):
  if os.geteuid()!=0:raise ValueError('root fixture required')
  if not host_fixture:
@@ -58,7 +70,13 @@ def execute(a,host_fixture=False,checkpoint=None):
    result['launcher_command_count']=command_count[0]
    result['launcher_command_kind']=next((v for v in ('docker','nsenter') if args[0]==v),'other')
    if host_fixture:args=host_resource_args(args)
-   try:return original_call(args,pass_fds=pass_fds)
+   try:
+    output=original_call(args,pass_fds=pass_fds)
+    observation=bounded_positive_probe(args,output,n.PROBE)
+    if observation is not None:
+     rows=result.setdefault('positive_probe_observations',[])
+     if len(rows)<3:rows.append({'generation':len(rows)+1,**observation})
+    return output
    except Exception:
     result['command_failed']=True
     result['command_family']=('docker-'+args[1]) if args[0]=='docker' and args[1] in ('run','exec','network','image','inspect','stop','rm') else 'namespace-command'

@@ -4,6 +4,14 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 s=importlib.util.spec_from_file_location('hf',ROOT/'scripts/normal-runtime-host-fixture.py');h=importlib.util.module_from_spec(s);s.loader.exec_module(h)
 class Tests(unittest.TestCase):
+ def test_positive_probe_observer_preserves_false_without_untrusted_output(self):
+  s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+  tests={'tcp':[['pg','example',5432],['bao','example',8200],['https','example',443]],'dns':[['pg_alias','pg','example'],['bao_alias','bao','example']]};args=['docker','exec','fixture','node','-e','exact-source',json.dumps(tests)]
+  value={'pg':True,'bao':True,'https':False,'pg_alias':False,'bao_alias':True}
+  self.assertEqual(m.bounded_positive_probe(args,json.dumps(value),'exact-source'),{'schema_valid':True,'checks':value})
+  self.assertEqual(m.bounded_positive_probe(args,'private arbitrary output','exact-source'),{'schema_valid':False})
+  value['private-secret']='never persist';self.assertEqual(m.bounded_positive_probe(args,json.dumps(value),'exact-source'),{'schema_valid':False})
+  self.assertIsNone(m.bounded_positive_probe(args,'private arbitrary output','different-source'))
  def test_preflight_no_pull_no_writes_and_refuses_overlap_memory_or_inventory(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'spec';names=['scripts/normal-runtime-host-fixture.py','scripts/normal-runtime-docker-fixture.py','deploy/oci/normal-runtime.py'];spec={'format':1,'kind':'reviewed-host-pre-fifo-fixture','image':h.IMAGE,'source_sha':h.SOURCE,'files':{n:hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in names},'out':'/root/normal-host-proof-0123456789abcdef.json','held_id':'a'*64};p.write_text(json.dumps(spec));p.chmod(0o600);calls=[];overlap=[False]
