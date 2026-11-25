@@ -21,7 +21,7 @@ def main():
   run(['docker','pull',a.image]);image=json.loads(run(['docker','image','inspect',a.image]))[0]
   ids={};stage='networks'
   for role,subnet in [('backend','172.29.0.0/24'),('frontend','172.30.0.0/24')]:
-   name=prefix+'-'+role;args=['docker','network','create','--driver','bridge','--subnet',subnet]
+   name=prefix+'-'+role;args=['docker','network','create','--driver','bridge','--subnet',subnet,'--gateway',subnet.rsplit('.',1)[0]+'.1']
    if role=='backend':args+=['--internal']
    ids[role]=run(args+[name]);networks.append(name)
   peers={};stage='fake-companions'
