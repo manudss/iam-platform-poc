@@ -6,6 +6,7 @@ on:
       - 'deploy/oci/normal-runtime*'
       - 'scripts/normal-runtime-docker-fixture.py'
       - '.github/workflows/normal-runtime-harness.yml'
+      - 'scripts/normal-runtime-host*.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,9 +29,13 @@ jobs:
           SOURCE_SHA: 276d32d3162c940d7744eca9432e8b914976539f
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-runtime-docker-fixture.py --image "$IMAGE" --source-sha "$SOURCE_SHA" --out /tmp/normal-runtime-proof.json
+      - name: Exercise exact host fixture path on disposable runner
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-runtime-hosted-host-path.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: normal-runtime-network-proof
-          path: /tmp/normal-runtime-proof.json
+          path: |
+            /tmp/normal-runtime-proof.json
+            /tmp/normal-runtime-host-path-proof.json
           if-no-files-found: warn
