@@ -15,7 +15,7 @@ class Tests(unittest.TestCase):
   def verify(bp,ap,c):
    self.assertEqual(bp.stat().st_mode&0o777,0o600);self.assertEqual(bp.parent.stat().st_mode&0o777,0o700);seen.append(bp);fixtures.v.verify(bp,ap,c)
   result=m.evaluate(b,a,self.anchors(b),self.anchors(a),verify)
-  self.assertTrue(result['migration_only_verified']);self.assertFalse(result['restoration_admissible']);self.assertFalse(seen[0].exists())
+  self.assertTrue(result['migration0003_shape_consistent_with_operator_anchor']);self.assertFalse(result['restoration_admissible']);self.assertFalse(seen[0].exists())
  def test_mode_ref_and_duplicate_ref_refuse_before_verifier(self):
   b,a=self.pair()
   for mode in ('mode','anchor','duplicate'):

@@ -33,7 +33,7 @@ def evaluate(before,after,before_refs,after_refs,verifier):
    with os.fdopen(fd,'w') as f:json.dump(value,f,sort_keys=True)
    paths.append(p)
   verifier(*paths,'dolt')
- return {'format':1,'kind':'source-copy-migration0003-evidence','migration_only_verified':True,'restoration_admissible':False,'effect_authority':False,'source_provenance':'operator-anchor-not-independently-verified','historical_bus_gap_closed':False,'ref_count':len(b['dolt'])}
+ return {'format':1,'kind':'source-copy-migration0003-evidence','migration0003_shape_consistent_with_operator_anchor':True,'restoration_admissible':False,'effect_authority':False,'source_provenance':'operator-anchor-not-independently-verified','historical_bus_gap_closed':False,'ref_count':len(b['dolt'])}
 
 def read(binding):
  if not isinstance(binding,dict) or set(binding)!={'path','sha256'} or not re.fullmatch('[a-f0-9]{64}',binding['sha256']):raise ValueError('exact file binding required')
