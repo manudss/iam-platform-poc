@@ -36,6 +36,19 @@ class Tests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'out';p.write_text(text);e=Path(d)/'err';e.touch()
    r=subprocess.run(['python3',str(HERE/'filter.py'),'host',str(p),str(e),'0'],text=True,capture_output=True);self.assertEqual(r.returncode,0,r.stdout+r.stderr);self.assertIn('host_enter=true',r.stdout)
+ def test_real_host_output_passes_filter_without_losing_parse_unknown(self):
+  # Actual payload on this isolated local test host, no external connection.
+  host=subprocess.run(['sh',str(HERE/'host.sh')],text=True,capture_output=True)
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d)/'out';p.write_text('transport.remote_enter=true\ntransport.sudo_enter=true\n'+host.stdout+'\ntransport.payload_exit='+str(host.returncode)+'\n');e=Path(d)/'err';e.write_text(host.stderr)
+   r=subprocess.run(['python3',str(HERE/'filter.py'),'host',str(p),str(e),str(host.returncode)],text=True,capture_output=True)
+   self.assertIn('transport.filtered_lines=0',r.stdout,r.stdout+r.stderr)
+   if 'journal.parse=unknown' in host.stdout:self.assertIn('journal.parse=unknown',r.stdout)
+ def test_rejected_known_key_is_counted_without_value(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d)/'out';p.write_text('container.running='+SECRET+'\n'+SECRET+'=private\n');e=Path(d)/'err';e.touch()
+   r=subprocess.run(['python3',str(HERE/'filter.py'),'host',str(p),str(e),'1'],text=True,capture_output=True)
+   self.assertNotIn(SECRET,r.stdout+r.stderr);self.assertIn('transport.rejected_key.container.running=1',r.stdout);self.assertIn('transport.rejected_key.other=1',r.stdout)
  def test_nested_inventory_schema(self):
   import json
   value={'inventory_version':3,'complete':True,'dolt':{'runs_by_status_test':{'waiting|test=false':2},'tasks_by_status_kind':{'open|kind=approval':1},'active_definitions_main_branch':{'rows':2,'graphs_with_block_category':{'mail':1},'trigger_kind':{'event':2},'note':'not published'}},'nats':{'consumers':{'by_plugin_allowlist':{'workflows-engine-base':{'consumers':1,'pending':0}},'totals':{'num_pending':0}}}}
