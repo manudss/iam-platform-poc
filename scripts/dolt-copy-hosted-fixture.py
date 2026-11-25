@@ -110,7 +110,7 @@ def main():
   ddl_path=root/'exact-image-ddl.sql';ddl_path.write_bytes(ddl.encode());ddl_path.chmod(0o600)
   binding=lambda p:{'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
   replay_root=Path('/root/dolt-replay-'+os.urandom(8).hex())
-  replay_spec={'format':1,'kind':'reviewed-disposable-copy0003-replay','work':str(work),'work_tree_sha256':tree_hash,'root':str(replay_root),'image_id':image_id,'before':binding(out),'before_refs':binding(root/'before-refs.json'),'after_refs':binding(root/'after-refs.json'),'source':binding(code/'qualification-container.mjs'),'copy_reader':binding(code/'dolt-copy-capture.py'),'held_reader':binding(code/'dolt-held-capture.py'),'adapter':binding(code/'dolt-migration-evidence.py'),'verifier':binding(code/'qualification-dolt-piece-storage-verifier.py'),'ddl':binding(ddl_path),'ddl_sha256':hashlib.sha256(ddl.encode()).hexdigest()}
+  replay_spec={'format':1,'kind':'reviewed-disposable-copy0003-replay','work':str(work),'work_tree_sha256':tree_hash,'root':str(replay_root),'image_id':image_id,'before':binding(out),'before_refs':binding(root/'before-refs.json'),'after_refs':binding(root/'after-refs.json'),'source':binding(code/'qualification-container.mjs'),'copy_reader':binding(code/'dolt-copy-capture.py'),'held_reader':binding(code/'dolt-held-capture.py'),'adapter':binding(code/'dolt-migration-evidence.py'),'verifier':binding(code/'qualification-dolt-piece-storage-verifier.py'),'ddl':binding(ddl_path),'ddl_sha256':hashlib.sha256(ddl.encode()).hexdigest(),'server_source_sha256':hashlib.sha256(replay.server_source().encode()).hexdigest()}
   try:
    replay_result=replay.bounded_execute(replay_spec,m.read_binding)
    proof['same_replay_controller_completed']=replay_result['completed']

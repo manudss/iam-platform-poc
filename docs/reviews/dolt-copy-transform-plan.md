@@ -25,15 +25,14 @@ But: expliquer le seul écart de root WORKING iam_meta/main, pas admettre le run
 ## Opération proposée, distincte du cold read déjà fait
 
 Créer uniquement/root/dolt-replay-<16hex> absent,root0700. Copier work en entier
-vers son enfant data neuf, sans hardlink/symlink ni reset/checkout/commit.
-Rehash work et copie avant serveur. Seule cette nouvelle copie est writable.
+vers tmpfs/data/dolt neuf de1GiB maximum, sans reset/checkout/commit.
+Rehash work avant/après; workmontéRO/input,bootstrapNodecopiedans tmpfsavantspawnserveur. Seule cette nouvelle copie est writable.
 
 Serveur Dolt jetable netnone, bind127.0.0.1:3307 dans son namespace,aucun port
 hôte, rootfsreadonly/capdropALL/no-new-privileges,mem1.5GiB/no swap,CPU0.5,
-PID96,OOM1000,init,GOMAXPROCS2,tmpfs/tmp64MiBnoexec. Data privée sur disque,
+PID96,OOM1000,init,GOMAXPROCS2,tmpfs/tmp64MiBnoexec. Donnéesmutablesprivées en tmpfs1GiBnosuid/nodev/noexec,
 plafond d'entrée384MiB,headroom4GiBMemAvailable et2GiB+2*entrée sur disque.
-La limite d'entrée ne constitue PAS quota de croissance disque. Risque résiduel
-à revoir: ce serveur peut écrire hors taille d'entrée dans sa copie privée.
+Letmpfsborne lacroissancedesdonnées1GiB,comptabiliséeparcgroup1.5GiB;sonépuisementdoitrefuser,sansrelèvementautomatique. AucunarbreSQLmutablepersistantsurdisque.
 
 Client capture distinct, netns du serveur seulement,aucun mountproduction,
 cwd/data/dolt tmpfsvide corrigé explicitement dans le lotA,mem768MiB/PID96/
