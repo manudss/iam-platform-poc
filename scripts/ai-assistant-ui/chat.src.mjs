@@ -25,6 +25,15 @@ class ScreenChat extends AbstractChat {
 }
 
 const css = `
+:scope[compact]{display:block;container-type:inline-size}
+:scope[compact] .lead,:scope[compact] #ai-models{display:none}
+:scope[compact] .layout{display:flex;flex-direction:column;gap:0}
+:scope[compact] .layout>div{width:100%;min-width:0}
+:scope[compact] .card{margin:.35rem 0;padding:.6rem}
+:scope[compact] .thread{max-height:28vh}
+:scope[compact] .convs{max-height:6rem;overflow:auto}
+:scope[compact] .row{margin:.3rem 0}
+:scope[compact] textarea{min-height:3rem}
 .lead{font-size:1.02em}.hint{color:var(--muted);font-size:.85em}.msg{padding:.4em .6em;border-radius:.4rem}.bad{background:var(--bad-soft);color:var(--bad-ink)}
 .ok{background:var(--ok-soft);color:var(--ok)}
 .card{border:1px solid var(--line);border-radius:.6rem;padding:.8rem;margin:.8rem 0;background:var(--card)}
@@ -160,8 +169,9 @@ class AiAssistantScreen extends HTMLElement {
     if (!this._cur || !chat) return '<div class="card" id="ai-chatcard"><p class="hint">Open a conversation or start a new one.</p></div>';
     const busy = this.busy();
     const err = chat.error ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(String(chat.error.message ?? chat.error).slice(0, 300))}</p>` : '';
+    const compact = this.hasAttribute('compact');
     return `<div class="card" id="ai-chatcard"><h3>${this.esc(this._cur.title)}</h3>
-        <p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.</p>
+        ${compact ? '<details class="rights"><summary>Working branch and tool rights</summary>' : ''}<p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.</p>${compact ? '</details>' : ''}
         <div class="thread" id="ai-thread" aria-live="polite">${chat.messages.map((m) => this.renderMsg(m)).join('') || '<p class="hint">Ask a question about the platform, for example: who has the accountant role?</p>'}${busy ? '<p class="hint">Working...</p>' : ''}</div>
         ${err}
         <textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
@@ -178,16 +188,17 @@ class AiAssistantScreen extends HTMLElement {
     const modelRows = this._models.map((m) => `<tr><td>${this.esc(m.name)}${m.builtin ? ' <small>(built in)</small>' : ''}</td><td>${this.esc(m.kind)}</td><td>${this.esc(m.model)}</td><td>${m.local ? 'local' : 'external'}</td><td>${m.enabled ? 'enabled' : 'disabled'}</td><td>${this.esc(m.lastStatus)}</td>
       <td>${m.builtin ? '' : `<button class="secondary" data-test="${this.esc(m.id)}">Test</button><button class="secondary" data-toggle="${this.esc(m.id)}">${m.enabled ? 'Disable' : 'Enable'}</button><button class="secondary" data-delmodel="${this.esc(m.id)}">${this._del === m.id ? 'Confirm delete' : 'Delete'}</button>`}</td></tr>`).join('');
     const presets = PRESETS.map((x) => `<option value="${x.id}" ${x.id === this._preset ? 'selected' : ''}>${this.esc(x.label)}</option>`).join('');
-    this.innerHTML = `<style>${css}</style>
+    const compact = this.hasAttribute('compact');
+    this.innerHTML = `<style>@scope (plg-ai-assistant-chat) { ${css} }</style>
     <p class="lead">AI assistant. Chat with a model that can use the platform tools. It works on its own branch and can only prepare changes: it acts with your MCP session rights. Platform changes go to its own working branch and a human publishes; tools relayed from external servers act on those servers under the MCP rights, the branch does not isolate them.</p>
     ${this._note ? `<p role="status" class="msg ok" id="ai-note">${this.esc(this._note)}</p>` : ''}${this._problem ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(this._problem)}</p>` : ''}
-    <div class="layout"><div>
+    <div class="layout"><div>${compact ? '<details><summary>Conversations and model</summary>' : ''}
       <section class="card"><h3>New conversation</h3>
         <div class="row"><label>Model<select name="aimodel">${opts || '<option value="">No model yet</option>'}</select></label></div>
         <div class="row"><label>Title<input name="aititle" maxlength="100" placeholder="optional"></label></div>
         <button id="ai-new">Start</button></section>
       <section class="card"><h3>Conversations</h3><ul class="convs">${convs || '<li class="hint">None yet.</li>'}</ul></section>
-    </div><div>${chat}</div></div>
+    ${compact ? '</details>' : ''}</div><div>${chat}</div></div>
     <section class="card" id="ai-models"><h3>Models</h3>
       <p class="hint">A local model keeps everything on your network. An external model receives the data the tools return (users, roles, configuration): add it only if your data policy allows it. Keys are stored encrypted and never shown again.</p>
       <div class="scroll"><table id="ai-model-table"><thead><tr><th>Name</th><th>Type</th><th>Model</th><th>Where</th><th>State</th><th>Last check</th><th></th></tr></thead><tbody>${modelRows || '<tr><td colspan="7">No model yet. The built-in local model appears when the server sets IAM_AI_LOCAL_URL and IAM_AI_LOCAL_MODEL.</td></tr>'}</tbody></table></div>
@@ -204,6 +215,7 @@ class AiAssistantScreen extends HTMLElement {
     </section>`;
     this.wire();
   }
+  disconnectedCallback() { this._chat?.stop(); }
   wireChat() {
     const q = (s) => this.querySelector(s);
     q('#ai-send')?.addEventListener('click', () => void this.send());

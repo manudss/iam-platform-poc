@@ -3,7 +3,15 @@
   "private": true,
   "description": "Build of the AI assistant screen: bundles the AI SDK chat classes into plugins/ai-assistant/screens/chat.mjs",
   "type": "module",
-  "scripts": { "build": "node build.mjs", "check": "node build.mjs --check" },
-  "dependencies": { "ai": "7.0.181" },
-  "devDependencies": { "esbuild": "0.25.12" }
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check"
+  },
+  "dependencies": {
+    "ai": "7.0.181"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.58.2"
+  }
 }

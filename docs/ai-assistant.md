@@ -45,3 +45,12 @@ Unit (providers against fake endpoints, chat turn against a real MCP server with
 ## Option studied, not enabled: GitHub Copilot SDK
 
 The GitHub Copilot SDK (public preview, v0.3.x) can serve models, but only with **per-user GitHub OAuth**: each user authorises an OAuth App and requests run on that user's own Copilot subscription ([GitHub OAuth setup](https://docs.github.com/en/copilot/how-tos/copilot-sdk/setup/github-oauth), [authentication methods](https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/authenticate)). It is not a shared API key. Server-to-server mode with organisation billing exists but requires organisation policy. BYOK is the reverse (your key used inside Copilot). Fit: possible later as a third provider type with a per-session token, but it needs the Node SDK (preview, API still moving), an OAuth App, user sign-in with GitHub and a decision on whose licence and policy apply. Nothing is connected and no enterprise licence is used by this PR.
+
+
+## Floating console chat
+
+When the plugin is enabled and the signed-in administrator has the MCP screen right, a floating AI button appears at the bottom right throughout the signed-in console. Drag it to any of the four edges. Drag the window header to move the small chat window; it also snaps to the nearest edge on release. Arrow keys move the focused launcher or header. The minus button or Escape minimizes the window. Minimize and page navigation keep the same conversation instance and unsent draft. Geometry alone is stored locally, never tokens, conversation content or drafts. A branch/session change or plugin inventory refresh clears the mounted instance and rechecks availability. Disabling the plugin removes the launcher. The dedicated AI assistant page remains available for full model configuration.
+
+The floating view uses the same packaged plugin module and existing API checks. It adds no permissions, model calls, provider configuration or activation. Its conversation/model picker and rights details collapse to make room for messages. The window is kept inside the viewport on resize, including narrow screens.
+
+Browser regression (real built Angular shell and packaged plugin, synthetic API, no external model): install the web and `scripts/ai-assistant-ui` dependencies, build the web app, then run `node scripts/ai-floating-check.mjs /tmp/ai-floating-shots`. Requires Chrome (`CHROME_BIN` optional). Checks navigation and draft persistence, minimize, four-edge dragging, touch dragging, window dragging, resize, and light/dark captures.
