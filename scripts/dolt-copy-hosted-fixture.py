@@ -15,7 +15,7 @@ def main():
  name='dolt-copy-'+os.urandom(8).hex();server='dolt-server-'+os.urandom(8).hex();out=root/'capture.json';proof={'format':1,'kind':'synthetic-dolt-copy-runner-proof','synthetic_copy_run_completed':False,'production_data_used':False,'held_path_exercised':False,'verifier_exercised':False,'source_version_established':False};destination=Path('/tmp/dolt-copy-runner-proof.json')
  try:
   started=time.monotonic()
-  files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py','dolt-held-capture.py']
+  files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py','dolt-held-capture.py','dolt-source-stage.py']
   for file in files:
    p=code/file;shutil.copyfile(repo/'deploy/oci'/file,p);p.chmod(0o700)
   # Real tables, view, procedure, four refs per database. Dirty main is kept.
@@ -25,6 +25,15 @@ def main():
   with (incoming/'synthetic-padding.bin').open('wb') as f:
    for _ in range(20):f.write(os.urandom(1024*1024))
   module=importlib.util.spec_from_file_location('copy_runner',code/'dolt-copy-capture.py');m=importlib.util.module_from_spec(module);module.loader.exec_module(m)
+  # Same staging function, synthetic-only source binding, no real mount touched.
+  stage_spec=importlib.util.spec_from_file_location('cold_stage',code/'dolt-source-stage.py');stage_module=importlib.util.module_from_spec(stage_spec);stage_spec.loader.exec_module(stage_module)
+  stage_module.SOURCE=incoming
+  stage_module.check_source=lambda:{'target':str(incoming),'source':'synthetic-hosted-tree','options':'ro-asserted-fixture-only'}
+  plan=stage_module.make_plan();seed_root=root
+  root=Path('/root/dolt-evidence-'+os.urandom(8).hex())
+  staged=stage_module.stage(plan,root)
+  proof['source_stage_integrity']={k:staged[k] for k in ('source_unchanged','source_incoming_bytes_equal','source_bytes','source_files')}
+  incoming=root/'incoming';work=root/'work';out=root/'capture.json'
   prepared=m.prepare_work_copy(incoming,work)
   proof['work_preparation']={k:prepared[k] for k in ('incoming_unchanged','content_equal')}
   proof['work_preparation']['inventory_sha256']=hashlib.sha256((root/'preparation.json').read_bytes()).hexdigest()
@@ -97,4 +106,5 @@ def main():
   if (root/'attempt.json').exists():proof['attempt']=json.loads((root/'attempt.json').read_text())
   destination.write_text(json.dumps(proof,indent=2));destination.chmod(0o644)
   shutil.rmtree(root)
+  if 'seed_root' in locals() and seed_root!=root:shutil.rmtree(seed_root)
 if __name__=='__main__':main()
