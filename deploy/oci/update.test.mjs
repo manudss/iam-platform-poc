@@ -594,3 +594,33 @@ test('normal lifecycle unbound profile refuses before stop and cannot silently u
  const {env}=setup();writeFileSync(env,readFileSync(env,'utf8')+'LYAM_NORMAL_RUNTIME=/uninstalled/profile\n');
  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');assert.equal(r.status,1);assert.match(r.stderr,/hash-bound/);assert.doesNotMatch(r.calls,/docker (pull|stop|run|rm|start)/);
 });
+
+function normalUpdateFixture({launchFail=false}={}){
+ const f=setup();const copied=join(f.dir,'update.sh');writeFileSync(copied,readFileSync(updater));chmodSync(copied,0o700);
+ const lifecycle=join(f.dir,'normal-lifecycle.py');writeFileSync(lifecycle,`import sys,os,fcntl,json
+from pathlib import Path
+args=sys.argv[1:];op=args[0];root=Path(os.environ['STUB_DIR']);fd=int(args[args.index('--lock-fd')+1]);lock=args[args.index('--update-lock')+1]
+a=os.fstat(fd);b=os.stat(lock)
+assert (a.st_dev,a.st_ino)==(b.st_dev,b.st_ino)
+with open(lock,'a') as other:
+ try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ except BlockingIOError:pass
+ else:raise ValueError('lock not held')
+with (root/'normal-calls').open('a') as f:f.write(op+'\\n')
+if op=='launch':
+ if (root/'normal-launch-fail').exists():sys.exit(1)
+ (root/'running').write_text(args[args.index('--image')+1])
+`);
+ const post=join(f.dir,'qualification.sh');writeFileSync(post,'#!/bin/sh\necho qualification-$2 >> "$STUB_DIR/normal-calls"\n');chmodSync(post,0o700);
+ writeFileSync(f.env,readFileSync(f.env,'utf8')+`LYAM_NORMAL_RUNTIME=${join(f.dir,'normal.json')}\nLYAM_NORMAL_RUNTIME_SHA256=${'a'.repeat(64)}\nLYAM_NORMAL_LIFECYCLE_SHA256=${'b'.repeat(64)}\nLYAM_NORMAL_LAUNCHER_SHA256=${'c'.repeat(64)}\nLYAM_POST_UPDATE_CHECK=${post}\n`);
+ if(launchFail)writeFileSync(join(f.stub,'normal-launch-fail'),'');
+ const r=spawnSync('sh',[copied,'--image',NEW,'--env-file',f.env,'--require-qualification'],{encoding:'utf8',env:{PATH:`${f.dir}/bin:/usr/bin:/bin`,STUB_DIR:f.stub,STUB_PG:'pg'}});
+ return {...f,...r,calls:readFileSync(join(f.stub,'calls'),'utf8'),normal:readFileSync(join(f.stub,'normal-calls'),'utf8')};
+}
+test('normal updater actual shell orders prepare/qualification/rename/launch/postcheck/complete under real inherited lock',()=>{
+ const r=normalUpdateFixture();assert.equal(r.status,0,r.stderr);assert.equal(r.normal,'prepare\nqualification-before\nprepare\nlaunch\npostcheck\nqualification-after\ncomplete\n');
+ assert.match(r.calls,/docker rename lyam /);assert.doesNotMatch(r.calls,/docker run|docker start|docker rm -f lyam/);assert.equal(existsSync(join(r.stub,'MAINTENANCE')),false);
+});
+test('normal updater failed launch keeps real front gate, stops current app, no old image or data restore',()=>{
+ const r=normalUpdateFixture({launchFail:true});assert.equal(r.status,4,r.stderr);assert.match(r.normal,/launch\n$/);assert.doesNotMatch(r.normal,/postcheck|complete/);assert.match(r.calls,/docker rename lyam /);assert.match(r.calls,/docker stop lyam/);assert.doesNotMatch(r.calls,/docker start|docker run|docker rm -f lyam|DROP DATABASE/);assert.equal(existsSync(join(r.stub,'MAINTENANCE')),true);
+});
