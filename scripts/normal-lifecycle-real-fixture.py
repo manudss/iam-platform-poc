@@ -26,7 +26,7 @@ def main():
   for image in [IMAGE,'postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73','openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315']:docker('pull',image)
   ids={}
   for role,subnet in [('backend','172.27.0.0/24'),('frontend','172.28.0.0/24')]:
-   name=prefix+'-'+role;args=['network','create','--subnet',subnet]
+   name=prefix+'-'+role;args=['network','create','--subnet',subnet,'--gateway',subnet.split('/')[0].rsplit('.',1)[0]+'.1']
    if role=='backend':args+=['--internal']
    ids[role]=docker(*args,name);nets.append(name)
   pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app';old=prefix+'-old'
