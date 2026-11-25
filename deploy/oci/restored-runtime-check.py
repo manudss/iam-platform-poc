@@ -27,6 +27,14 @@ def parse_env(raw):
   env[key]=value
  return env
 
+def parse_runtime_env(items):
+ values={}
+ for item in items:
+  key,sep,value=item.partition('=')
+  if not sep or key in values and values[key]!=value:raise ValueError('contradictory runtime environment')
+  values[key]=value
+ return values
+
 def locks(bindings):
  import fcntl
  if set(bindings)!={'journal','updater'}:raise ValueError('both real lock bindings required')
@@ -85,11 +93,7 @@ def verify(spec,lock_bindings,run=subprocess.run):
  image_info=json.loads(command(['docker','image','inspect',image]))[0]
  if image not in image_info.get('RepoDigests',[]) or x.get('Image')!=image_info.get('Id') or image_info.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=target['sha']:raise ValueError('held image ID or source differs')
  runtime_env=x.get('Config',{}).get('Env',[]);hc=x.get('HostConfig',{})
- runtime_values={}
- for item in runtime_env:
-  key,sep,value=item.partition('=')
-  if not sep or key in runtime_values and runtime_values[key]!=value:raise ValueError('contradictory runtime environment')
-  runtime_values[key]=value
+ runtime_values=parse_runtime_env(runtime_env)
  if any(runtime_values.get(key)!=value for key,value in env.items()):raise ValueError('runtime environment differs from active env')
  if 'IAM_AUTOMATION_HOLD=1' not in runtime_env or 'IAM_DEMO_SEED_MODE=never' not in runtime_env or hc.get('RestartPolicy',{}).get('Name')!='no' or 'ALL' not in (hc.get('CapDrop') or []) or hc.get('CapAdd') or hc.get('Privileged') or not any(v in ('no-new-privileges','no-new-privileges:true') for v in hc.get('SecurityOpt') or []):raise ValueError('held runtime powers/settings differ')
  tls=[tls_local(origin,address) for origin,address in spec['local_tls'].items()]

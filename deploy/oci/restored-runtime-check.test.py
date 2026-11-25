@@ -2,6 +2,10 @@ import importlib.util,tempfile,unittest,fcntl
 from pathlib import Path
 s=importlib.util.spec_from_file_location('runtime',Path(__file__).with_name('restored-runtime-check.py'));m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class Tests(unittest.TestCase):
+ def test_file_duplicates_refuse_runtime_identical_allowed_conflicts_refuse(self):
+  with self.assertRaises(ValueError):m.parse_env(b'IAM_AUTOMATION_HOLD=1\nIAM_AUTOMATION_HOLD=1\n')
+  self.assertEqual(m.parse_runtime_env(['IAM_AUTOMATION_HOLD=1','IAM_AUTOMATION_HOLD=1']),{'IAM_AUTOMATION_HOLD':'1'})
+  with self.assertRaises(ValueError):m.parse_runtime_env(['IAM_AUTOMATION_HOLD=1','IAM_AUTOMATION_HOLD=0'])
  def test_two_actual_locks_and_no_arbitrary_source(self):
   with tempfile.TemporaryDirectory() as d:
    a=Path(d)/'journal';b=Path(d)/'update';a.touch();b.touch()
