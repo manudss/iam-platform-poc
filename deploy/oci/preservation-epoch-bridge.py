@@ -22,7 +22,8 @@ def policy_bridge(old,new,relocations):
  if old.get('appendOnlyTables')!=['public.activations','public.decision_audit'] and old.get('appendOnlyTables')!=['public.decision_audit','public.activations']:raise ValueError('exact known append coverage required')
  return {k:relocations[k] for k in sorted(relocations)}
 
-def bridge(original_raw,current_raw,old_policy_raw,new_policy_raw,relocations):
+def bridge(original_raw,current_raw,old_policy_raw,new_policy_raw,relocations,original_anchor):
+ if not isinstance(original_anchor,dict) or set(original_anchor)!={'original_sha256','old_policy_sha256','independent_source_sha256','source_kind'} or original_anchor['source_kind'] not in ('pre-rotation-operator-proof','recovery-journal-audit') or not re.fullmatch('[a-f0-9]{64}',original_anchor['independent_source_sha256']) or original_anchor['original_sha256']!=digest(original_raw) or original_anchor['old_policy_sha256']!=digest(old_policy_raw):raise ValueError('independent original anchor required')
  original=json.loads(original_raw);current=json.loads(current_raw);old=json.loads(old_policy_raw);new=json.loads(new_policy_raw)
  changes=policy_bridge(old,new,relocations)
  if original.get('policyHash')!=digest(old_policy_raw) or current.get('policyHash')!=digest(new_policy_raw):raise ValueError('snapshot policy hash differs')
@@ -47,4 +48,9 @@ def bridge(original_raw,current_raw,old_policy_raw,new_policy_raw,relocations):
   if name=='public.decision_audit_id_seq':
    if set(seq)!=set(now) or set(seq)!={'last_value','is_called'} or type(seq['last_value']) is not int or type(now['last_value']) is not int or now['last_value']<seq['last_value'] or type(seq['is_called']) is not bool or type(now['is_called']) is not bool or seq['is_called'] and not now['is_called']:raise ValueError('audit sequence rewind or invalid')
   elif seq!=now:raise ValueError('non-audit sequence changed')
- return {'format':1,'kind':'original-current-preservation-bridge','original_sha256':digest(original_raw),'current_sha256':digest(current_raw),'old_policy_sha256':digest(old_policy_raw),'new_policy_sha256':digest(new_policy_raw),'policy_relocations':changes,'origin_coverage':'unchanged-including-legacy-SNI','allowed_store_change':'decision-audit-append-and-sequence-only','effect_authority':False}
+ audit_before=sum(a['rows'].get('public.decision_audit',{}).values());audit_after=sum(b['rows'].get('public.decision_audit',{}).values())
+ seq_before=a['sequences'].get('public.decision_audit_id_seq');seq_after=b['sequences'].get('public.decision_audit_id_seq')
+ if not seq_before or not seq_after:raise ValueError('audit sequence coverage required')
+ added=audit_after-audit_before;delta=seq_after['last_value']-seq_before['last_value']
+ if not 0<=added<=10000 or not added<=delta<=10000:raise ValueError('audit append or sequence delta incoherent or beyond bound')
+ return {'format':1,'kind':'original-current-preservation-bridge','anchor_claim':original_anchor,'anchor_source_verified':False,'bus_coverage':'not-captured-separate-anchored-proof-required','audit_before_rows':audit_before,'audit_after_rows':audit_after,'audit_added_rows':added,'audit_sequence_delta':delta,'audit_sequence_unused_delta':delta-added,'original_sha256':digest(original_raw),'current_sha256':digest(current_raw),'old_policy_sha256':digest(old_policy_raw),'new_policy_sha256':digest(new_policy_raw),'policy_relocations':changes,'origin_coverage':'unchanged-including-legacy-SNI','allowed_store_change':'decision-audit-append-and-sequence-only','effect_authority':False}
