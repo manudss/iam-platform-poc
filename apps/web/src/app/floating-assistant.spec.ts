@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { FloatingAssistant } from './floating-assistant';
 import { Session } from './session';
 import { PluginScreenLoader } from './plugin-screen';
@@ -10,6 +10,7 @@ describe('Floating assistant', () => {
     let mounts = 0;
     if (!customElements.get('test-floating-chat')) customElements.define('test-floating-chat', class extends HTMLElement {});
     await TestBed.configureTestingModule({ imports: [FloatingAssistant], providers: [provideRouter([]), { provide: PluginScreenLoader, useValue: { load: async () => { mounts++; return { default: 'test-floating-chat' }; } } }] }).compileComponents();
+    Object.defineProperty(TestBed.inject(Router),'url',{configurable:true,get:()=>'/overview'});
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.access.set({ subject: 'demo', admin: true, restricted: true, plugins: {} }); s.selectBranch('b1');
     s.api.raw = (async () => ({ status: 200, data: { screens: enabled ? [{ plugin: 'ai-assistant', id: 'chat', render: 'component', component: 'screens/chat.mjs' }] : [] } })) as never;
@@ -33,6 +34,12 @@ describe('Floating assistant', () => {
     f.componentInstance.toggle(); await settle(); expect((f.nativeElement.querySelector('test-floating-chat') as any).context.branch).toBe('b2');
     s.api.raw = (async () => ({ status: 200, data: { screens: [] } })) as never; s.pluginsVersion.update(x => x + 1); await settle(); expect(f.nativeElement.querySelector('#ai-launcher')).toBeNull();
     s.loggedIn.set(false); await settle(); expect(f.nativeElement.querySelector('test-floating-chat')).toBeNull();
+  });
+  it('does not start admin discovery after a late branch bootstrap in personal space', async () => {
+    const {s,settle}=await setup(); const router=TestBed.inject(Router);
+    Object.defineProperty(router,'url',{get:()=>'/my-applications'});
+    let calls=0; s.api.raw=(async()=>{calls++;return {status:200,data:{screens:[]}};}) as never;
+    s.selectBranch('personal/demo'); await settle(); expect(calls).toBe(0);
   });
   it('keeps both controls in the viewport after resize and supports keyboard movement', async () => {
     const { f } = await setup(); const c = f.componentInstance;

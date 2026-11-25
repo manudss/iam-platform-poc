@@ -1,4 +1,7 @@
 import { Component, ElementRef, HostListener, effect, inject, signal, viewChild } from '@angular/core';
+import { Router, NavigationEnd } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { isPersonalArea } from './route-scope';
 import { canOpen } from './access';
 import { Session } from './session';
 import { PluginScreenLoader } from './plugin-screen';
@@ -23,6 +26,7 @@ import { PluginScreenLoader } from './plugin-screen';
 })
 export class FloatingAssistant {
   private readonly s = inject(Session);
+  private readonly router = inject(Router);
   private readonly loader = inject(PluginScreenLoader);
   private readonly mount = viewChild<ElementRef<HTMLElement>>('mount');
   readonly available = signal(false);
@@ -42,6 +46,9 @@ export class FloatingAssistant {
       for (const kind of ['launcher', 'panel'] as const) if (Number.isFinite(saved?.[kind]?.x) && Number.isFinite(saved?.[kind]?.y)) this[kind] = saved[kind];
     } catch { /* geometry is optional */ }
     this.resize();
+    this.router.events.pipe(takeUntilDestroyed()).subscribe(e => {
+      if (e instanceof NavigationEnd && !isPersonalArea(e.urlAfterRedirects) && !this.available()) void this.discover(this.request);
+    });
     effect(() => {
       this.s.pluginsVersion(); this.s.branchEpoch(); this.s.adminToken(); this.s.access(); this.s.loggedIn();
       const req = ++this.request;
@@ -51,6 +58,7 @@ export class FloatingAssistant {
     effect(() => { const mount = this.mount(); if (mount && this.opened() && !this.element) void this.show(mount.nativeElement, this.request); });
   }
   private async discover(req: number) {
+    if (isPersonalArea(this.router.url) || !this.s.loggedIn() || !this.s.access()?.admin || !canOpen(this.s.access(), 'mcp') || !this.s.branch()) return;
     try {
       const r = await this.s.api.raw<{ screens: { plugin: string; id: string; render: string; component?: string }[] }>('GET', '/plugins/screens', undefined, this.headers());
       if (req !== this.request || r.status >= 400) return;
