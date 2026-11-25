@@ -28,7 +28,7 @@ def command(spec,source):
  if not re.fullmatch(r'sha256:[a-f0-9]{64}',spec['image_id']):raise ValueError('immutable local image ID required')
  if spec['dolt_version']!='2.6.1':raise ValueError('reviewed calibrated Dolt version required')
  if source.get('path')!=str(Path(__file__).with_name('qualification-container.mjs').absolute()):raise ValueError('fixed capture source required')
- return ['docker','run','--name',spec['container'],'--restart','no','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--oom-score-adj','1000','--user','0:0','--memory','1536m','--memory-swap','1536m','--pids-limit','96','--cpus','0.5','--mount','type=bind,src='+str(work)+',dst=/data/dolt,readonly','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=0700','--workdir','/tmp','--entrypoint','node',spec['image_id'],'--input-type=module','-e']
+ return ['docker','run','--name',spec['container'],'--restart','no','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--oom-score-adj','1000','--user','0:0','--memory','1536m','--memory-swap','1536m','--pids-limit','96','--cpus','0.5','--mount','type=bind,src='+str(work)+',dst=/data/dolt,readonly','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=0700','--workdir','/tmp','--env','HOME=/tmp','--entrypoint','node',spec['image_id'],'--input-type=module','-e']
 
 def executed_source(raw):
  return ("const {execFileSync:epochExec}=await import('node:child_process');"

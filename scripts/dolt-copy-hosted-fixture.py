@@ -12,7 +12,7 @@ def run(args,stdin=None):
 def main():
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable hosted root runner required')
  repo=Path(__file__).resolve().parents[1];root=Path('/root/dolt-evidence-'+os.urandom(8).hex());root.mkdir(mode=0o700);work=root/'work';work.mkdir(mode=0o700);code=root/'code';code.mkdir(mode=0o700)
- name='dolt-copy-'+os.urandom(8).hex();out=root/'capture.json';proof={'format':1,'kind':'synthetic-dolt-copy-runner-proof','synthetic_copy_run_completed':False,'production_data_used':False,'held_path_exercised':False,'verifier_exercised':False,'source_version_established':False};destination=Path('/tmp/dolt-copy-runner-proof.json')
+ name='dolt-copy-'+os.urandom(8).hex();server='dolt-server-'+os.urandom(8).hex();out=root/'capture.json';proof={'format':1,'kind':'synthetic-dolt-copy-runner-proof','synthetic_copy_run_completed':False,'production_data_used':False,'held_path_exercised':False,'verifier_exercised':False,'source_version_established':False};destination=Path('/tmp/dolt-copy-runner-proof.json')
  try:
   started=time.monotonic()
   files=['dolt-copy-capture.py','qualification-container.mjs','dolt-migration-evidence.py','qualification-dolt-piece-storage-verifier.py']
@@ -41,8 +41,28 @@ def main():
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=2 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
   proof.update(synthetic_copy_run_completed=True,ref_count=2,capture_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),copy_runner_sha256=hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),capture_source_sha256=spec['source']['sha256'],cleanup_confirmed=True,source_copy_bytes=size)
+  # Running=true capture against a REAL disposable Dolt server, no app.
+  after_work=root/'after';shutil.copytree(work,after_work)
+  run(['docker','run','-d','--name',server,'--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','1536m','--memory-swap','1536m','--pids-limit','128','--cpus','1','--restart','no','-v',str(after_work)+':/data/dolt','--workdir','/data/dolt','--entrypoint','dolt',IMAGE,'sql-server','--host','0.0.0.0','--port','3307','--data-dir','/data/dolt'])
+  for attempt in range(30):
+   ready=subprocess.run(['docker','exec',server,'dolt','--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','','--use-db=iam_meta','sql','-r','json','-q','SELECT 1'],text=True,capture_output=True,timeout=10)
+   if ready.returncode==0:break
+   time.sleep(1)
+  else:raise ValueError('synthetic Dolt server not ready')
+  ddl='CREATE TABLE workflow_piece_state (tenant VARCHAR(64) NOT NULL, scope_id VARCHAR(200) NOT NULL, state_key VARCHAR(200) NOT NULL, value_json LONGTEXT NOT NULL, PRIMARY KEY(tenant,scope_id,state_key))'
+  run(['docker','exec',server,'dolt','--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','','--use-db=iam_meta','sql','-q',ddl])
+  after=json.loads(run(['docker','exec','-i',server,'node','--input-type=module','-e',(code/'qualification-container.mjs').read_text(),'dolt-only'],'{"running":true}'))
+  def mod(file,name):
+   spec=importlib.util.spec_from_file_location(name,code/file);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
+  adapter=mod('dolt-migration-evidence.py','adapter');verifier=mod('qualification-dolt-piece-storage-verifier.py','verifier')
+  anchors=lambda env:[{k:row[k] for k in ('database','branch','head','root')} for row in env['dolt']]
+  verdict=adapter.evaluate(capture,after,anchors(capture),anchors(after),verifier.verify)
+  if not verdict['migration0003_shape_consistent_with_operator_anchor'] or verdict['restoration_admissible']:raise ValueError('synthetic migration verdict differs')
+  proof.update(verifier_exercised=True,synthetic_server_capture_completed=True,synthetic_migration_shape_passed=True,anchors_in_fixture_are_self_derived=True,held_path_exercised=False)
+
  finally:
   # Only synthetic tree, never original or operator data. Bounded exact-name cleanup.
+  subprocess.run(['docker','rm','-f',server],text=True,capture_output=True,timeout=30)
   subprocess.run(['docker','rm','-f',name],text=True,capture_output=True,timeout=30)
   proof['duration_seconds']=time.monotonic()-started
   if (root/'attempt.json').exists():proof['attempt']=json.loads((root/'attempt.json').read_text())
