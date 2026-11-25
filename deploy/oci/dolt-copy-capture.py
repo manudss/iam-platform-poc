@@ -11,7 +11,7 @@ class ResourceMonitor:
  Sampling is observational, not a bound; an early kill can evade peak sampling.
  """
  def __init__(self,name):
-  self.name=name;self.done=threading.Event();self.peak=None;self.samples=0;self.thread=None
+  self.name=name;self.done=threading.Event();self.peak=None;self.samples=0;self.thread=None;self.pids_peak=None;self.pids_events_max=None
  def start(self):
   self.thread=threading.Thread(target=self.sample,daemon=True);self.thread.start();return self
  def sample(self):
@@ -32,12 +32,16 @@ class ResourceMonitor:
      n=int(path.read_text().strip())
      if n<0:raise ValueError('memory peak differs')
      self.peak=max(self.peak or 0,n);self.samples+=1
+     try:self.pids_peak=max(self.pids_peak or 0,int(path.with_name('pids.peak').read_text().strip()))
+     except Exception:pass
+     try:self.pids_events_max=max(self.pids_events_max or 0,int(dict(row.split() for row in path.with_name('pids.events').read_text().splitlines())['max']))
+     except Exception:pass
    except Exception:pass
    self.done.wait(0.05)
  def finish(self):
   self.done.set()
   if self.thread:self.thread.join(timeout=4)
-  result={'sampled_memory_peak_bytes':self.peak,'samples':self.samples,'measurement_is_upper_bound':False,'docker_state_available':False}
+  result={'sampled_memory_peak_bytes':self.peak,'samples':self.samples,'sampled_pids_peak':self.pids_peak,'pids_events_max':self.pids_events_max,'measurement_is_upper_bound':False,'docker_state_available':False}
   try:
    r=subprocess.run(['docker','inspect',self.name],capture_output=True,text=True,timeout=5)
    state=json.loads(r.stdout)[0]['State']
@@ -138,7 +142,7 @@ def execute(spec,reader):
    stages=re.findall(r'^QUALIFICATION_DIAG_V1:(capture-dolt|init)$',r.stderr,re.M)
    result['capture_stage']=stages[-1] if stages else 'unverified'
    result['failure_stdout_bytes']=len(r.stdout.encode())
-   for field,pattern in [('reason_code',r'^QUALIFICATION_REASON_V1:(-?[0-9]{1,2})$'),('query_kind_code',r'^DOLT_QUERY_KIND_V1:(-?[0-9]{1,2})$')]:
+   for field,pattern in [('reason_code',r'^QUALIFICATION_REASON_V1:(-?[0-9]{1,2})$'),('query_kind_code',r'^DOLT_QUERY_KIND_V1:(-?[0-9]{1,2})$'),('pthread_failure',r'^DOLT_THREAD_FAILURE_V1:([01])$')]:
     found=re.findall(pattern,r.stderr,re.M);result[field]=int(found[-1]) if found else None
    raise ValueError('Dolt copy capture refused')
   envelope=json.loads(r.stdout)
