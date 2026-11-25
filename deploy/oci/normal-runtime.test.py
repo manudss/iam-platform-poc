@@ -56,6 +56,7 @@ class Tests(unittest.TestCase):
      if args[:3]==['docker','network','connect']:return ''
      if args[:3]==['docker','network','inspect']:return json.dumps([{'IPAM':{'Config':[{'Gateway':'172.19.0.1' if args[3]==c['backend']['id'] else '172.20.0.1'}]}}])
      if args[0]=='nsenter':
+      if '/usr/bin/python3' in args and args[-2]=='17':self.assertNotIn(args[-1],c['dns_upstreams'])
       if args[-1]=='-S':return '-P INPUT ACCEPT\n-P FORWARD ACCEPT\n-P OUTPUT ACCEPT'
       if '-nvx' in args:
        count[0]+=1;return str(count[0])+' 1 REJECT all -- * * 0.0.0.0/0 0.0.0.0/0\n1 1 all -- normal-probe-'+next((x[-1].removeprefix('normal-probe-') for x in reversed(trace) if '--comment' in x and '-I' in x),'private')

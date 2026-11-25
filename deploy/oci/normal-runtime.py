@@ -180,7 +180,7 @@ def launch(c,before_effects):
   for typ,proto in [('2','17'),('3','1')]:
    before=reject_counter('iptables')
    socketprobe="import socket,sys;s=socket.socket(socket.AF_INET,int(sys.argv[1]),int(sys.argv[2]));s.sendto(bytes.fromhex('0800f7fd00010001') if sys.argv[2]=='1' else b'fixture',(sys.argv[3],53))"
-   try:nscmd('/usr/bin/python3','-c',socketprobe,typ,proto,c['public_probe'])
+   try:nscmd('/usr/bin/python3','-c',socketprobe,typ,proto,('8.8.4.4' if '8.8.4.4' not in c['dns_upstreams'] else '8.8.8.8'))
    except ValueError:pass
    if reject_counter('iptables')<=before:raise ValueError('UDP/ICMP rejection not established')
   ipv6=call(['docker','exec',cid,'node','-e',"const f=require('fs');const names=f.readdirSync('/proc/sys/net/ipv6/conf').filter(n=>n!=='lo');if(names.some(n=>f.readFileSync('/proc/sys/net/ipv6/conf/'+n+'/disable_ipv6','utf8').trim()!=='1'))process.exit(1);console.log('IPV6_DISABLED')"])
