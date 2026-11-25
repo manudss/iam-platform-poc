@@ -60,6 +60,14 @@ class Tests(unittest.TestCase):
    with patch.object(subprocess,'run',side_effect=command):scope['cleanup']()
    self.assertTrue(json.loads(out.read_text())['cleanup_complete']);self.assertFalse(root.exists());self.assertTrue(all(0<t<=15 for args,t in calls))
    self.assertEqual({sig:signal.getsignal(sig) for sig in prior},prior)
+ def test_actual_cleanup_budget_exhaustion_still_removes_temp_and_writes_refusal(self):
+  import ast,signal,subprocess,time,shutil
+  source=(ROOT/'scripts/normal-runtime-docker-fixture.py').read_text();tree=ast.parse(source);execute=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='execute');block=next(n for n in execute.body if isinstance(n,ast.Try) and n.finalbody);fn=ast.FunctionDef(name='cleanup',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=block.finalbody,decorator_list=[]);module=ast.Module(body=[fn],type_ignores=[]);ast.fix_missing_locations(module)
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d)/'owned';root.mkdir();out=Path(d)/'artifact';scope={'host_fixture':True,'signal':signal,'time':time,'subprocess':subprocess,'shutil':shutil,'root':root,'out':out,'prefix':'normal-host-prefix','networks':['normal-host-prefix-backend'],'result':{'result':'pre-fifo-network-qualified'},'json':json};exec(compile(module,'actual-fixture-cleanup','exec'),scope)
+   with patch.object(time,'monotonic',side_effect=[0,91,92,93,94]),patch.object(subprocess,'run') as run:
+    with self.assertRaisesRegex(ValueError,'cleanup incomplete'):scope['cleanup']()
+   run.assert_not_called();result=json.loads(out.read_text());self.assertFalse(root.exists());self.assertFalse(result['cleanup_complete']);self.assertEqual(result['remaining_owned_resources']['containers'],['unverified']);self.assertEqual(result['cleanup_failures'],4)
  def test_first_signal_shields_postobservation_and_restores_handlers(self):
   import signal
   with tempfile.TemporaryDirectory() as d:
