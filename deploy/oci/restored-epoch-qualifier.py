@@ -31,7 +31,7 @@ def evidence_projection(component,value):
 
 def bounded_source(source):
  return ("const {spawn:epochSpawn}=await import('node:child_process');"
-  "const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},120000)\",String(process.pid)],{stdio:'ignore'});"
+  "const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},120000)\",String(process.pid)],{stdio:'ignore'});epochWatch.unref();"
   "process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
 
 def load_fixed(binding,name,reader):

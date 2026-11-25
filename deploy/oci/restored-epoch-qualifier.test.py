@@ -3,6 +3,11 @@ from pathlib import Path
 from unittest.mock import patch
 s=importlib.util.spec_from_file_location('epoch',Path(__file__).with_name('restored-epoch-qualifier.py'));m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class Tests(unittest.TestCase):
+ def test_watchdog_source_exits_when_script_completes(self):
+  import subprocess,json
+  source=m.bounded_source(b'console.log(JSON.stringify({done:true}));')
+  result=subprocess.run(['node','--input-type=module','-e',source],text=True,capture_output=True,timeout=5)
+  self.assertEqual(result.returncode,0);self.assertEqual(json.loads(result.stdout),{'done':True})
  def test_fixed_module_name_and_binding_before_execution(self):
   with tempfile.TemporaryDirectory() as d:
    path=Path(d)/'qualification.py';path.write_text('raise AssertionError("external code must not execute")')
