@@ -69,6 +69,7 @@ jobs:
       - name: Deployment controller unit contracts
         working-directory: .ci-automation
         run: |
+          python3 deploy/oci/ci-dispatch.test.py
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/qualification.test.py
           node --check deploy/oci/qualification-container.mjs
@@ -247,6 +248,7 @@ jobs:
       - name: Durable ordered deployment queue
         working-directory: .ci-automation
         run: |
+          python3 deploy/oci/ci-dispatch.test.py
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/held-update.test.py
           python3 deploy/oci/held-update-durable.test.py
