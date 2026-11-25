@@ -31,7 +31,14 @@ def main():
   tree_hash,size,count=m.digest_tree(work);image_id=json.loads(run(['docker','image','inspect',IMAGE]))[0]['Id']
   spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':tree_hash,'image_id':image_id,'dolt_version':'2.6.1','source':{'path':str(code/'qualification-container.mjs'),'sha256':hashlib.sha256((code/'qualification-container.mjs').read_bytes()).hexdigest()},'executed_source_sha256':hashlib.sha256(m.executed_source((code/'qualification-container.mjs').read_bytes()).encode()).hexdigest(),'container':name,'out':str(out)}
   path=root/'spec.json';path.write_text(json.dumps(spec));path.chmod(0o600)
-  raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
+  try:
+   raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
+  except Exception:
+   # TEMPORARY synthetic-only diagnosis, never a qualification capture.
+   debug=(code/'qualification-container.mjs').read_text().replace("}catch(error){const known=","}catch(error){console.error(String(error?.message));const known=")
+   diagnostic=subprocess.run(['docker','run','--rm','-i','--network','none','--read-only','--cap-drop','ALL','--memory','1536m','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824','--env','HOME=/tmp','-v',str(work)+':/data/dolt:ro','--entrypoint','node',image_id,'--input-type=module','-e',debug,'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=120)
+   print('SYNTHETIC_DIAGNOSTIC_NOT_PROOF '+diagnostic.stderr[-5000:])
+   raise
   result=json.loads(raw);capture=json.loads(out.read_text())
   if not result['completed'] or not result['cleanup_confirmed'] or capture['running'] is not False or len(capture['dolt'])!=8 or any(e['evidence']!='dolt-tables-v3' for e in capture['dolt']):raise ValueError('real capture incomplete')
   proof.update(synthetic_copy_run_completed=True,ref_count=8,capture_sha256=hashlib.sha256(out.read_bytes()).hexdigest(),copy_runner_sha256=hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),capture_source_sha256=spec['source']['sha256'],cleanup_confirmed=True,source_copy_bytes=size)
@@ -48,6 +55,12 @@ def main():
   match=__import__('re').search(r"async pieceTable\(c\).*?c.query\('([^']+)'\)",dist,__import__('re').S)
   if not match:raise ValueError('exact image migration DDL not found')
   ddl=match[1]
+  compiled=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--memory','128m','--entrypoint','node',image_id,'-e',"const f=require('fs');console.log(JSON.stringify(Object.fromEntries(['/app/api/dist/migrations/v0003/run.js'].map(p=>[p,f.readFileSync(p,'utf8')]))))"])
+  migration_files=json.loads(compiled)
+  migration=next(v for k,v in migration_files.items() if k.endswith('/v0003/run.js'))
+  if not all(token in migration for token in ["id: '0003'",'WorkflowStore','preparePieceStorage()']):raise ValueError('image0003 store linkage differs')
+  if not __import__('re').search(r'async preparePieceStorage\(\).*?this.pieceTable\(c\)',dist,__import__('re').S):raise ValueError('image store method linkage differs')
+  proof['migration0003_linked_file_hashes']={k:hashlib.sha256(v.encode()).hexdigest() for k,v in migration_files.items()}
   proof['migration_image_id']=image_id
   proof['migration_dist_sha256']=hashlib.sha256(dist.encode()).hexdigest()
   proof['migration_ddl_sha256']=hashlib.sha256(ddl.encode()).hexdigest()
@@ -68,7 +81,8 @@ def main():
    proof['server_capture_measurement']=server_monitor.finish()
   proof['sql_capture_duration_seconds']=time.monotonic()-capture_started
   proof['table_entries_captured']=sum(len(r['tables']) for r in after['dolt'])
-  proof['rows_per_main_fixture_table']=1025
+  proof['main_fixture_rows']=[{'database':r['database'],'rows':t['rows']} for r in after['dolt'] if r['branch']=='main' for t in r['tables'] if t['name']=='fixture_rows']
+  if len(proof['main_fixture_rows'])!=2 or any(r['rows']!=1025 for r in proof['main_fixture_rows']):raise ValueError('fixture SQL load rows differ')
   adapter=mod('dolt-migration-evidence.py','adapter');verifier=mod('qualification-dolt-piece-storage-verifier.py','verifier')
   anchors=lambda env:[{k:row[k] for k in ('database','branch','head','root')} for row in env['dolt']]
   verdict=adapter.evaluate(capture,after,anchors(capture),anchors(after),verifier.verify)
