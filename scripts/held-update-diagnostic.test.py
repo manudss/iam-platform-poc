@@ -16,5 +16,6 @@ class D(unittest.TestCase):
   self.assertEqual(d.project(log)['qualificationDiagnostics'],[good]);self.assertNotIn('SECRET',json.dumps(d.project(log)))
  def test_integration_projects_private_log_only_on_failure(self):
   text=Path(__file__).with_name('held-update-scenario.py').read_text()
+  self.assertLess(text.index("rec['updaterDiagnostic']"),text.index("if killed is None: raise RuntimeError('kill-phase-never-reached')"))
   self.assertIn("rec['updaterDiagnostic']=load_module(source/'scripts/held-update-diagnostic.py','held_diagnostic').project(log)",text)
 if __name__=='__main__':unittest.main()

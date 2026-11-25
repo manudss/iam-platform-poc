@@ -16,6 +16,8 @@ MARKERS={
  'OpenBao did not become ready/unsealed':'bao-readiness-refused',
  'preservation changed':'preservation-diff',
  'another update is running':'lock-busy',
+ 'watchdog not ready':'watchdog-not-ready',
+ 'unit bindings not ready':'unit-bindings-not-ready',
  'inherited lock fd':'inherited-fd-refused',
  'inherited update lock':'inherited-lock-refused',
  'adopted receipt':'adopted-receipt-refused',

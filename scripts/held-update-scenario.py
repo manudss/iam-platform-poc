@@ -292,26 +292,26 @@ def run(x):
         rec = {'watchdog': {k: wres.get(k) for k in ['action', 'needs_operator']}, 'killed_at_phase': killed, 'statuses': sampler.statuses(), 'worker_exit': jread(folder / 'worker-result.json')['exit'] if (folder / 'worker-result.json').exists() else None}
         report.setdefault('initialStatuses',{})[name]=sorted({v for t,v in sampler.rows if closed_seen is None or t<closed_seen})
         first200 = next((t for t,status in sampler.rows if closed_seen is not None and t>=closed_seen and status==200),None)
+        import re
+        log='\n'.join(p.read_text(errors='replace') for p in [folder/'worker.log',folder/'worker.launcher.log',folder/'watchdog.launcher.log'] if p.exists())
+        rec['contract']={'watchdogCompleted':wres['action']=='completed','targetReached':st['history'][-1]['sha']==chain[-1]['sha'],'openingObserved':opening_seen is not None,'postClosure200Observed':first200 is not None,'ordered200':first200 is not None and opening_seen is not None and first200>=opening_seen}
+        phase=str((st.get('opening_intent') or {}).get('phase',''))
+        rec['failurePhase']=phase if re.fullmatch(r'[a-z0-9-]{1,100}',phase) else 'unknown'
+        rec['sourceFrames']=[{'module':m,'line':int(n)} for m,n in re.findall(r'File "[^"\n]*/(held-update-host|ordered-queue|held-update-durable|reviewed-ui-held)\.py", line ([0-9]{1,6})',log)][-16:]
+        rec['exceptionTypes']=re.findall(r'^(ValueError|RuntimeError|FileNotFoundError|PermissionError|TypeError|KeyError|TimeoutError):',log,re.M)[-4:]
+        rec['updaterDiagnostic']=load_module(source/'scripts/held-update-diagnostic.py','held_diagnostic').project(log)
+        for raw in re.findall(r'^QUEUE_DIAG_V1 (\{[^\n]{1,2000}\})$',log,re.M):
+            try:
+                diag=json.loads(raw)
+                if set(diag)=={'exceptionType','sourceFrames'} and diag['exceptionType'] in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','TypeError','KeyError','TimeoutError','TimeoutExpired','JSONDecodeError','Other'} and isinstance(diag['sourceFrames'],list) and len(diag['sourceFrames'])<=16 and all(set(f)=={'module','line'} and f['module'] in {'ordered-queue','held-update-host','held-update-durable','reviewed-ui-held'} and type(f['line']) is int and 0<f['line']<1000000 for f in diag['sourceFrames']):
+                    rec['queueDiagnostic']=diag
+            except (ValueError,TypeError,KeyError):pass
+        # Save bounded evidence before every contract refusal, including an unreached kill phase.
+        report['scenarios'][name]=rec
+        (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2,sort_keys=True))
         if closed_seen is None:raise RuntimeError('closure-marker-not-proved')
         if kill_phase is None:
             if wres['action'] != 'completed' or st['history'][-1]['sha'] != chain[-1]['sha'] or opening_seen is None or first200 is None or first200 < opening_seen:
-                # Fixed enums, booleans and source line numbers only. Never publish private worker output.
-                import re
-                log=(folder/'worker.log').read_text(errors='replace') if (folder/'worker.log').exists() else ''
-                rec['contract']={'watchdogCompleted':wres['action']=='completed','targetReached':st['history'][-1]['sha']==chain[-1]['sha'],'openingObserved':opening_seen is not None,'postClosure200Observed':first200 is not None,'ordered200':first200 is not None and opening_seen is not None and first200>=opening_seen}
-                phase=str((st.get('opening_intent') or {}).get('phase',''))
-                rec['failurePhase']=phase if re.fullmatch(r'[a-z0-9-]{1,100}',phase) else 'unknown'
-                rec['sourceFrames']=[{'module':m,'line':int(n)} for m,n in re.findall(r'File "[^"\n]*/(held-update-host|ordered-queue|held-update-durable|reviewed-ui-held)\.py", line ([0-9]{1,6})',log)][-16:]
-                rec['exceptionTypes']=re.findall(r'^(ValueError|RuntimeError|FileNotFoundError|PermissionError|TypeError|KeyError|TimeoutError):',log,re.M)[-4:]
-                rec['updaterDiagnostic']=load_module(source/'scripts/held-update-diagnostic.py','held_diagnostic').project(log)
-                for raw in re.findall(r'^QUEUE_DIAG_V1 (\{[^\n]{1,2000}\})$',log,re.M):
-                    try:
-                        diag=json.loads(raw)
-                        if set(diag)=={'exceptionType','sourceFrames'} and diag['exceptionType'] in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','TypeError','KeyError','TimeoutError','TimeoutExpired','JSONDecodeError','Other'} and isinstance(diag['sourceFrames'],list) and len(diag['sourceFrames'])<=16 and all(set(f)=={'module','line'} and f['module'] in {'ordered-queue','held-update-host','held-update-durable','reviewed-ui-held'} and type(f['line']) is int and 0<f['line']<1000000 for f in diag['sourceFrames']):
-                            rec['queueDiagnostic']=diag
-                    except (ValueError,TypeError,KeyError):pass
-                report['scenarios'][name]=rec
-                (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2,sort_keys=True))
                 raise RuntimeError('clean-run-contract-failed')
             if [h['mode'] for h in st['history'][-n:]] != ['closed-qualified-held'] * (n - 1) + ['ui-open-automation-held']: raise RuntimeError('history-modes-wrong')
             rec['zero_200_before_opening'] = True
