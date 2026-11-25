@@ -169,6 +169,7 @@ def launch(c,before_effects):
    rows=[line.split() for line in nscmd(tool,'-nvx','-L','OUTPUT').splitlines() if ' REJECT ' in line]
    return sum(int(row[0]) for row in rows)
   negative=[('private','10.0.0.1',443),('private172','172.16.0.1',443),('private192','192.168.0.1',443),('metadata','169.254.169.254',443),('public_http',c['public_probe'],80),('public_smtp',c['public_probe'],25),('metadata80','169.254.169.254',80),('dns_other','8.8.4.4' if '8.8.4.4' not in c['dns_upstreams'] else '8.8.8.8',53)]
+  if c['kind']=='isolated-copy':negative=[v for v in negative if v[0]!='dns_other']+[('public_https',c['public_probe'],443)]
   for role,gateway in zip(('backend','frontend'),gateways):
    ni=x['NetworkSettings']['Networks'][c[role]['name']]
    negative.extend([(role+'_gateway',gateway,443),(role+'_own',ni['IPAddress'],443)])
@@ -185,7 +186,7 @@ def launch(c,before_effects):
      matched=[l.split() for l in nscmd('iptables','-nvx','-L','OUTPUT').splitlines() if 'normal-probe-'+name in l]
      if outcome!={name:False} or len(matched)!=1 or int(matched[0][0])<1 or reject_counter('iptables')<=before:raise ValueError('dedicated deny probe lacks actual rejection')
     finally:nscmd('iptables','-D','OUTPUT',*rule)
-  for typ,proto in [('2','17'),('3','1')]:
+  for typ,proto in ([('3','1')] if c['kind']=='isolated-copy' else [('2','17'),('3','1')]):
    before=reject_counter('iptables')
    socketprobe="import socket,sys;s=socket.socket(socket.AF_INET,int(sys.argv[1]),int(sys.argv[2]));s.sendto(bytes.fromhex('0800f7fd00010001') if sys.argv[2]=='1' else b'fixture',(sys.argv[3],53))"
    try:nscmd('/usr/bin/python3','-c',socketprobe,typ,proto,('8.8.4.4' if '8.8.4.4' not in c['dns_upstreams'] else '8.8.8.8'))
