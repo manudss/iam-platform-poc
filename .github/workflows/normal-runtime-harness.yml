@@ -6,6 +6,7 @@ on:
       - 'deploy/oci/normal-runtime*'
       - 'deploy/oci/dolt-current*'
       - 'scripts/dolt-current-cleanup-fixture.py'
+      - 'scripts/normal-lifecycle-real-fixture.py'
       - 'scripts/normal-runtime-docker-fixture.py'
       - '.github/workflows/normal-runtime-harness.yml'
       - 'scripts/normal-runtime-host*.py'
@@ -74,4 +75,20 @@ jobs:
           path: |
             /tmp/dolt-copy-runner-proof*.json
             /tmp/dolt-current-cleanup-proof.json
+          if-no-files-found: warn
+
+  lifecycle-real:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Real normal lifecycle twice with synthetic Dolt PostgreSQL and Bao
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-lifecycle-real-fixture.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-lifecycle-real-proof
+          path: /tmp/normal-lifecycle-real-proof.json
           if-no-files-found: warn
