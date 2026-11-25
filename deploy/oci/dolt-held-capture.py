@@ -29,7 +29,7 @@ def execute(spec,bindings,reader):
  rows=[]
  for _ in range(2):
   name='dolt-held-reader-'+secrets.token_hex(8)
-  args=['docker','run','--name',name,'--restart','no','--user','0:0','--network','container:'+spec['runtime']['expected_container_id'],'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--entrypoint','node',image_id,'--input-type=module','-e',executed_source,'dolt-only']
+  args=['docker','run','-i','--name',name,'--restart','no','--user','0:0','--network','container:'+spec['runtime']['expected_container_id'],'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--oom-score-adj','1000','--memory','768m','--memory-swap','768m','--pids-limit','96','--cpus','0.5','--tmpfs','/data/dolt:rw,nosuid,nodev,noexec,size=16777216','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=67108864','--env','HOME=/tmp','--entrypoint','node',image_id,'--input-type=module','-e',executed_source,'dolt-only']
   try:
    value=subprocess.run(args,input='{"running":true}',text=True,capture_output=True,timeout=180,pass_fds=tuple(fd for _,fd in bindings.values()))
    if value.returncode:raise ValueError('held isolated Dolt read refused')
