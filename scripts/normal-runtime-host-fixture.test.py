@@ -12,6 +12,29 @@ class Tests(unittest.TestCase):
   self.assertEqual(m.bounded_positive_probe(args,'private arbitrary output','exact-source'),{'schema_valid':False})
   value['private-secret']='never persist';self.assertEqual(m.bounded_positive_probe(args,json.dumps(value),'exact-source'),{'schema_valid':False})
   self.assertIsNone(m.bounded_positive_probe(args,'private arbitrary output','different-source'))
+ def test_actual_engine_artifact_keeps_positive_observation_on_refusal_and_success(self):
+  from types import SimpleNamespace
+  s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+  for succeeds in (False,True):
+   with tempfile.TemporaryDirectory() as d:
+    root=Path(d)/'owned';root.mkdir();out=Path(d)/'artifact';checks={'pg':True,'bao':True,'https':succeeds,'pg_alias':True,'bao_alias':True};tests={'tcp':[['pg','fixture',5432],['bao','fixture',8200],['https','fixture',443]],'dns':[['pg_alias','pg','fixture'],['bao_alias','bao','fixture']]}
+    controller=SimpleNamespace(PROBE='exact-probe',GUARD='guard',__file__=str(ROOT/'deploy/oci/normal-runtime.py'))
+    controller.call=lambda args,pass_fds=():json.dumps(checks)
+    def launch(cfg,callback):
+     got=json.loads(controller.call(['docker','exec','fixture','node','-e',controller.PROBE,json.dumps(tests)]))
+     if not all(got.values()):raise ValueError('normal namespace probes failed')
+     callback({})
+    controller.launch=launch
+    def run(args):
+     if args[:3]==['docker','image','inspect']:return json.dumps([{'Id':'image'}])
+     if args[:2]==['docker','inspect']:return json.dumps([{'Id':'fixture','State':{'Running':False},'Config':{'Cmd':['-c','guard']}}])
+     return 'fixture'
+    loader=SimpleNamespace(exec_module=lambda n:None);spec=SimpleNamespace(loader=loader)
+    with patch.object(m.os,'geteuid',return_value=0),patch.object(m.tempfile,'mkdtemp',return_value=str(root)),patch.object(m,'run',side_effect=run),patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout='')),patch.object(m.importlib.util,'spec_from_file_location',return_value=spec),patch.object(m.importlib.util,'module_from_spec',return_value=controller):
+     if succeeds:m.execute(argparse.Namespace(out=str(out),image='fixture',source_sha='a'*40),host_fixture=True)
+     else:
+      with self.assertRaisesRegex(ValueError,'namespace probes failed'):m.execute(argparse.Namespace(out=str(out),image='fixture',source_sha='a'*40),host_fixture=True)
+    artifact=json.loads(out.read_text());self.assertEqual(artifact['positive_probe_observations'],[{'generation':1,'schema_valid':True,'checks':checks}]);self.assertTrue(artifact['cleanup_complete']);self.assertEqual(artifact['result'],'pre-fifo-network-qualified' if succeeds else 'refused')
  def test_preflight_no_pull_no_writes_and_refuses_overlap_memory_or_inventory(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'spec';names=['scripts/normal-runtime-host-fixture.py','scripts/normal-runtime-docker-fixture.py','deploy/oci/normal-runtime.py'];spec={'format':1,'kind':'reviewed-host-pre-fifo-fixture','image':h.IMAGE,'source_sha':h.SOURCE,'files':{n:hashlib.sha256((ROOT/n).read_bytes()).hexdigest() for n in names},'out':'/root/normal-host-proof-0123456789abcdef.json','held_id':'a'*64};p.write_text(json.dumps(spec));p.chmod(0o600);calls=[];overlap=[False]
