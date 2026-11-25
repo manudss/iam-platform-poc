@@ -1,0 +1,18 @@
+name: OCI SSH probe tests
+on:
+  pull_request:
+    paths:
+      - 'deploy/oci/readonly-diagnostic/ssh-probe*'
+      - '.github/workflows/oci-ssh-stage-probe*.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: python3 deploy/oci/readonly-diagnostic/ssh-probe.test.py
+      - run: bash -n deploy/oci/readonly-diagnostic/ssh-probe.sh
