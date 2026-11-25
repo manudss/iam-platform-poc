@@ -65,12 +65,25 @@ class D(unittest.TestCase):
   self.assertFalse((self.f/'WATCH_READY').exists());(self.f/'GO').write_text('1')
   _,err=w.communicate(timeout=5);self.assertNotEqual(w.returncode,0);self.assertIn(b'watchdog not ready',err)
   self.assertFalse((self.f/'queue-identity.json').exists());self.assertFalse((self.f/'STARTED').exists())
+ def test_worker_refusal_before_start_is_terminal_without_rearm(self):
+  # Real worker raises before STARTED. Start watchdog only afterwards so the refusal is deterministic.
+  w=self.run_unit('worker',{'FAKE_MODE':'ok'},capture=True);self.wait('worker-identity.json')
+  (self.f/'GO').write_text('1');_,err=w.communicate(timeout=5)
+  self.assertNotEqual(w.returncode,0);self.assertIn(b'watchdog not ready',err)
+  self.assertTrue(self.wait('worker-result.json')['before_start'])
+  self.run_unit('watchdog');r=self.wait('watchdog-result.json',5)
+  self.assertEqual(r['action'],'failed-before-start-report-only');self.assertTrue(r['needs_operator'])
+  self.assertFalse((self.f/'STARTED').exists());self.assertFalse((self.f/'queue-identity.json').exists())
+  self.assertFalse((self.f/'rearm-attempt.json').exists());self.assertFalse(Path(str(self.state)+'.rearmed').exists())
  def test_state_without_intent_before_go_does_not_complete(self):
   w=self.run_unit('watchdog');time.sleep(2.5);self.assertIsNone(w.poll(),'watchdog exits before GO on a null-intent state')
   self.assertFalse((self.f/'watchdog-result.json').exists());self.assertTrue((self.f/'WATCH_READY').exists())
  def test_decision_pure_categories(self):
   sp=self.spec;f=self.f;st={'format':3}
   self.assertEqual(du.decision(f,sp,{}),'pre-go-await')
+  (f/'worker-result.json').write_text('{"exit":1,"before_start":true}');self.assertEqual(du.decision(f,sp,{}),'failed-before-start-report-only')
+  (f/'STARTED').write_text('{}');self.assertEqual(du.decision(f,sp,st),'failed-before-intent-report-only')
+  (f/'worker-result.json').unlink()
   (f/'STARTED').write_text('{}');self.assertEqual(du.decision(f,sp,st),'await-intent')
   (f/'STARTED').write_text('{"engagement_id":"eng-00000001"}')
   (f/'worker-result.json').write_text('{"exit":0}');self.assertEqual(du.decision(f,sp,st),'completed-audit-mismatch-report-only')

@@ -454,6 +454,40 @@ class RealHost(unittest.TestCase):
    os.close(fd)
    for n in ['OPS','FRONT']:
     if (self.d/'gates'/n).exists():(self.d/'gates'/n).unlink()
+ def test_real_updater_rc4_second_step_rearms_and_serves_503_without_advancing(self):
+  # Real queue + host + subprocess updater, but fixture HTTP gate and synthetic receipts, no Docker.
+  import fcntl,threading,urllib.request,urllib.error,http.server
+  gates=self.d/'gates'
+  class Edge(http.server.BaseHTTPRequestHandler):
+   def do_GET(self):self.send_response(503 if (gates/'OPS').exists() or (gates/'FRONT').exists() else 200);self.end_headers()
+   def log_message(self,*args):pass
+  edge=http.server.ThreadingHTTPServer(('127.0.0.1',0),Edge)
+  thread=threading.Thread(target=edge.serve_forever,daemon=True);thread.start()
+  self.addCleanup(edge.server_close);self.addCleanup(edge.shutdown)
+  url='http://127.0.0.1:%d/healthz'%edge.server_port
+  self.assertEqual(urllib.request.urlopen(url).status,200)
+  owner=self;calls=[]
+  class Controller(Ctl):
+   def close_gates(self,intent):calls.append('close');(gates/'FRONT').write_text('front-token\n')
+   def verify_closed_access(self,m):
+    calls.append('verify-closed')
+    with owner.assertRaises(urllib.error.HTTPError) as e:urllib.request.urlopen(url)
+    owner.assertEqual(e.exception.code,503)
+   def open_gates(self,*args):owner.fail('must never open after updater refusal')
+  u=self.d/'upd.sh';u.write_text(fake_updater_text(self.d,self.d/'lock','$( [ "$(wc -l < %s/args)" -eq 1 ] && echo 10 || echo 4 )'%self.d));u.chmod(0o755)
+  h=hm.Host(str(self.env),str(u),str(self.d/'r'),updater_sha256=hashlib.sha256(u.read_bytes()).hexdigest(),inspect=lambda c:GOOD)
+  state=self.d/'state.json';initial=held_state();q.atomic(state,initial)
+  fd=os.open(self.d/'lock',os.O_RDWR);fcntl.flock(fd,fcntl.LOCK_EX)
+  try:
+   with self.assertRaisesRegex(RuntimeError,'rc 4'):
+    q.held_update(state,manifest(initial,3,4,5),'repo','lyam',lambda m:h,fd,verify=lambda *a:None,observe=lambda c,t:{'sha':t['sha']},controller=Controller(),qualify=lambda p,e:None)
+  finally:os.close(fd)
+  st=q.load(state);self.assertEqual(st['opening_intent']['phase'],'failed-access-rearmed')
+  self.assertEqual(len(st['opening_intent']['steps']),1);self.assertEqual(st['history'],initial['history'])
+  self.assertEqual(st['recovery_fence'],initial['recovery_fence']);self.assertEqual(calls,['close','verify-closed'])
+  self.assertEqual(len((self.d/'args').read_text().splitlines()),2,'no third updater or retry')
+  with self.assertRaises(urllib.error.HTTPError) as e:urllib.request.urlopen(url)
+  self.assertEqual(e.exception.code,503)
  def test_ops_replaced_or_front_changed_between_steps_refused_before_updater(self):
   h=self.host(plan=True);fd=os.open(self.d/'lock',os.O_RDWR);import fcntl;fcntl.flock(fd,fcntl.LOCK_EX)
   f0,p0=h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd)
