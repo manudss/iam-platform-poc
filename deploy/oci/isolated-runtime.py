@@ -153,6 +153,9 @@ def launch(c,before_effects):
    if nscmd(tool,'-S')!='-P INPUT ACCEPT\n-P FORWARD ACCEPT\n-P OUTPUT ACCEPT':raise ValueError('unexpected preexisting filter policy')
    for command in commands:nscmd(tool,*command)
   if c['kind']=='isolated-copy':
+   # A route into the INTERNAL bridge lets OUTPUT denial counters prove the
+   # barrier instead of mistaking a missing route for firewall enforcement.
+   nscmd('ip','route','replace','default','via',gateways[1])
    for proto in ('tcp','udp'):nscmd('iptables','-t','raw','-A','OUTPUT','-p',proto,'--dport','53','-j','DROP')
    hosts="require('fs').appendFileSync('/etc/hosts',"+json.dumps('\n'+c['pg']['ip']+' pg\n'+c['bao']['ip']+' bao\n')+")"
    call(['docker','exec',cid,'node','-e',hosts])
