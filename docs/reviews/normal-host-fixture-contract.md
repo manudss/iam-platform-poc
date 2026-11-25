@@ -19,3 +19,5 @@ Every fixture container has oom-score-adj1000. Between network/companion creatio
 
 
 The3199eead GitHub refactor regression failed safely with TypeError before launcher commands, cleanup_complete=true and no remaining owned resources. Cause: fake companion readiness local variable shadowed the checkpoint function. Corrected by a distinct readiness variable. New regression required before any host use. Earlier9466b2c9 successful namespace proof remains scoped to the earlier engine version.
+
+Cleanup signal follow-up: when shared-engine finally begins, the host mode cancels the active alarm and ignores ALRM/TERM/INT until cleanup and its bounded artifact finish. It restores prior handlers afterward. All cleanup Docker subprocesses now share one90second monotonic budget and each has at most15seconds. Budget exhaustion still attempts subsequent resource slots (refusing immediately), records cleanup_failures and unverified remaining resources rather than hanging. SIGKILL cannot be handled and still requires operator inspection. This is a narrow cleanup fix, not an expanded test scope.

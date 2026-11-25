@@ -3,7 +3,7 @@
 The app NEVER starts: marker callback refuses FIFO release after all probes.
 No production stores, env, credentials, accounts or host connection.
 """
-import argparse,ast,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time,secrets
+import argparse,ast,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time,secrets,signal
 from pathlib import Path
 
 def run(args):
@@ -82,28 +82,42 @@ def execute(a,host_fixture=False,checkpoint=None):
   result['error_type']=type(error).__name__ if type(error).__name__ in ('ValueError','TimeoutExpired','KeyError','FileNotFoundError','TypeError') else 'other'
   raise
  finally:
+  # Once cleanup begins, repeated external termination must not interrupt it.
+  # Docker calls use one shared 90s budget, not 240s per resource.
+  cleanup_handlers={}
+  if host_fixture:
+   signal.alarm(0)
+   cleanup_handlers={sig:signal.signal(sig,signal.SIG_IGN) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
+  cleanup_deadline=time.monotonic()+90
+  def cleanup_run(args):
+   remaining=cleanup_deadline-time.monotonic()
+   if remaining<=0:raise TimeoutError('cleanup global budget exhausted')
+   proc=subprocess.run(args,text=True,capture_output=True,timeout=min(15,remaining))
+   if proc.returncode:raise ValueError('cleanup command refused')
+   return proc.stdout.strip()
   # Cleanup never stops at the first error. Retain bounded owned-resource facts.
   failures=0
-  try:names=run(['docker','ps','-a','--format','{{.Names}}']).splitlines()
+  try:names=cleanup_run(['docker','ps','-a','--format','{{.Names}}']).splitlines()
   except Exception:names=[];failures+=1
   for name in names:
    if name.startswith(prefix+'-'):
-    try:run(['docker','rm','-f',name])
+    try:cleanup_run(['docker','rm','-f',name])
     except Exception:failures+=1
   for network in reversed(networks):
-   try:run(['docker','network','rm',network])
+   try:cleanup_run(['docker','network','rm',network])
    except Exception:failures+=1
   try:shutil.rmtree(root)
   except Exception:failures+=1
   remaining={}
   for kind,args in [('containers',['docker','ps','-a','--format','{{.Names}}']),('networks',['docker','network','ls','--format','{{.Name}}'])]:
-   try:remaining[kind]=[name for name in run(args).splitlines() if name.startswith(prefix+'-')]
+   try:remaining[kind]=[name for name in cleanup_run(args).splitlines() if name.startswith(prefix+'-')]
    except Exception:remaining[kind]=['unverified'];failures+=1
   remaining['temporary_dirs']=[str(root)] if root.exists() else []
   result['cleanup_failures']=failures;result['remaining_owned_resources']=remaining
   if failures or any(remaining.values()):result['result']='refused';result['cleanup_complete']=False
   else:result['cleanup_complete']=True
   out.write_text(json.dumps(result,indent=2));out.chmod(0o600 if host_fixture else 0o644)
+  for sig,handler in cleanup_handlers.items():signal.signal(sig,handler)
   if not result['cleanup_complete']:raise ValueError('fixture cleanup incomplete')
 
 def main():
