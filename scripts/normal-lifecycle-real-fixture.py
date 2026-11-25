@@ -120,11 +120,11 @@ def main():
     if len(records)!=1:raise ValueError('actual lifecycle completion missing')
     names=docker('ps','-a','--format','{{.Names}}').splitlines()
     owned.extend(name for name in names if name.startswith(app+'-preserved-'))
-    result.update(update_shell_exercised=True,updater_cold_data_archives=1,updater_completed_attempts=1,updater_front_reopened=True,updater_qualification='fixture ordering/stopped-before/running-after checker only; NOT full qualification/OIDC',updater_same_image=True,full_qualification_exercised=full_qualification)
+    result.update(update_shell_exercised=True,updater_cold_data_archives=1,updater_completed_attempts=1,updater_front_reopened=True,updater_qualification=('actual qualification.py and qualification-container.mjs before/after, synthetic OIDC and 3 stores' if full_qualification else 'fixture ordering/stopped-before/running-after checker only; NOT full qualification/OIDC'),updater_same_image=True,full_qualification_exercised=full_qualification)
    finally:front.shutdown();front.server_close()
   count=docker('exec',pg,'psql','-U','lyam','-d','lyam','-Atc','SELECT count(*) FROM lifecycle_fixture;')
   if count!='2':raise ValueError('PG continuity differs')
-  result.update(passed=True,stage='completed',attempts=attempts,pg_fixture_rows=2,bao_real=True,dolt_real=True,limits='fixture app2GiB/PID256/CPU2,PG512MiB,Bao256MiB',limitation='Same exact image lifecycle; optional updater shell uses fixture checker, no full qualification/queue/new-SHA/boot proof; Bao dev not durable restart proof.')
+  result.update(passed=True,stage='completed',attempts=attempts,pg_fixture_rows=2,bao_real=True,dolt_real=True,limits='fixture app2GiB/PID256/CPU2,PG512MiB,Bao256MiB',limitation='Same exact image lifecycle; full qualifier only when full_qualification_exercised=true; no queue/new-SHA/boot or PG/Bao cold-archive proof; Bao dev not durable restart proof.')
  finally:
   failures=[]
   # A failed updater may already have renamed the old app. Collect only this

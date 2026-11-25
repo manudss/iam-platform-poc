@@ -23,6 +23,7 @@ def launch(c,evidence,n):
    ips=[v['IPAddress'] for v in x['NetworkSettings']['Networks'].values()]
    for ip in ips:
     n.call(['iptables','-I','DOCKER-USER','1','-s',ip,'!','-d','172.27.0.0/24','-j','REJECT'])
+    n.call(['iptables','-I','INPUT','1','-s',ip,'-j','REJECT'])
     __import__('sys').modules['__main__'].fences.append(ip)
    test="const n=require('net');let s=n.connect(443,'1.1.1.1');s.on('connect',()=>process.exit(1));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),2000)"
    n.call(['docker','exec',proof['container_id'],'node','-e',test])
@@ -39,3 +40,4 @@ if __name__=='__main__':
  finally:
   for ip in fences:
    subprocess.run(['iptables','-D','DOCKER-USER','-s',ip,'!','-d','172.27.0.0/24','-j','REJECT'],check=True)
+   subprocess.run(['iptables','-D','INPUT','-s',ip,'-j','REJECT'],check=True)
