@@ -20,6 +20,13 @@ def launch(c,evidence,n):
  def fenced(config,callback):
   def close_before_effects(proof):
    x=__import__('json').loads(n.call(['docker','inspect',proof['container_id']]))[0]
+   pid=str(x['State']['Pid'])
+   # Explicit COPY-ONLY raw-table overlay blocks Docker embedded DNS before
+   # Docker NAT can hand the query to its host-side resolver.
+   for proto in ['udp','tcp']:
+    n.call(['nsenter','-t',pid,'-n','iptables','-t','raw','-I','OUTPUT','1','-p',proto,'--dport','53','-j','DROP'])
+   hosts="require('fs').appendFileSync('/etc/hosts','\\n172.27.0.10 pg\\n172.27.0.11 bao\\n')"
+   n.call(['docker','exec',proof['container_id'],'node','-e',hosts])
    ips=[v['IPAddress'] for v in x['NetworkSettings']['Networks'].values()]
    for ip in ips:
     n.call(['iptables','-I','DOCKER-USER','1','-s',ip,'!','-d','172.27.0.0/24','-j','REJECT'])
@@ -27,6 +34,10 @@ def launch(c,evidence,n):
     __import__('sys').modules['__main__'].fences.append(ip)
    test="const n=require('net');let s=n.connect(443,'1.1.1.1');s.on('connect',()=>process.exit(1));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),2000)"
    n.call(['docker','exec',proof['container_id'],'node','-e',test])
+   dns="require('dns').resolve4('fixture-blocked.example.com',e=>process.exit(e?0:1));setTimeout(()=>process.exit(0),2000)"
+   n.call(['docker','exec',proof['container_id'],'node','-e',dns])
+   raw=n.call(['nsenter','-t',pid,'-n','iptables','-t','raw','-nvx','-L','OUTPUT'])
+   if not any(len(line.split())>2 and line.split()[2]=='DROP' and int(line.split()[0])>0 for line in raw.splitlines()):raise ValueError('DNS overlay counter missing')
    callback(proof)
   return original(config,close_before_effects)
  n.launch=fenced
