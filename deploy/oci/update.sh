@@ -153,6 +153,17 @@ HOOK="$(getconf LYAM_PRE_UPDATE_HOOK)"
 PAUSE_FILE="$(getconf LYAM_PAUSE_FILE)"; PAUSE_FILE="${PAUSE_FILE:-/opt/lyam/UPDATE_PAUSED}"
 POST_CHECK="$(getconf LYAM_POST_UPDATE_CHECK)"
 QUALIFICATION_POLICY="$(getconf LYAM_QUALIFICATION_POLICY)"; QUALIFICATION_POLICY="${QUALIFICATION_POLICY:-/opt/lyam/qualification.json}"
+NORMAL_RUNTIME="$(getconf LYAM_NORMAL_RUNTIME)"
+NORMAL_RUNTIME_SHA256="$(getconf LYAM_NORMAL_RUNTIME_SHA256)"
+NORMAL_LIFECYCLE="$(dirname "$0")/normal-lifecycle.py"
+NORMAL_CONTROLLER_SHA256="$(getconf LYAM_NORMAL_LIFECYCLE_SHA256)"
+NORMAL_LAUNCHER_SHA256="$(getconf LYAM_NORMAL_LAUNCHER_SHA256)"
+NORMAL_MODE=0
+if [ -n "$NORMAL_RUNTIME" ] && [ "$CLOSED_RECOVERY" = 0 ]; then
+  NORMAL_MODE=1
+  [ -n "$NORMAL_RUNTIME_SHA256" ] && [ -n "$NORMAL_CONTROLLER_SHA256" ] && [ -n "$NORMAL_LAUNCHER_SHA256" ] && [ -f "$NORMAL_LIFECYCLE" ] || fail 1 "normal mode requires hash-bound installed lifecycle and runtime"
+  [ "$REQUIRE_QUALIFICATION" = 1 ] || fail 1 "normal mode always requires qualification"
+fi
 CLOSED_LAUNCHER="$(getconf LYAM_CLOSED_LAUNCHER)"
 CLOSED_PREFLIGHT="$(getconf LYAM_CLOSED_PREFLIGHT)"
 CLOSED_IMPLEMENTATION="$(getconf LYAM_CLOSED_IMPLEMENTATION)"
@@ -189,6 +200,12 @@ fi
 CLOSED_CHECK_ARGS=""
 [ "$CLOSED_RECOVERY" = 1 ] && CLOSED_CHECK_ARGS="--require-automation-hold"
 LOCK_FILE="$(getconf LYAM_LOCK_FILE)"; LOCK_FILE="${LOCK_FILE:-/opt/lyam/.update.lock}"
+
+QUEUE_STATE="$(getconf LYAM_QUEUE_STATE)"
+if [ -n "$QUEUE_STATE" ] && [ -f "$QUEUE_STATE" ] && [ "$CLOSED_RECOVERY" = 0 ]; then
+  state_format="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["format"])' "$QUEUE_STATE")" || fail 1 "deployment journal unreadable"
+  [ "$state_format" != 4 ] || [ "$NORMAL_MODE" = 1 ] || fail 1 "released journal requires the shared normal lifecycle, never legacy Docker or rollback"
+fi
 
 # Automatic queue requires a qualified checker, before stopping anything.
 if [ "$REQUIRE_QUALIFICATION" = 1 ]; then
@@ -299,6 +316,7 @@ barrier_rearm() {
 # again. If either step fails the gate is RE-ARMED - the service stays behind maintenance
 # rather than exposed in an unverified state.
 gate_lift() {
+  if [ "$NORMAL_MODE" = 1 ]; then normal_lifecycle postcheck "$QUALIFICATION_EXPECTED_IMAGE" || return 1; fi
   if [ "$CLOSED_RECOVERY" = 1 ]; then
     python3 "$CLOSED_INTEGRITY" "$ENV_FILE" >/dev/null || return 1
     LIVE_PROOF="$("$CLOSED_IMPLEMENTATION" --mode postcheck --proof-file "$CLOSED_LAUNCH_PROOF" --image "$IMAGE" --container "$CONTAINER" --env-file "$ENV_FILE" --data-dir "$DATA_DIR" --port "$PORT")" || return 1
@@ -326,7 +344,7 @@ gate_lift() {
 closed_exit() {
   rc=$?
   trap - 0
-  if [ "$CLOSED_RECOVERY" = 1 ] && [ "$BARRIER_ACTIVE" = 1 ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
+  if { [ "$CLOSED_RECOVERY" = 1 ] || [ "$NORMAL_MODE" = 1 ]; } && [ "$BARRIER_ACTIVE" = 1 ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
     docker stop "$CONTAINER" >/dev/null 2>&1 || true
     log "closed recovery failed: application stopped; preserve backups, pause and maintenance; no implicit restore or previous-image boot" >&2
   fi
@@ -379,9 +397,26 @@ fi
 
 QUALIFICATION_EXPECTED_IMAGE="$PREVIOUS"
 QUALIFICATION_EVIDENCE=""
+NORMAL_ATTEMPT="$BACKUP_DIR/normal-attempt-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
+if [ "$NORMAL_MODE" = 1 ]; then
+  normal_preflight="$(dirname "$0")/normal-lifecycle.py"
+  python3 "$normal_preflight" prepare --controller-sha256 "$NORMAL_CONTROLLER_SHA256" --launcher-sha256 "$NORMAL_LAUNCHER_SHA256" --runtime "$NORMAL_RUNTIME" --runtime-sha256 "$NORMAL_RUNTIME_SHA256" --env-file "$ENV_FILE" --image "$IMAGE" --container "$CONTAINER" --data-dir "$DATA_DIR" --port "$PORT" --update-lock "$LOCK_FILE" --lock-fd 9 || fail 1 "normal profile preflight refused before any stop"
+fi
+
+normal_lifecycle() {
+  operation="$1"; normal_image="$2"
+  python3 "$NORMAL_LIFECYCLE" "$operation" --controller-sha256 "$NORMAL_CONTROLLER_SHA256" --launcher-sha256 "$NORMAL_LAUNCHER_SHA256" \
+    --runtime "$NORMAL_RUNTIME" --runtime-sha256 "$NORMAL_RUNTIME_SHA256" --env-file "$ENV_FILE" \
+    --image "$normal_image" --container "$CONTAINER" --data-dir "$DATA_DIR" --port "$PORT" \
+    --update-lock "$LOCK_FILE" --lock-fd 9 --evidence "$NORMAL_ATTEMPT"
+}
 
 run_container() {
   img="$1"; port="$2"
+  if [ "$NORMAL_MODE" = 1 ]; then
+    normal_lifecycle launch "$img"
+    return $?
+  fi
   # on-failure, never unless-stopped: an unmanaged auto-restart at host boot would start the
   # app BEFORE the companions are ready, short-circuiting the systemd/host-boot.sh ordering.
   if [ "$CLOSED_RECOVERY" = 1 ]; then
@@ -433,6 +468,7 @@ bao_ready() {
 }
 
 restart_previous() {
+  [ "$NORMAL_MODE" = 0 ] || fail 4 "normal lifecycle never automatically restarts an earlier image; retain gates and operator review"
   [ -n "$PREVIOUS" ] || return 0
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   bao_ready || return 1
@@ -716,7 +752,13 @@ if [ "$CLOSED_RECOVERY" = 1 ] && [ -n "$PREVIOUS" ]; then
   (umask 077; set -C; docker inspect "$CONTAINER" > "$BACKUP_DIR/previous-container-$TS.inspect.json") || fail 4 "cannot retain previous container inspect"
   (umask 077; set -C; docker logs "$CONTAINER" > "$BACKUP_DIR/previous-container-$TS.logs" 2>&1) || fail 4 "cannot retain previous container logs"
 fi
-docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+if [ "$NORMAL_MODE" = 1 ]; then
+  normal_lifecycle prepare "$IMAGE" || fail 4 "normal profile changed before swap; retain gates, no automatic prior start"
+  PRESERVED_NORMAL="$CONTAINER-preserved-$TS-$$"
+  docker rename "$CONTAINER" "$PRESERVED_NORMAL" || fail 4 "could not preserve stopped old normal container"
+else
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+fi
 CREATE_OK=1
 run_container "$IMAGE" "$PORT" || CREATE_OK=0
 if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
@@ -750,6 +792,7 @@ fi
 [ "$CREATE_OK" = 1 ] || log "the new container could not be created"
 [ "$CREATE_OK" = 0 ] || log "the new image never became healthy within ${HEALTH_TIMEOUT}s"
 
+if [ "$NORMAL_MODE" = 1 ]; then fail 4 "normal creation/health failed; retain gates and attempt evidence; no data restore or previous image start after possible effects"; fi
 closed_abort "candidate creation or health failed"
 
 # --- compensation: data AND image together -----------------------------------------------------

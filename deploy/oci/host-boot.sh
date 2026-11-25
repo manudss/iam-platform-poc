@@ -54,6 +54,14 @@ elif [ -f "$STATE" ]; then
   python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(0 if s.get("format") in (1,2,3) and not any(s.get(k) for k in ("release_intent","resume_required","pending","failed","opening_intent","release_finalize_required")) else 1)' "$STATE" || fail "release boot guard missing"
 fi
 
+# A released normal container must NEVER be restarted by legacy docker start.
+# New app instructions on boot are effects too. Until a separately reviewed
+# durable boot transaction is implemented, stop here before even companion starts.
+if [ -f "$STATE" ]; then
+  FORMAT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["format"])' "$STATE")" || fail "deployment state unreadable"
+  [ "$FORMAT" != 4 ] || fail "normal lifecycle boot transaction not implemented; no legacy docker start or automatic recreation"
+fi
+
 # Held containers use an inert FIFO restart fence. Never let boot recreate or
 # restart one through the normal updater, or bypass an interrupted opening intent.
 if [ "$(getconf IAM_AUTOMATION_HOLD)" = 1 ]; then
