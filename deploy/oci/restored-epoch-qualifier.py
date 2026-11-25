@@ -2,15 +2,25 @@
 """Direct fresh current-epoch qualification, not historical restoration admission.
 No stop/start, gate opening, HOLD change or journal write. Smoke adds sessions/audit.
 """
-import hashlib,importlib.util,json,os,sys,time
+import hashlib,importlib.util,json,os,sys,time,signal,math,re
 from pathlib import Path
+
+def smoke_projection(value):
+ if not isinstance(value,dict) or set(value)!={'journal','ledger','held','workflowPreserved'}:raise ValueError('non-secret smoke schema differs')
+ j=value['journal'];ledger=value['ledger']
+ if not isinstance(j,dict) or set(j)!={'count','checksum'} or type(j['count']) is not int or j['count']<0 or not re.fullmatch('[a-f0-9]{64}',str(j['checksum'])):raise ValueError('non-secret smoke journal differs')
+ if not isinstance(ledger,list) or not ledger or len(ledger)>10000:raise ValueError('non-secret smoke ledger differs')
+ for item in ledger:
+  if not isinstance(item,dict) or set(item)!={'id','checksum'} or not re.fullmatch('[A-Za-z0-9_.-]{1,128}',str(item['id'])) or not re.fullmatch('[a-f0-9]{64}',str(item['checksum'])):raise ValueError('non-secret smoke ledger item differs')
+ if value['held'] is not True or value['workflowPreserved'] is not True:raise ValueError('smoke hold coverage differs')
+ return value
 
 def load_fixed(binding,name,reader):
  path,_=reader(binding)
  if path!=Path(__file__).with_name(name).absolute():raise ValueError('fixed installed epoch module required')
  s=importlib.util.spec_from_file_location('epoch_'+name.replace('.','_').replace('-','_'),path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
-def execute(spec,lock_bindings):
+def _execute(spec,lock_bindings):
  # Bootstrap only this fixed read primitive, then verify its bytes before any
  # data/runtime action. Caller admission owns this module's own reviewed hash.
  path=Path(__file__).with_name('restored-runtime-check.py').absolute()
@@ -23,7 +33,7 @@ def execute(spec,lock_bindings):
  if set(spec)!=required or spec['format']!=1 or spec['kind']!='fresh-restored-held-epoch':raise ValueError('exact current epoch qualification spec required')
  q=load_fixed(spec['qualifier'],'qualification.py',r.read)
  r.read(spec['capture']);r.read(spec['auth']);r.read(spec['bao_token']);r.locks(lock_bindings)
- runtime=spec['runtime'];env_path,envraw=r.read(runtime['env']);env={line.split('=',1)[0]:line.split('=',1)[1] for line in envraw.decode().splitlines() if line and not line.startswith('#')}
+ runtime=spec['runtime'];env_path,envraw=r.read(runtime['env']);env=r.parse_env(envraw)
  policy_path,policyraw=r.read(runtime['policy']);policy=json.loads(policyraw)
  if policy['authFile']!=spec['auth']['path'] or policy['baoTokenFile']!=spec['bao_token']['path']:raise ValueError('exact epoch secret source bindings required')
  evidence=Path(spec['evidence_dir'])
@@ -42,11 +52,45 @@ def execute(spec,lock_bindings):
  baseline_path=evidence/'held-running-baseline.json';before=json.loads(baseline_path.read_text())
  _,source=r.read(spec['capture']);_,authraw=r.read(spec['auth']);_,tokenraw=r.read(spec['bao_token'])
  q.CAPTURE_LOCK_FDS=tuple(fd for path,fd in lock_bindings.values())
+ smoke_error=None;after={};smoke=None
+ q.private_json(evidence/'epoch-attempt.json',{'kind':'fresh-held-smoke-attempt','started_at':time.time(),'may_mutate_sessions_audit':True,'restoration_admissible':False})
+ # Bound the remote Node process itself, not just docker exec's client.
+ bounded_source="setTimeout(()=>process.exit(124),120000).unref();\n"+source.decode()
  try:
-  smoke=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',source.decode(),'smoke'],json.dumps({**policy,'auth':json.loads(authraw),'reviewedLegacyRollback':False})))
-  after=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',source.decode(),'capture'],json.dumps({**policy,'running':True,'baoToken':tokenraw.decode().strip()})))
-  ledger=Path(env['LYAM_DATA_DIR'])/'migrations/journal.json'
-  after.update(migrationLedger=json.loads(ledger.read_text()) if ledger.exists() else None,credentials=q.credential_hashes(Path(env['LYAM_DATA_DIR']),policy),postgres=q.postgres(policy),image=image,policyHash=hashlib.sha256(policyraw).hexdigest(),transportCoverage='LOCAL_TLS_SNI_EPOCH_NOT_PUBLIC')
+  try:
+   smoke=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',bounded_source,'smoke'],json.dumps({**policy,'auth':json.loads(authraw),'reviewedLegacyRollback':False})))
+   # Whitelist only non-secret smoke facts. Never persist raw stdout/stderr.
+   safe=smoke_projection(smoke)
+   q.private_json(evidence/'epoch-smoke.json',safe)
+  except Exception as error:
+   smoke_error=error
+   for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
+   signal.alarm(120)
+  finally:
+   # Even a failed/interrupted smoke may have written sessions/audit. Capture
+   # independent components immediately, before validation, with a recovery cap.
+   failures=[];recovery_deadline=time.monotonic()+120
+   for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
+   for name,read_state in (
+    ('stores',lambda:json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',bounded_source,'capture'],json.dumps({**policy,'running':True,'baoToken':tokenraw.decode().strip()})))),
+    ('postgres',lambda:q.postgres(policy)),
+    ('credentials',lambda:q.credential_hashes(Path(env['LYAM_DATA_DIR']),policy)),
+    ('migrationLedger',lambda:json.loads((Path(env['LYAM_DATA_DIR'])/'migrations/journal.json').read_text()))):
+    try:
+     remaining=recovery_deadline-time.monotonic()
+     if remaining<=0:raise TimeoutError('recovery capture budget exhausted')
+     signal.alarm(math.ceil(remaining))
+     value=read_state();q.private_json(evidence/('epoch-after-'+name+'.json'),value)
+     if name=='stores':after.update(value)
+     else:after[name]=value
+    except Exception:failures.append(name)
+   signal.alarm(0)
+   q.private_json(evidence/'epoch-attempt-outcome.json',{'smoke_returned':smoke is not None,'smoke_refused_or_interrupted':smoke_error is not None,'capture_failed_components':failures,'restoration_admissible':False,'may_have_mutated':True})
+   after.update(image=image,policyHash=hashlib.sha256(policyraw).hexdigest(),transportCoverage='LOCAL_TLS_SNI_EPOCH_NOT_PUBLIC')
+   q.private_json(evidence/'epoch-after.json',after)
+  signal.alarm(120)
+  if smoke_error:raise ValueError('smoke refused or interrupted; inspect non-secret epoch evidence') from None
+  if failures:raise ValueError('post-smoke capture incomplete; retained partial evidence')
  finally:q.CAPTURE_LOCK_FDS=()
  q.exact_held_activations(before,after)
  if before.get('transportCoverage')!=after.get('transportCoverage') or q.compare(before,after,policy) or before['migrationLedger']!=after['migrationLedger']:raise ValueError('same epoch stores changed beyond declared append-only audit')
@@ -54,13 +98,24 @@ def execute(spec,lock_bindings):
  closed()
  for binding in (spec['qualifier'],spec['runtime_controller'],spec['capture'],spec['auth'],spec['bao_token']):r.read(binding)
  r.locks(lock_bindings)
- q.private_json(evidence/'epoch-after.json',after);q.private_json(evidence/'epoch-smoke.json',smoke)
  audit_before=before['postgres']['rows'].get('public.decision_audit',{});audit_after=after['postgres']['rows'].get('public.decision_audit',{})
  added=sum(audit_after.values())-sum(audit_before.values())
  if not 0<=added<=1000:raise ValueError('epoch smoke audit change beyond bound')
  result={'audit_added_rows':added,'format':1,'kind':'fresh-restored-held-epoch-result','started_at':start,'completed_at':time.time(),'container_id':runtime['expected_container_id'],'target':target,'historical_tls_baseline_missing':True,'transport':'LOCAL_TLS_SNI_NOT_PUBLIC','restoration_admissible':False,'effect_authority':False,'session_audit_smoke_executed':True,'source_hashes':{key:spec[key]['sha256'] for key in ('runtime_controller','qualifier','capture')},'evidence_hashes':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in evidence.iterdir() if p.is_file()}}
  q.private_json(evidence/'epoch-result.json',result)
  return result
+
+def execute(spec,lock_bindings):
+ def interrupted(signum,frame):
+  for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
+  signal.alarm(0)
+  raise TimeoutError('bounded current epoch interrupted')
+ prior={sig:signal.signal(sig,interrupted) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
+ signal.alarm(600)
+ try:return _execute(spec,lock_bindings)
+ finally:
+  signal.alarm(0)
+  for sig,handler in prior.items():signal.signal(sig,handler)
 
 def main():
  import argparse,fcntl

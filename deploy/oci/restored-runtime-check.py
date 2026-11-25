@@ -18,6 +18,15 @@ def read(binding):
  if hashlib.sha256(raw).hexdigest()!=binding['sha256']:raise ValueError('bound file changed')
  return p,raw
 
+def parse_env(raw):
+ env={}
+ for line in raw.decode().splitlines():
+  if not line or line.startswith('#'):continue
+  key,sep,value=line.partition('=')
+  if not sep or not re.fullmatch('[A-Za-z_][A-Za-z0-9_]*',key) or key in env:raise ValueError('ambiguous environment')
+  env[key]=value
+ return env
+
 def locks(bindings):
  import fcntl
  if set(bindings)!={'journal','updater'}:raise ValueError('both real lock bindings required')
@@ -50,11 +59,7 @@ def verify(spec,lock_bindings,run=subprocess.run):
  if set(spec)!=required or spec['format']!=1 or spec['kind']!='restored-epoch-direct-held-check':raise ValueError('exact direct held check spec required')
  locks(lock_bindings);env_path,raw=read(spec['env']);env={}
  if env_path!=ROOT/'lyam.env' or stat.S_IMODE(env_path.stat().st_mode)!=0o600:raise ValueError('exact private active environment required')
- for line in raw.decode().splitlines():
-  if not line or line.startswith('#'):continue
-  key,sep,value=line.partition('=')
-  if not sep or key in env:raise ValueError('ambiguous environment')
-  env[key]=value
+ env=parse_env(raw)
  if env.get('IAM_AUTOMATION_HOLD')!='1' or env.get('IAM_DEMO_SEED_MODE')!='never' or env.get('LYAM_CONTAINER')!=spec['container']:raise ValueError('held active settings differ')
  config_path,_=read(spec['config']);helper,_=read(spec['helper']);proof_path,proofraw=read(spec['launch_proof']);policy_path,policyraw=read(spec['policy'])
  if config_path!=Path(env['LYAM_CLOSED_CONFIG']) or helper!=ROOT/'bin/closed-recovery-helper.py' or helper!=Path(env['LYAM_CLOSED_IMPLEMENTATION']):raise ValueError('fixed installed closed helper/config required')
@@ -80,6 +85,12 @@ def verify(spec,lock_bindings,run=subprocess.run):
  image_info=json.loads(command(['docker','image','inspect',image]))[0]
  if image not in image_info.get('RepoDigests',[]) or x.get('Image')!=image_info.get('Id') or image_info.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=target['sha']:raise ValueError('held image ID or source differs')
  runtime_env=x.get('Config',{}).get('Env',[]);hc=x.get('HostConfig',{})
+ runtime_values={}
+ for item in runtime_env:
+  key,sep,value=item.partition('=')
+  if not sep or key in runtime_values and runtime_values[key]!=value:raise ValueError('contradictory runtime environment')
+  runtime_values[key]=value
+ if any(runtime_values.get(key)!=value for key,value in env.items()):raise ValueError('runtime environment differs from active env')
  if 'IAM_AUTOMATION_HOLD=1' not in runtime_env or 'IAM_DEMO_SEED_MODE=never' not in runtime_env or hc.get('RestartPolicy',{}).get('Name')!='no' or 'ALL' not in (hc.get('CapDrop') or []) or hc.get('CapAdd') or hc.get('Privileged') or not any(v in ('no-new-privileges','no-new-privileges:true') for v in hc.get('SecurityOpt') or []):raise ValueError('held runtime powers/settings differ')
  tls=[tls_local(origin,address) for origin,address in spec['local_tls'].items()]
  for field in ('env','config','helper','launch_proof','policy'):read(spec[field])
