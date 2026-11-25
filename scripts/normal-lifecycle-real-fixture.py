@@ -65,7 +65,7 @@ def main():
     n.call=bounded
     try:proof=l.launch(cfg,str(root/('normal-attempt-'+str(generation)+'.json')),n)
     finally:n.call=original
-    wait(app,3000,'/health');wait(app,8080,'/healthz');n.postcheck(cfg,proof)
+    wait(app,3000,'/health');wait(app,8080,'/healthz');n.postcheck(cfg,proof);l.postcheck(cfg,str(root/('normal-attempt-'+str(generation)+'.json')),n)
     # Persist in real PG and Bao to prove unchanged companions survive app swap.
     docker('exec',pg,'psql','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1','-c','CREATE TABLE IF NOT EXISTS lifecycle_fixture(id int primary key); INSERT INTO lifecycle_fixture VALUES('+str(generation)+');')
     docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/lifecycle-fixture','generation='+str(generation))

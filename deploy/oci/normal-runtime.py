@@ -192,14 +192,14 @@ def launch(c,before_effects):
   status=call(['docker','exec',cid,'node','-e',"console.log(require('fs').readFileSync('/proc/1/status','utf8').split('\\n').filter(x=>/^(CapEff|CapBnd|NoNewPrivs):/.test(x)).join('\\n'))"])
   if not re.search(r'CapEff:\s+0+\b',status) or not re.search(r'CapBnd:\s+0+\b',status) or not re.search(r'NoNewPrivs:\s+1\b',status):raise ValueError('live capability proof failed')
   topology(c);protected(c['env']);identity(c,cid,pid,ns)
-  proof={'format':1,'kind':'normal-launch-observation','container_id':cid,'namespace_inode':ns,'pid':pid,'config_sha256':sha(json.dumps(c,sort_keys=True).encode()),'env_sha256':sha(raw),'rules':exact,'probes':result}
+  proof={'format':1,'kind':'normal-launch-observation','container_id':cid,'namespace_inode':ns,'pid':pid,'config_sha256':sha(json.dumps(c,sort_keys=True).encode()),'env_sha256':sha(raw),'rules':exact,'probes':result,'limitation':'No release, external backlog, health, persistence or TLS qualification implied'}
   # Caller must atomically persist effects-released BEFORE this returns. A
   # persistence error prevents FIFO write. After marker, ambiguous means no retry.
   effects=True
   before_effects(proof)
   topology(c);identity(c,cid,pid,ns)
   call(['docker','exec',cid,'sh','-c','test -p '+FIFO+' && printf "%s\n" start-normal > '+FIFO])
-  return {'format':1,'kind':'normal-launch-observation','container_id':cid,'namespace_inode':ns,'pid':pid,'config_sha256':sha(json.dumps(c,sort_keys=True).encode()),'env_sha256':sha(raw),'rules':exact,'probes':result,'limitation':'No release, external backlog, health, persistence or TLS qualification implied'}
+  return proof
  except BaseException:
   # New container only, never start it again or restore anything automatically.
   call(['docker','stop',cid])
