@@ -61,6 +61,16 @@ try {
  };
  await checkScroll('desktop');
  await page.screenshot({path:out+'/desktop-light.png'});
+ const box=await page.locator('#ai-floating-window textarea').boundingBox(),send=await page.locator('#ai-send').boundingBox();
+ assert(send.x>=box.x+box.width,'send beside input');assert(Math.abs(send.y+send.height-box.y-box.height)<3,'send aligned with input');
+ await page.getByRole('button',{name:'Close AI assistant',exact:true}).click();await page.locator('#ai-floating-window').waitFor({state:'hidden'});await page.locator('#ai-launcher').click();
+ assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
+ await page.locator('[aria-label="Conversation options"]').click();await page.locator('#ai-delete').waitFor();
+ await page.screenshot({path:out+'/conversation-menu.png'});
+ await page.locator('#ai-delete').click();assert.equal(await page.locator('#ai-delete').textContent(),'Confirm: delete this conversation');
+ assert.equal(await page.locator('#ai-floating-window textarea').inputValue(),'Keep this draft while I check another page.');
+ await page.locator('[aria-label="Conversation options"]').click();
+
  const el = await page.locator('#ai-floating-window plg-ai-assistant-chat').evaluate(el => (el.dataset.proof='same-instance'));
  await page.locator('[aria-label="Minimize AI assistant"]').click();
  await page.locator('#ai-floating-window').waitFor({state:'hidden'});
@@ -98,5 +108,5 @@ try {
  await page.evaluate(()=>{document.documentElement.dataset.theme='light';document.documentElement.style.setProperty('--accent','var(--ok)');document.documentElement.style.setProperty('--accent-ink','var(--card)');document.documentElement.style.setProperty('--accent-soft','var(--ok-soft)');});
  await page.screenshot({path:out+'/mobile-alternate-accent.png'});
  assert.equal(aiLoads,1);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','minimize retains instance and draft','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
+ console.log(JSON.stringify({passed:true,aiLoads,checks:['actual Angular shell + packaged screen','close and minimize retain instance and draft','top conversation menu with delete confirmation','send aligned beside input','route navigation retains instance and draft','launcher drag all four edges','panel drag and edge snap','viewport resize clamp','fixed bottom composer; only thread scrolls on desktop/mobile/keyboard-sized viewport','light/dark desktop/mobile'],screenshots:out}));
 } finally { await browser.close();server.close(); }

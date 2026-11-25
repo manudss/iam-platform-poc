@@ -17,7 +17,7 @@ import { PluginScreenLoader } from './plugin-screen';
       [style.left.px]="panel.x" [style.top.px]="panel.y">
       <header (pointerdown)="begin($event, 'panel')">
         <span tabindex="0" role="button" aria-label="Move chat window with arrow keys" (keydown)="key($event, 'panel')">⠿ AI assistant</span>
-        <button type="button" aria-label="Minimize AI assistant" (click)="minimize()">−</button>
+        <div class="window-actions"><button type="button" aria-label="Minimize AI assistant" title="Minimize" (click)="minimize()">−</button><button type="button" aria-label="Close AI assistant" title="Close. Conversation and draft are kept." (click)="minimize()">×</button></div>
       </header>
       <div class="body"><p role="alert">{{problem()}}</p><div #mount></div></div>
     </section>

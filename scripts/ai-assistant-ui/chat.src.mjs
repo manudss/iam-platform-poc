@@ -37,7 +37,17 @@ const css = `
 :scope[compact] .thread{flex:1;min-height:0;max-height:none;overscroll-behavior:contain}
 :scope[compact] .composer{flex-shrink:0;padding-top:.5rem;border-top:1px solid var(--line)}
 :scope[compact] .composer textarea{display:block;resize:none;height:3.5rem;min-height:0;max-height:6rem;margin:0 0 .4rem}
-:scope[compact] .composer-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+:scope[compact] .composer-line{display:flex;gap:.5rem;align-items:flex-end}
+:scope[compact] .composer-line textarea{flex:1;min-width:0;margin:0}
+:scope[compact] .composer-actions{display:flex;flex-shrink:0}
+:scope[compact] #ai-send{min-height:44px;min-width:44px}
+:scope[compact] .chat-heading{display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-shrink:0}
+:scope[compact] .chat-heading h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:scope[compact] .conversation-menu{position:relative;flex-shrink:0}
+:scope[compact] .conversation-menu>summary{list-style:none;cursor:pointer;font-size:1.4rem;line-height:1;min-width:36px;min-height:36px;display:grid;place-items:center;border-radius:.35rem}
+:scope[compact] .conversation-menu>summary:focus-visible{outline:2px solid var(--accent)}
+:scope[compact] .conversation-menu-panel{position:absolute;right:0;top:100%;z-index:2;min-width:13rem;padding:.4rem;border:1px solid var(--line);border-radius:.5rem;background:var(--card);box-shadow:0 4px 12px var(--shadow-color)}
+:scope[compact] #ai-delete{width:100%;text-align:left;color:var(--bad-ink);background:var(--bad-soft);margin:0}
 :scope[compact] .composer-actions button{margin:0}
 :scope[compact] .m{flex-shrink:0}
 :scope[compact] .convs{max-height:6rem;overflow:auto}
@@ -124,8 +134,9 @@ class AiAssistantScreen extends HTMLElement {
   renderChat() {
     // Re-render only the conversation card while streaming (keeps the typed text and the rest of the page untouched).
     const host = this.querySelector('#ai-chatcard'); if (!host) { this.render(); return; }
+    const draft = this.querySelector('[name=aimsg]')?.value ?? '';
     host.outerHTML = this.chatCard();
-    this.wireChat(); this.scrollDown();
+    this.wireChat(); if (this.querySelector('[name=aimsg]')) this.querySelector('[name=aimsg]').value = draft; this.scrollDown();
   }
   async send() {
     const box = this.querySelector('[name=aimsg]'); const text = box?.value.trim();
@@ -179,16 +190,18 @@ class AiAssistantScreen extends HTMLElement {
     const busy = this.busy();
     const err = chat.error ? `<p role="alert" class="msg bad" id="ai-problem">${this.esc(String(chat.error.message ?? chat.error).slice(0, 300))}</p>` : '';
     const compact = this.hasAttribute('compact');
-    return `<div class="card" id="ai-chatcard"><h3>${this.esc(this._cur.title)}</h3>
+    const deletion = `<button class="secondary" id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button>`;
+    return `<div class="card" id="ai-chatcard">${compact ? `<div class="chat-heading"><h3>${this.esc(this._cur.title)}</h3><details class="conversation-menu" ${this._confirmDelete ? 'open' : ''}><summary aria-label="Conversation options" title="Conversation options">⋯</summary><div class="conversation-menu-panel">${deletion}</div></details></div>` : `<h3>${this.esc(this._cur.title)}</h3>`}
         ${compact ? '<details class="rights"><summary>Working branch and tool rights</summary>' : ''}<p class="hint">Working branch: <b>${this.esc(t?.branch ?? '?')}</b>${t?.active === false ? ' (session ended: start a new conversation)' : ''}. It works with the same rights as your MCP session. Platform changes stay on the branch until a human publishes; relayed external tools (named server__tool) act on their own servers and are not isolated by the branch.</p>${compact ? '</details>' : ''}
         <div class="thread" id="ai-thread" aria-live="polite">${chat.messages.map((m) => this.renderMsg(m)).join('') || '<p class="hint">Ask a question about the platform, for example: who has the accountant role?</p>'}${busy ? '<p class="hint">Working...</p>' : ''}</div>
         <div class="composer">${err}
-        <textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
+        <div class="composer-line"><textarea name="aimsg" maxlength="8000" aria-label="Message" placeholder="Message the assistant" ${busy ? 'disabled' : ''}></textarea>
         <div class="composer-actions"><button id="ai-send" ${busy || t?.active === false ? 'disabled' : ''}>Send</button>
-        <button class="secondary" id="ai-delete">${this._confirmDelete ? 'Confirm: delete this conversation' : 'Delete conversation'}</button></div></div>
+        ${compact ? '' : deletion}</div></div></div>
       </div>`;
   }
   render() {
+    const draft = this.querySelector('[name=aimsg]')?.value ?? '';
     const p = PRESETS.find((x) => x.id === this._preset);
     const enabled = this._models.filter((m) => m.enabled);
     const opts = enabled.map((m) => `<option value="${this.esc(m.id)}">${this.esc(m.name)}${m.local ? ' (local)' : ' (external)'}</option>`).join('');
@@ -222,7 +235,7 @@ class AiAssistantScreen extends HTMLElement {
       <label class="hint"><input type="checkbox" name="mack"> I understand data returned by tools is sent to this provider (not needed for a local model)</label>
       <button id="ai-addmodel">Add model</button>
     </section>`;
-    this.wire();
+    this.wire(); if (this.querySelector('[name=aimsg]')) this.querySelector('[name=aimsg]').value = draft;
   }
   disconnectedCallback() { this._chat?.stop(); }
   wireChat() {
