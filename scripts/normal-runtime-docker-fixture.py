@@ -3,7 +3,7 @@
 The app NEVER starts: marker callback refuses FIFO release after all probes.
 No production stores, env, credentials, accounts or host connection.
 """
-import argparse,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time
+import argparse,ast,fcntl,hashlib,importlib.util,json,os,shutil,subprocess,sys,tempfile,time
 from pathlib import Path
 
 def run(args):
@@ -66,7 +66,8 @@ def main():
  except Exception as error:
   result['stage']=stage
   known=('normal launcher command refused; inspect private diagnostics','exact FIFO image command differs','runtime security or network option differs','network topology differs','companion alias/IP differs','normal namespace probes failed','unexpected preexisting filter policy','actual runtime env differs from reviewed bytes','dedicated deny probe lacks actual rejection','verified DNS/TLS probe failed','IPv6 inactivity not proved','UDP/ICMP rejection not established','live capability proof failed')
-  result['reason']=str(error) if str(error) in known else 'other-controller-refusal'
+  fixed_errors={node.args[0].value for node in ast.walk(ast.parse(Path(n.__file__).read_text())) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='ValueError' and node.args and isinstance(node.args[0],ast.Constant) and isinstance(node.args[0].value,str)}
+  result['reason']=str(error) if str(error) in fixed_errors or str(error) in known else 'other-controller-refusal'
   result['error_type']=type(error).__name__ if type(error).__name__ in ('ValueError','TimeoutExpired','KeyError','FileNotFoundError','TypeError') else 'other'
   raise
  finally:
