@@ -21,6 +21,19 @@ class Tests(unittest.TestCase):
     raw=path.read_bytes()
     with self.assertRaises(ValueError):m.launch({'image':'other'},path,N())
     self.assertEqual(path.read_bytes(),raw)
+ def test_ambiguous_prior_attempt_blocks_new_run_and_postcheck_requires_effect_binding(self):
+  from unittest.mock import patch
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d)/'normal-attempt-previous.json';m.atomic_new(p,{'config':{'x':1}})
+   with self.assertRaisesRegex(ValueError,'unresolved'):m.pending_attempts(d)
+   m.atomic_new(Path(str(p)+'.completed'),{'kind':'normal-lifecycle-completed'})
+   m.pending_attempts(d)
+   m.atomic_new(Path(str(p)+'.effects'),{'kind':'normal-lifecycle-effects-committed','attempt_sha256':'wrong','proof':{}})
+   m.atomic_new(Path(str(p)+'.launched'),{'proof':{}})
+   class N:
+    def protected(self,b):return Path(b['path']),Path(b['path']).read_bytes()
+    def postcheck(self,*a):raise AssertionError('must refuse before runtime')
+   with self.assertRaisesRegex(ValueError,'binding'):m.postcheck({'x':1},str(p),N())
  def test_atomic_evidence_no_overwrite(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'proof';m.atomic_new(p,{'x':1})

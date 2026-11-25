@@ -201,6 +201,11 @@ CLOSED_CHECK_ARGS=""
 [ "$CLOSED_RECOVERY" = 1 ] && CLOSED_CHECK_ARGS="--require-automation-hold"
 LOCK_FILE="$(getconf LYAM_LOCK_FILE)"; LOCK_FILE="${LOCK_FILE:-/opt/lyam/.update.lock}"
 
+if [ "$ENV_FILE" != /opt/lyam/lyam.env ] && [ "$CLOSED_RECOVERY" = 0 ]; then
+  case "$ENV_FILE" in /opt/lyam-recovery/active/lyam.env)
+    [ "$(getconf LYAM_QUEUE_STATE)" = /opt/lyam-recovery/active/deploy-queue/state.json ] && [ -f /opt/lyam-recovery/active/deploy-queue/state.json ] && [ "$NORMAL_MODE" = 1 ] || fail 1 "active restored tree requires existing exact journal and normal runtime; no legacy fallback" ;;
+  esac
+fi
 QUEUE_STATE="$(getconf LYAM_QUEUE_STATE)"
 if [ -n "$QUEUE_STATE" ] && [ -f "$QUEUE_STATE" ] && [ "$CLOSED_RECOVERY" = 0 ]; then
   state_format="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["format"])' "$QUEUE_STATE")" || fail 1 "deployment journal unreadable"
@@ -336,7 +341,10 @@ gate_lift() {
     log "closed recovery qualified: maintenance and update pause remain armed; NOT open for users"
     return 0
   fi
-  if barrier_remove && front_verify; then return 0; fi
+  if barrier_remove && front_verify; then
+    if [ "$NORMAL_MODE" = 1 ]; then normal_lifecycle complete "$QUALIFICATION_EXPECTED_IMAGE" || { barrier_rearm; return 1; }; fi
+    return 0
+  fi
   barrier_rearm || log "WARNING: maintenance could not be re-armed at $BARRIER_FILE"
   return 1
 }
@@ -400,7 +408,7 @@ QUALIFICATION_EVIDENCE=""
 NORMAL_ATTEMPT="$BACKUP_DIR/normal-attempt-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
 if [ "$NORMAL_MODE" = 1 ]; then
   normal_preflight="$(dirname "$0")/normal-lifecycle.py"
-  python3 "$normal_preflight" prepare --controller-sha256 "$NORMAL_CONTROLLER_SHA256" --launcher-sha256 "$NORMAL_LAUNCHER_SHA256" --runtime "$NORMAL_RUNTIME" --runtime-sha256 "$NORMAL_RUNTIME_SHA256" --env-file "$ENV_FILE" --image "$IMAGE" --container "$CONTAINER" --data-dir "$DATA_DIR" --port "$PORT" --update-lock "$LOCK_FILE" --lock-fd 9 || fail 1 "normal profile preflight refused before any stop"
+  python3 "$normal_preflight" prepare --controller-sha256 "$NORMAL_CONTROLLER_SHA256" --launcher-sha256 "$NORMAL_LAUNCHER_SHA256" --runtime "$NORMAL_RUNTIME" --runtime-sha256 "$NORMAL_RUNTIME_SHA256" --env-file "$ENV_FILE" --image "$IMAGE" --container "$CONTAINER" --data-dir "$DATA_DIR" --port "$PORT" --update-lock "$LOCK_FILE" --lock-fd 9 --evidence "$NORMAL_ATTEMPT" || fail 1 "normal profile preflight refused before any stop"
 fi
 
 normal_lifecycle() {

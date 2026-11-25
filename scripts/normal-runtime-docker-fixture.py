@@ -10,6 +10,12 @@ def run(args):
  p=subprocess.run(args,text=True,capture_output=True,timeout=240)
  if p.returncode:raise ValueError('fixture command failed')
  return p.stdout.strip()
+def host_resource_args(args):
+ if args[:2]!=['docker','run']:return args
+ flags=('--memory','--memory-swap','--pids-limit','--cpus','--oom-score-adj')
+ if any(v==flag or v.startswith(flag+'=') for v in args[2:] for flag in flags):raise ValueError('ambiguous preexisting fixture resource flags')
+ return args[:2]+['--oom-score-adj','1000','--memory','256m','--memory-swap','256m','--pids-limit','128','--cpus','0.5']+args[2:]
+
 def execute(a,host_fixture=False,checkpoint=None):
  if os.geteuid()!=0:raise ValueError('root fixture required')
  if not host_fixture:
@@ -51,7 +57,7 @@ def execute(a,host_fixture=False,checkpoint=None):
    check();command_count[0]+=1
    result['launcher_command_count']=command_count[0]
    result['launcher_command_kind']=next((v for v in ('docker','nsenter') if args[0]==v),'other')
-   if host_fixture and args[:2]==['docker','run']:args=args[:2]+['--oom-score-adj','1000','--memory','256m','--memory-swap','256m','--pids-limit','128','--cpus','0.5']+args[2:]
+   if host_fixture:args=host_resource_args(args)
    try:return original_call(args,pass_fds=pass_fds)
    except Exception:
     result['command_failed']=True

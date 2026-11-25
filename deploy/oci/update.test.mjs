@@ -584,3 +584,13 @@ test('updater forwards configured E5-style policy path to both actual postcheck 
  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');assert.equal(r.status,0,r.stderr);
  assert.equal(readFileSync(join(stub,'policies'),'utf8'),`before ${policy}\nafter ${policy}\n`);
 });
+
+test('format4 refuses all legacy runtime and rollback paths before pulling or stopping',()=>{
+ const {env,dir}=setup();const state=join(dir,'queue.json');writeFileSync(state,JSON.stringify({format:4}));writeFileSync(env,readFileSync(env,'utf8')+`LYAM_QUEUE_STATE=${state}\n`);
+ const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');assert.equal(r.status,1);assert.match(r.stderr,/shared normal lifecycle/);assert.doesNotMatch(r.calls,/docker (pull|stop|run|rm|start)/);
+});
+
+test('normal lifecycle unbound profile refuses before stop and cannot silently use legacy run',()=>{
+ const {env}=setup();writeFileSync(env,readFileSync(env,'utf8')+'LYAM_NORMAL_RUNTIME=/uninstalled/profile\n');
+ const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');assert.equal(r.status,1);assert.match(r.stderr,/hash-bound/);assert.doesNotMatch(r.calls,/docker (pull|stop|run|rm|start)/);
+});

@@ -35,6 +35,12 @@ class Tests(unittest.TestCase):
    result=json.loads(out.read_text());self.assertEqual(result['result'],'refused');self.assertFalse(result['production_observation']['comparisons']['containers'])
    with patch.object(h,'memory_available',return_value=500000):
     with self.assertRaisesRegex(ValueError,'pressure'):h.checkpoint()
+ def test_host_resource_flags_are_exact_and_duplicates_refuse(self):
+  s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+  args=m.host_resource_args(['docker','run','--name','fixture','image'])
+  for flag,value in [('--oom-score-adj','1000'),('--memory','256m'),('--memory-swap','256m'),('--pids-limit','128'),('--cpus','0.5')]:self.assertEqual(args[args.index(flag)+1],value)
+  for flag in ['--memory','--memory=512m','--cpus','--pids-limit=32','--oom-score-adj=0']:
+   with self.assertRaises(ValueError):m.host_resource_args(['docker','run',flag,'image'])
  def test_github_guard_cannot_be_disabled_by_env_on_normal_entry(self):
   s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   with patch.object(m.os,'geteuid',return_value=0),patch.dict(os.environ,{'GITHUB_ACTIONS':'false'}):

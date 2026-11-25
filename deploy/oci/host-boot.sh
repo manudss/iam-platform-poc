@@ -44,6 +44,9 @@ if [ "$ENV_FILE" != /opt/lyam/lyam.env ]; then
   [ -n "$STATE" ] && [ -n "$(getconf LYAM_ORDERED_QUEUE)" ] || fail "nonlegacy environment requires explicit queue/state paths"
 fi
 STATE="${STATE:-/opt/lyam/deploy-queue/state.json}"
+case "$ENV_FILE" in /opt/lyam-recovery/active/lyam.env)
+  [ "$STATE" = /opt/lyam-recovery/active/deploy-queue/state.json ] && [ -f "$STATE" ] || fail "active restored tree requires existing exact journal, never legacy boot" ;;
+esac
 PAUSE="$(getconf LYAM_PAUSE_FILE)"; PAUSE="${PAUSE:-/opt/lyam/UPDATE_PAUSED}"
 [ ! -e "$PAUSE" ] || fail "deployment pause forbids unattended boot"
 if [ -f "$BOOT_GUARD" ]; then
@@ -67,6 +70,9 @@ fi
 if [ "$(getconf IAM_AUTOMATION_HOLD)" = 1 ]; then
   QUEUE="$(getconf LYAM_ORDERED_QUEUE)"; QUEUE="${QUEUE:-/opt/lyam/bin/ordered-queue.py}"
   STATE="$(getconf LYAM_QUEUE_STATE)"; STATE="${STATE:-/opt/lyam/deploy-queue/state.json}"
+case "$ENV_FILE" in /opt/lyam-recovery/active/lyam.env)
+  [ "$STATE" = /opt/lyam-recovery/active/deploy-queue/state.json ] && [ -f "$STATE" ] || fail "active restored tree requires existing exact journal, never legacy boot" ;;
+esac
   if [ -f "$STATE" ]; then
     # Recovery is access-only; a missing intent is harmless, every other error
     # leaves the app stopped for explicit operator review.
