@@ -43,6 +43,20 @@ def main():
    time.sleep(1)
   else:raise ValueError('companions unavailable')
   docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/fixture-ready','value=synthetic')
+  if isolated:
+   for companion in [pg,bao]:
+    pid=str(json.loads(docker('inspect',companion))[0]['State']['Pid'])
+    ns=['nsenter','-t',pid,'-n']
+    for proto in ['udp','tcp']:run(ns+['iptables','-t','raw','-I','OUTPUT','1','-p',proto,'--dport','53','-j','DROP'])
+    # Companions answer the app, never initiate external traffic.
+    for command in [['-P','OUTPUT','DROP'],['-A','OUTPUT','-o','lo','-d','127.0.0.1','-j','ACCEPT'],['-A','OUTPUT','-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','ACCEPT'],['-A','OUTPUT','-j','REJECT']]:run(ns+['iptables',*command])
+    for command in [['-P','OUTPUT','DROP'],['-A','OUTPUT','-o','lo','-j','ACCEPT']]:run(ns+['ip6tables',*command])
+    # Host Python joins only network namespace; no installed companion tool needed.
+    probe="import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.5);s.sendto(b'qualification-deny',('127.0.0.11',53));\ntry:s.recvfrom(100)\nexcept (TimeoutError,OSError):pass"
+    run(ns+['/usr/bin/python3','-c',probe])
+    table=run(ns+['iptables','-t','raw','-nvx','-L','OUTPUT'])
+    if not any(len(x.split())>2 and x.split()[2]=='DROP' and int(x.split()[0])>0 for x in table.splitlines()):raise ValueError('companion DNS denial counter missing')
+   result['companion_dns_raw_denial']=True
   data=root/'data';data.mkdir(mode=0o700)
   result['stage']='seed'
   docker('run','-d','--name',seed,'--network','none','--memory','2048m','--pids-limit','256','-v',str(data)+':/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',IMAGE)
