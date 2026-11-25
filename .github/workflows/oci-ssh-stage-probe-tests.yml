@@ -16,3 +16,9 @@ jobs:
           persist-credentials: false
       - run: python3 deploy/oci/readonly-diagnostic/ssh-probe.test.py
       - run: bash -n deploy/oci/readonly-diagnostic/ssh-probe.sh
+      - name: Real OpenSSH loopback transport qualification
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openssh-server
+          sudo mkdir -p /run/sshd
+          sudo python3 deploy/oci/readonly-diagnostic/ssh-probe-local.test.py

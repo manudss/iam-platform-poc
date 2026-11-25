@@ -4,6 +4,9 @@ import re,sys
 from pathlib import Path
 
 def stages(trace):
+ # OpenSSH writes CRLF debug records even when stderr is redirected to a file.
+ # Normalize only record endings; never strip arbitrary whitespace from private text.
+ trace=trace.replace('\r\n', '\n')
  patterns={
  'connection_established':r'(?m)^debug1: Connection established\.$',
  'server_identification':r'(?m)^debug1: Remote protocol version [^\r\n]+$',
@@ -21,7 +24,7 @@ def stages(trace):
 
 def main():
  trace=Path(sys.argv[1]).read_bytes();out=Path(sys.argv[2]).read_bytes();rc=int(sys.argv[3])
- print('ssh_probe.version=1');print('ssh_probe.local_exit='+str(rc));print('ssh_probe.stdout_bytes='+str(len(out)));print('ssh_probe.trace_bytes='+str(len(trace)))
+ print('ssh_probe.version=2');print('ssh_probe.local_exit='+str(rc));print('ssh_probe.stdout_bytes='+str(len(out)));print('ssh_probe.trace_bytes='+str(len(trace)))
  # Oversize trace is not parsed as if complete. No raw text is ever emitted.
  if len(trace)>1024*1024:print('ssh_probe.trace_complete=false');return 1
  s=stages(trace.decode(errors='replace'))
