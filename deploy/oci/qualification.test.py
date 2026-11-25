@@ -5,6 +5,11 @@ spec=importlib.util.spec_from_file_location('qual',Path(__file__).with_name('qua
 def baseline():return {'dolt':[{'branch':'personal/kept','root':'root'}],'bao':{'all/plugin':'hash'},'credentials':{'credentials.json':'hash'},'postgres':{'rows':{'public.business':{'row1':1},'public.audit':{'row1':1},'public.activations':{'held':1}},'schema':{'columns':[]},'sequenceDefinitions':[],'sequences':{'public.audit_id':{'last_value':1,'is_called':True}}}}
 class Preserve(unittest.TestCase):
  def setUp(self):self.p={'appendOnlyTables':['public.audit']};self.before=baseline();self.after=copy.deepcopy(self.before)
+ def test_environment_policy_selection_reaches_parser(self):
+  import sys,os
+  with patch.dict(os.environ,{'LYAM_QUALIFICATION_POLICY':'/opt/lyam-recovery/active/qualification.json'}),patch.object(sys,'argv',['qualification','--phase','before','--container','c','--image','i','--env-file','e','--data-dir','d','--backup-dir','b','--barrier-file','f','--target-image','i','--evidence-dir','v']),patch.object(q,'policy_load',side_effect=RuntimeError('stop')) as load:
+   with self.assertRaises(RuntimeError):q.main()
+   self.assertEqual(load.call_args.args[0],'/opt/lyam-recovery/active/qualification.json')
  def test_identical(self):self.assertEqual(q.compare(self.before,self.after,self.p),[])
  def test_audit_append_allowed_not_business(self):
   self.after['postgres']['rows']['public.audit']['row2']=1;self.assertEqual(q.compare(self.before,self.after,self.p),[])

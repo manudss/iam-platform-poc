@@ -28,7 +28,7 @@ The durable normal-start-committed marker precedes the first non-HOLD boot. This
 
 ## Paths and future CI
 
-Every effective path must be explicit and consistent: env, ordered queue, state, pause, updater lock, boot script, qualification policy/postcheck, data, backups and both access gates. Active restored trees must not fall through to /opt/lyam defaults. Future qualification must use the committed normal policy requireAutomationHold=false. The prior policy must be retained and hash-bound. Current WIP has a fixed /opt/lyam/qualification.json requirement that is not suitable for the restored active tree and must be replaced with validated configured binding, not arbitrary free-form command execution.
+Every effective path must be explicit and consistent: env, ordered queue, state, pause, updater lock, boot script, qualification policy/postcheck, data, backups and both access gates. Active restored trees must not fall through to /opt/lyam defaults. Future qualification must use the committed normal policy requireAutomationHold=false. The prior policy must be retained and hash-bound. The operational policy path is explicitly bound through LYAM_QUALIFICATION_POLICY; update.sh forwards it to both qualification phases. The planner release-paths.py returns required bindings without writing any file. It is preparation, not verification of the host.
 
 CI credentials/known-hosts/forced-command and environment selection must target the E5 deployment root. The forced command must accept only intended status/drain operations using those exact paths. Never weaken its allow-list or set format1 to bypass pause. After the audited release, qualify and observe the first real ordered update and receipt before declaring CI restored.
 

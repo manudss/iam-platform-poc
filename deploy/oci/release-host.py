@@ -86,10 +86,10 @@ class Host:
   self.pause_raw=pause_raw
   self.policy_source,policyraw=read_spec(manifest['normal_policy']);self.policy=json.loads(policyraw)
   self.policy_path,self.prior_policy_raw=read_spec(manifest['operational_policy_before'])
-  if str(self.policy_path)!='/opt/lyam/qualification.json' or self.policy_source==self.policy_path:raise ValueError('fixed operational policy migration required')
+  if self.env.get('LYAM_QUALIFICATION_POLICY')!=str(self.policy_path) or self.policy_source==self.policy_path:raise ValueError('explicit operational policy migration binding required')
   self.normal_policy_raw=policyraw
   if self.env.get('LYAM_POST_UPDATE_CHECK')!=str(Path(__file__).with_name('qualification.py')):raise ValueError('future updates must use exact installed qualifier')
-  if self.env.get('LYAM_QUEUE_STATE','/opt/lyam/deploy-queue/state.json')!=manifest.get('state_path'):raise ValueError('boot/queue state path must be identical')
+  if self.env.get('LYAM_QUEUE_STATE')!=manifest.get('state_path'):raise ValueError('boot/queue state path must be identical')
   if self.policy.get('requireAutomationHold') is not False:raise ValueError('explicit normal qualification policy required')
   self.qualifier=imported(Path(__file__).with_name('qualification.py'),'release_qualification');self.qualifier.policy_load(self.policy_source)
   self.evidence=Path(manifest['evidence_dir'])

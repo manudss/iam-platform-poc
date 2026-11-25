@@ -110,7 +110,7 @@ def main():
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
     parser.add_argument('--isolated-loopback-test',action='store_true')
     parser.add_argument('--require-automation-hold',action='store_true')
-    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
+    parser.add_argument('--policy',default=os.environ.get('LYAM_QUALIFICATION_POLICY','/opt/lyam/qualification.json'));a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
     if a.require_automation_hold:
         p['requireAutomationHold']=True
     stage('tls-barriers')

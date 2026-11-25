@@ -152,6 +152,7 @@ RECOVERY_FILES="$(getconf LYAM_RECOVERY_FILES)"
 HOOK="$(getconf LYAM_PRE_UPDATE_HOOK)"
 PAUSE_FILE="$(getconf LYAM_PAUSE_FILE)"; PAUSE_FILE="${PAUSE_FILE:-/opt/lyam/UPDATE_PAUSED}"
 POST_CHECK="$(getconf LYAM_POST_UPDATE_CHECK)"
+QUALIFICATION_POLICY="$(getconf LYAM_QUALIFICATION_POLICY)"; QUALIFICATION_POLICY="${QUALIFICATION_POLICY:-/opt/lyam/qualification.json}"
 CLOSED_LAUNCHER="$(getconf LYAM_CLOSED_LAUNCHER)"
 CLOSED_PREFLIGHT="$(getconf LYAM_CLOSED_PREFLIGHT)"
 CLOSED_IMPLEMENTATION="$(getconf LYAM_CLOSED_IMPLEMENTATION)"
@@ -307,7 +308,7 @@ gate_lift() {
   if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
     actual_image="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null)" || return 1
     [ -n "$actual_image" ] || return 1
-    "$POST_CHECK" --phase after --container "$CONTAINER" --image "$QUALIFICATION_EXPECTED_IMAGE" --env-file "$ENV_FILE" \
+    LYAM_QUALIFICATION_POLICY="$QUALIFICATION_POLICY" "$POST_CHECK" --phase after --container "$CONTAINER" --image "$QUALIFICATION_EXPECTED_IMAGE" --env-file "$ENV_FILE" \
       --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE" \
       --target-image "$IMAGE" --evidence-dir "$QUALIFICATION_EVIDENCE" ${CLOSED_CHECK_ARGS:-} || { log 'pre-opening qualification failed or UNKNOWN; gate remains armed'; return 1; }
   fi
@@ -496,7 +497,7 @@ fi
 # The checker itself validates every TLS origin remains behind maintenance.
 if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
   QUALIFICATION_EVIDENCE="$BACKUP_DIR/qualification-$TS-$$"
-  "$POST_CHECK" --phase before --container "$CONTAINER" --image "$PREVIOUS" --env-file "$ENV_FILE" \
+  LYAM_QUALIFICATION_POLICY="$QUALIFICATION_POLICY" "$POST_CHECK" --phase before --container "$CONTAINER" --image "$PREVIOUS" --env-file "$ENV_FILE" \
     --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE" \
     --target-image "$IMAGE" --evidence-dir "$QUALIFICATION_EVIDENCE" \
     || fail 4 "pre-update preservation capture failed or UNKNOWN; application stays stopped, maintenance stays armed"
