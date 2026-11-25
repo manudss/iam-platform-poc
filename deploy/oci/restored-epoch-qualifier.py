@@ -55,7 +55,9 @@ def _execute(spec,lock_bindings):
  smoke_error=None;after={};smoke=None
  q.private_json(evidence/'epoch-attempt.json',{'kind':'fresh-held-smoke-attempt','started_at':time.time(),'may_mutate_sessions_audit':True,'restoration_admissible':False})
  # Bound the remote Node process itself, not just docker exec's client.
- bounded_source="setTimeout(()=>process.exit(124),120000).unref();\n"+source.decode()
+ bounded_source=("const {spawn:epochSpawn}=await import('node:child_process');"
+  "const epochWatch=epochSpawn(process.execPath,['-e',\"setTimeout(()=>{try{process.kill(Number(process.argv[1]),'SIGKILL')}catch{}},120000)\",String(process.pid)],{stdio:'ignore'});"
+  "process.on('exit',()=>{try{epochWatch.kill('SIGKILL')}catch{}});\n"+source.decode())
  try:
   try:
    smoke=json.loads(q.cmd(['docker','exec','-i',runtime['container'],'node','--input-type=module','-e',bounded_source,'smoke'],json.dumps({**policy,'auth':json.loads(authraw),'reviewedLegacyRollback':False})))
@@ -64,6 +66,9 @@ def _execute(spec,lock_bindings):
    q.private_json(evidence/'epoch-smoke.json',safe)
   except Exception as error:
    smoke_error=error
+   stage=getattr(q,'CHILD_STAGE',None)
+   allowed=getattr(q,'CHILD_STAGES',set())
+   q.private_json(evidence/'epoch-smoke-refusal.json',{'returned':False,'diagnostic_stage':stage if stage in allowed else 'unverified','may_have_mutated':True})
    for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,signal.SIG_IGN)
    signal.alarm(120)
   finally:
