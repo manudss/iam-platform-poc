@@ -36,6 +36,18 @@ wait_loop() { # $1 description, rest: probe command; LYAM_BOOT_TRIES x 5s
   done
 }
 
+# Read-only preflight MUST run before HOLD is read: a release may already have
+# atomically removed HOLD while the durable release intent still blocks startup.
+BOOT_GUARD="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/release-boot-guard.py"
+STATE="$(getconf LYAM_QUEUE_STATE)"; STATE="${STATE:-/opt/lyam/deploy-queue/state.json}"
+if [ -f "$BOOT_GUARD" ]; then
+  python3 "$BOOT_GUARD" "$STATE" || fail "release state forbids unattended boot"
+elif [ -f "$STATE" ]; then
+  # Legacy installation has no format4 writer. Still refuse a migrated state
+  # rather than starting with a missing newly-required guard.
+  python3 -c 'import json,sys;s=json.load(open(sys.argv[1]));sys.exit(0 if s.get("format") in (1,2,3) and not s.get("release_intent") else 1)' "$STATE" || fail "release boot guard missing"
+fi
+
 # Held containers use an inert FIFO restart fence. Never let boot recreate or
 # restart one through the normal updater, or bypass an interrupted opening intent.
 if [ "$(getconf IAM_AUTOMATION_HOLD)" = 1 ]; then
