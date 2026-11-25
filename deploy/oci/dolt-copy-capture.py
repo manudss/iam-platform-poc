@@ -137,6 +137,8 @@ def execute(spec,reader):
    result['container_exit_code']=r.returncode
    stages=re.findall(r'^QUALIFICATION_DIAG_V1:(capture-dolt|init)$',r.stderr,re.M)
    result['capture_stage']=stages[-1] if stages else 'unverified'
+   for field,pattern in [('reason_code',r'^QUALIFICATION_REASON_V1:(-?[0-9]{1,2})$'),('query_kind_code',r'^DOLT_QUERY_KIND_V1:(-?[0-9]{1,2})$')]:
+    found=re.findall(pattern,r.stderr,re.M);result[field]=int(found[-1]) if found else None
    raise ValueError('Dolt copy capture refused')
   envelope=json.loads(r.stdout)
   if not isinstance(envelope,dict) or set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not False or not envelope['dolt']:raise ValueError('Dolt envelope differs')

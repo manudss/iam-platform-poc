@@ -33,8 +33,8 @@ async function bao(){
 function dolt(){
  const dir=p.running?'/data/dolt':mkdtempSync('/tmp/qualification-')+'/dolt';
  if(!p.running)cpSync('/data/dolt',dir,{recursive:true,errorOnExist:true});
- const query=(db,sql)=>{const r0=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));const r=r0&&typeof r0==='object'&&!Array.isArray(r0)&&Object.keys(r0).length===0?{rows:[]}:r0;   // dolt prints {} for a strictly empty result (compat fix shared with the producer)
- if(!r||!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
+ const query=(db,sql)=>{try{const r0=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));const r=r0&&typeof r0==='object'&&!Array.isArray(r0)&&Object.keys(r0).length===0?{rows:[]}:r0;   // dolt prints {} for a strictly empty result (compat fix shared with the producer)
+ if(!r||!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;}catch(e){const kinds=['SHOW DATABASES','SELECT name, hash','SELECT DOLT_HASHOF_DB','SELECT DATABASE()','SHOW FULL TABLES','SHOW FULL COLUMNS','SHOW CREATE VIEW','SHOW KEYS','SHOW CREATE TABLE','SELECT DOLT_HASHOF_TABLE','SELECT COUNT(*)','SELECT * FROM dolt_schemas','SELECT * FROM dolt_procedures','SELECT table_name'];console.error('DOLT_QUERY_KIND_V1:'+kinds.findIndex(k=>sql.startsWith(k)));throw e;}};
  const dbs=query('','SHOW DATABASES').map(r=>Object.values(r)[0]).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
  if(!dbs.includes('iam'))throw Error('business database absent');
  // Per-table evidence, hash/shape only (no row content): exact table inventory with kind, column shape, primary key order, row count and
@@ -170,4 +170,4 @@ try{
  }
  else if(mode==='smoke')console.log(JSON.stringify(await smoke()));
  else throw Error('invalid mode');
-}catch{console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}
+}catch(error){const known=['Dolt table listing shape unknown','Dolt system table columns unknown','Dolt system table value unknown','Dolt inventory moved during capture','Dolt session identity mismatch','Dolt view DDL unknown','Dolt table kind unknown','Dolt DDL unknown','Dolt inventory unknown'];const reason=known.indexOf(error?.message);console.error('QUALIFICATION_REASON_V1:'+reason);console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}
