@@ -43,6 +43,23 @@ class Tests(unittest.TestCase):
    with patch.object(h,'snapshot',return_value=base) as shot,patch.object(h.signal,'alarm'):
     with self.assertRaises(TimeoutError):h.execute_reviewed(spec,Engine())
    self.assertEqual(shot.call_count,2);self.assertEqual(json.loads(out.read_text())['result'],'refused')
+ def test_actual_cleanup_finally_ignores_second_signals_and_uses_shared_budget(self):
+  import ast,signal
+  from types import SimpleNamespace
+  source=(ROOT/'scripts/normal-runtime-docker-fixture.py').read_text();tree=ast.parse(source);execute=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='execute');block=next(n for n in execute.body if isinstance(n,ast.Try) and n.finalbody)
+  fn=ast.FunctionDef(name='cleanup',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=block.finalbody,decorator_list=[]);module=ast.Module(body=[fn],type_ignores=[]);ast.fix_missing_locations(module)
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d)/'owned';root.mkdir();out=Path(d)/'artifact';calls=[];prior={sig:signal.getsignal(sig) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)}
+   def command(args,**kw):
+    calls.append((args,kw['timeout']))
+    os.kill(os.getpid(),signal.SIGTERM);os.kill(os.getpid(),signal.SIGINT)
+    return SimpleNamespace(returncode=0,stdout='normal-host-prefix-pg\n' if args[:3]==['docker','ps','-a'] and len(calls)==1 else '')
+   import subprocess,time,shutil
+   scope={'host_fixture':True,'signal':signal,'time':time,'subprocess':subprocess,'shutil':shutil,'root':root,'out':out,'prefix':'normal-host-prefix','networks':['normal-host-prefix-backend'],'result':{'result':'pre-fifo-network-qualified'},'json':json}
+   exec(compile(module,'actual-fixture-cleanup','exec'),scope)
+   with patch.object(subprocess,'run',side_effect=command):scope['cleanup']()
+   self.assertTrue(json.loads(out.read_text())['cleanup_complete']);self.assertFalse(root.exists());self.assertTrue(all(0<t<=15 for args,t in calls))
+   self.assertEqual({sig:signal.getsignal(sig) for sig in prior},prior)
  def test_host_resource_flags_are_exact_and_duplicates_refuse(self):
   s=importlib.util.spec_from_file_location('fixture',ROOT/'scripts/normal-runtime-docker-fixture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   args=m.host_resource_args(['docker','run','--name','fixture','image'])
