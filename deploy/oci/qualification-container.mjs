@@ -150,7 +150,13 @@ async function smoke(){
  return {journal,held:p.requireAutomationHold===true,workflowPreserved:workflowBefore!==null,ledger:ledger.entries.map(e=>({id:e.id,checksum:e.checksum}))};
 }
 try{
- if(mode==='capture'){diagnosticStage='capture-dolt';const d=dolt();diagnosticStage='capture-bao';const b=await bao();console.log(JSON.stringify({dolt:d,bao:b}));}
+ if(mode==='dolt-only'){
+  diagnosticStage='capture-dolt';
+  if(typeof p.running!=='boolean')throw Error('explicit Dolt read mode required');
+  const d=dolt();if(!d.length)throw Error('Dolt coverage empty');
+  console.log(JSON.stringify({format:1,kind:'dolt-only-tables-v3',running:p.running,dolt:d}));
+ }
+ else if(mode==='capture'){diagnosticStage='capture-dolt';const d=dolt();diagnosticStage='capture-bao';const b=await bao();console.log(JSON.stringify({dolt:d,bao:b}));}
  else if(mode==='held-state-check'||mode==='epoch-pre-smoke-check'){
   const log=readFileSync('/data/api.log','utf8');const captured=/automation hold: (\{[^\n]+\})/.exec(log);
   if(process.env.IAM_AUTOMATION_HOLD!=='1'||!captured||JSON.parse(captured[1]).held!==true)throw Error('captured hold required');
