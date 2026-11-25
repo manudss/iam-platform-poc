@@ -30,8 +30,12 @@ def command(spec,source):
  if source.get('path')!=str(Path(__file__).with_name('qualification-container.mjs').absolute()):raise ValueError('fixed capture source required')
  return ['docker','run','--name',spec['container'],'--restart','no','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges:true','--read-only','--oom-score-adj','1000','--user','0:0','--memory','1536m','--memory-swap','1536m','--pids-limit','96','--cpus','0.5','--mount','type=bind,src='+str(work)+',dst=/data/dolt,readonly','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=1073741824,mode=0700','--workdir','/tmp','--entrypoint','node',spec['image_id'],'--input-type=module','-e']
 
+def executed_source(raw):
+ return ("const {execFileSync:epochExec}=await import('node:child_process');"
+  "if(!/\\bdolt version 2\\.6\\.1\\b/.test(epochExec('dolt',['version'],{encoding:'utf8',timeout:10000})))throw Error('version differs');\n"+raw.decode())
+
 def execute(spec,reader):
- if set(spec)!={'format','kind','work_dir','tree_sha256','image_id','dolt_version','source','container','out'} or spec['format']!=1 or spec['kind']!='reviewed-work-copy-dolt-capture':raise ValueError('exact work capture spec required')
+ if set(spec)!={'format','kind','work_dir','tree_sha256','image_id','dolt_version','source','executed_source_sha256','container','out'} or spec['format']!=1 or spec['kind']!='reviewed-work-copy-dolt-capture':raise ValueError('exact work capture spec required')
  if not re.fullmatch('dolt-copy-[a-f0-9]{16}',spec['container']):raise ValueError('bounded unique container name required')
  args=command(spec,spec['source']);_,raw=reader(spec['source']);work=Path(spec['work_dir']);out=Path(spec['out'])
  if out!=work.parent/'capture.json' or out.exists() or (work.parent/'attempt.json').exists():raise ValueError('fresh capture and scratch required')
@@ -45,15 +49,15 @@ def execute(spec,reader):
  if shutil.disk_usage(work.parent).free<2*total+2*1024**3:raise ValueError('scratch disk headroom required')
  # Version is checked inside the SAME named, bounded disposable container;
  # no anonymous version-check container can escape final removal.
- executed_source=("const {execFileSync:epochExec}=await import('node:child_process');"
-  "if(!/\\bdolt version 2\\.6\\.1\\b/.test(epochExec('dolt',['version'],{encoding:'utf8',timeout:10000})))throw Error('version differs');\n"+raw.decode())
+ executed=executed_source(raw)
+ if hashlib.sha256(executed.encode()).hexdigest()!=spec['executed_source_sha256']:raise ValueError('executed source binding differs')
  existing=subprocess.run(['docker','ps','-a','--format','{{.Names}}'],capture_output=True,text=True,timeout=15)
  if existing.returncode or spec['container'] in existing.stdout.splitlines():raise ValueError('cannot exclude preexisting capture container')
- result={'format':1,'kind':'work-copy-dolt-capture-attempt','completed':False,'scratch_tmpfs_max_bytes':1073741824,'source_copy_max_bytes':384*1024**2,'restoration_admissible':False,'source_tree_sha256':h,'source_files':count,'source_bytes':total,'executed_source_sha256':hashlib.sha256(executed_source.encode()).hexdigest()};failure=None
+ result={'format':1,'kind':'work-copy-dolt-capture-attempt','completed':False,'scratch_tmpfs_max_bytes':1073741824,'source_copy_max_bytes':384*1024**2,'restoration_admissible':False,'source_tree_sha256':h,'source_files':count,'source_bytes':total,'executed_source_sha256':hashlib.sha256(executed.encode()).hexdigest()};failure=None
  try:
   # Python timeout kills docker CLIENT only. Finally forcibly removes this exact
   # disposable container before returning; no auto-remove obscures its outcome.
-  r=subprocess.run(args+[executed_source,'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=300)
+  r=subprocess.run(args+[executed,'dolt-only'],input='{"running":false}',text=True,capture_output=True,timeout=300)
   if r.returncode:raise ValueError('Dolt copy capture refused')
   envelope=json.loads(r.stdout)
   if not isinstance(envelope,dict) or set(envelope)!={'format','kind','running','dolt'} or envelope['format']!=1 or envelope['kind']!='dolt-only-tables-v3' or envelope['running'] is not False or not envelope['dolt']:raise ValueError('Dolt envelope differs')

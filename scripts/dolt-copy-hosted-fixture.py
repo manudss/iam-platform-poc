@@ -21,9 +21,14 @@ def main():
   seed="const f=require('fs'),{execFileSync:x}=require('child_process');for(const db of ['iam','iam_meta']){const cwd='/fixture/'+db;f.mkdirSync(cwd);x('dolt',['init','--name','Fixture','--email','fixture@example.invalid'],{cwd});x('dolt',['sql','-q','CREATE TABLE fixture_rows (id INT PRIMARY KEY, note VARCHAR(20)); INSERT INTO fixture_rows VALUES (1,\\'synthetic\\')'],{cwd});}"
   run(['docker','run','--rm','--network','none','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','64','-v',str(work)+':/fixture','--entrypoint','node',IMAGE,'-e',seed])
   # Init output is owned root, copied code reads only this synthetic tree.
+  # Synthetic Dolt init may create group-writable files. Normalize ONLY this
+  # generated fixture tree, never a source or operator copy.
+  for p in work.rglob('*'):
+   if p.is_symlink():raise ValueError('unexpected synthetic symlink')
+   p.chmod(0o700 if p.is_dir() else 0o600)
   s=importlib.util.spec_from_file_location('copy_runner',code/'dolt-copy-capture.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
   tree_hash,size,count=m.digest_tree(work);image_id=json.loads(run(['docker','image','inspect',IMAGE]))[0]['Id']
-  spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':tree_hash,'image_id':image_id,'dolt_version':'2.6.1','source':{'path':str(code/'qualification-container.mjs'),'sha256':hashlib.sha256((code/'qualification-container.mjs').read_bytes()).hexdigest()},'container':name,'out':str(out)}
+  spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':tree_hash,'image_id':image_id,'dolt_version':'2.6.1','source':{'path':str(code/'qualification-container.mjs'),'sha256':hashlib.sha256((code/'qualification-container.mjs').read_bytes()).hexdigest()},'executed_source_sha256':hashlib.sha256(m.executed_source((code/'qualification-container.mjs').read_bytes()).encode()).hexdigest(),'container':name,'out':str(out)}
   path=root/'spec.json';path.write_text(json.dumps(spec));path.chmod(0o600)
   raw=run(['python3',str(code/'dolt-copy-capture.py'),'--spec',str(path),'--spec-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),'--controller-sha256',hashlib.sha256((code/'dolt-copy-capture.py').read_bytes()).hexdigest(),'--execute-reviewed-work-copy'])
   result=json.loads(raw);capture=json.loads(out.read_text())

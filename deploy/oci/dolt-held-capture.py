@@ -45,6 +45,7 @@ def main():
  s=importlib.util.spec_from_file_location('capture_reader',path);r=importlib.util.module_from_spec(s);s.loader.exec_module(r)
  r.read_binding({'path':str(Path(__file__).absolute()),'sha256':a.controller_sha256});_,raw=r.read_binding({'path':a.spec,'sha256':a.spec_sha256});spec=json.loads(raw)
  if not a.execute_reviewed_held_read:raise ValueError('explicit reviewed held read required')
+ raise ValueError('held exec resource isolation not qualified: refuse before locks or capture')
  def stop(signum,frame):raise TimeoutError('held read global deadline')
  prior={sig:signal.signal(sig,stop) for sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGINT)};signal.alarm(600)
  try:

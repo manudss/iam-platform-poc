@@ -20,7 +20,7 @@ class Tests(unittest.TestCase):
   from types import SimpleNamespace
   from unittest.mock import patch
   with tempfile.TemporaryDirectory() as d:
-   base=Path(d);work=base/'work';work.mkdir();(work/'file').write_text('fixture');spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':'a'*64,'image_id':'sha256:'+'b'*64,'dolt_version':'2.6.1','source':{},'container':'dolt-copy-'+'c'*16,'out':str(base/'capture.json')};calls=[]
+   base=Path(d);work=base/'work';work.mkdir();(work/'file').write_text('fixture');spec={'format':1,'kind':'reviewed-work-copy-dolt-capture','work_dir':str(work),'tree_sha256':'a'*64,'image_id':'sha256:'+'b'*64,'dolt_version':'2.6.1','source':{},'executed_source_sha256':__import__('hashlib').sha256(m.executed_source(b'fixed').encode()).hexdigest(),'container':'dolt-copy-'+'c'*16,'out':str(base/'capture.json')};calls=[]
    def run(args,**kw):
     calls.append(args)
     if args[:3]==['docker','ps','-a']:return SimpleNamespace(returncode=0,stdout='')
