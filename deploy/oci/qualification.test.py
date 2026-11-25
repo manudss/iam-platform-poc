@@ -71,6 +71,28 @@ class AfterFixture(unittest.TestCase):
     with patch.object(q,'postgres',return_value=changed):
      with self.assertRaisesRegex(ValueError,'unexpected preservation'):q.main()
 
+class HeldBaseline(unittest.TestCase):
+ def test_live_double_capture_under_real_locks_no_smoke_no_restart(self):
+  import fcntl
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);data=root/'data';data.mkdir();token=root/'token';token.write_text('synthetic');policy=root/'policy';policy.write_text(json.dumps({'requireAutomationHold':True,'baoTokenFile':str(token)}));held={'Id':'container','RestartCount':0,'Config':{'Image':'image','Env':['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never']},'State':{'Running':True},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true']}};calls=[];closed=[]
+   def io(args,input=None):
+    calls.append(args)
+    if args[:2]==['docker','inspect']:return json.dumps([held])
+    self.assertEqual(args[-1],'capture');self.assertEqual(args[:2],['docker','exec']);return json.dumps({'dolt':[],'bao':{}})
+   paths=[root/'journal.lock',root/'updater.lock']
+   for path in paths:path.touch()
+   with paths[0].open('a') as j,paths[1].open('a') as u,patch.object(q,'policy_load',return_value=json.loads(policy.read_text())),patch.object(q,'cmd',side_effect=io),patch.object(q,'credential_hashes',return_value={'x':'hash'}),patch.object(q,'postgres',return_value={'rows':{}}):
+    locks={'journal':(str(paths[0]),j.fileno()),'updater':(str(paths[1]),u.fileno())}
+    with self.assertRaisesRegex(ValueError,'exclusive lock'):q.held_running_baseline('held','image',root/'nope',policy,data,locks,lambda:closed.append(True))
+    fcntl.flock(j,fcntl.LOCK_EX);fcntl.flock(u,fcntl.LOCK_EX)
+    proof=q.held_running_baseline('held','image',root/'fresh',policy,data,locks,lambda:closed.append(True))
+    self.assertTrue((root/'fresh/before.json').is_file());self.assertFalse(proof['smokeExecuted']);self.assertEqual(len(closed),2)
+    self.assertFalse(any(a[:2] in (['docker','stop'],['docker','start'],['docker','run']) for a in calls))
+    with self.assertRaisesRegex(ValueError,'new held baseline'):q.held_running_baseline('held','image',root/'fresh',policy,data,locks,lambda:None)
+    with patch.object(q,'postgres',side_effect=[{'rows':{}},{'rows':{'moving':1}}]),self.assertRaisesRegex(ValueError,'moving'):q.held_running_baseline('held','image',root/'moving',policy,data,locks,lambda:None)
+    self.assertFalse((root/'moving').exists())
+
 class ExactActivations(unittest.TestCase):
  def test_held_exact_vs_ordinary_append(self):
   before=baseline();after=copy.deepcopy(before);p={'appendOnlyTables':['public.audit','public.activations']}

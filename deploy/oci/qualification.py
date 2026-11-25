@@ -105,6 +105,47 @@ def closed_runtime(inspect):
     if 'IAM_AUTOMATION_HOLD=1' not in env or 'IAM_DEMO_SEED_MODE=never' not in env or host['RestartPolicy']['Name'] not in ['no','none']:raise ValueError('closed recovery hold/seed/restart mismatch')
     if 'ALL' not in (host.get('CapDrop') or []) or host.get('CapAdd') or host.get('Privileged') or not any(x.startswith('no-new-privileges') for x in host.get('SecurityOpt',[])):raise ValueError('closed recovery capabilities mismatch')
 
+def held_running_baseline(container,image,evidence,policy_path,data_dir,lock_bindings,prove_closed):
+    """Fresh current-epoch baseline only, never a substitute for original preservation.
+    Caller supplies the fixed closed-runtime verifier, both actual held locks and
+    a new evidence directory. No stop/start, smoke, auth or environment mutation.
+    """
+    import fcntl,stat
+    def locks():
+        if not isinstance(lock_bindings,dict) or set(lock_bindings)!={'journal','updater'}:raise ValueError('both actual held locks required')
+        for path,fd in lock_bindings.values():
+            a=os.fstat(fd);p=Path(path);b=p.lstat()
+            if p.is_symlink() or not stat.S_ISREG(a.st_mode) or (a.st_dev,a.st_ino)!=(b.st_dev,b.st_ino):raise ValueError('held baseline lock inode differs')
+            with p.open('a') as other:
+                try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError:pass
+                else:raise ValueError('held baseline exclusive lock absent')
+    locks();p=policy_load(policy_path)
+    if p.get('requireAutomationHold') is not True:raise ValueError('held baseline policy required')
+    policy_raw=Path(policy_path).read_bytes();evidence=Path(evidence)
+    if evidence.exists():raise ValueError('new held baseline directory required')
+    prove_closed()
+    def identity():
+        x=json.loads(cmd(['docker','inspect',container]))[0];closed_runtime(x)
+        if x['Config']['Image']!=image or x['State'].get('Running') is not True or not x.get('Id'):raise ValueError('held baseline exact running image required')
+        return {k:x[k] for k in ('Id','RestartCount')}
+    first=identity();source=Path(__file__).with_name('qualification-container.mjs').read_text()
+    def capture():
+        state=json.loads(cmd(['docker','exec','-i',container,'node','--input-type=module','-e',source,'capture'],json.dumps({**p,'running':True,'baoToken':Path(p['baoTokenFile']).read_text().strip()})))
+        ledger=Path(data_dir)/'migrations/journal.json'
+        state.update(migrationLedger=json.loads(ledger.read_text()) if ledger.exists() else None,credentials=credential_hashes(Path(data_dir),p),postgres=postgres(p),transportCoverage='TLS_EXPECTED_ORIGINS',image=image,policyHash=digest(policy_raw))
+        return state
+    before=capture();after=capture()
+    if before!=after or identity()!=first:raise ValueError('held baseline stores or runtime moving')
+    prove_closed();locks()
+    if Path(policy_path).read_bytes()!=policy_raw:raise ValueError('held baseline policy changed')
+    evidence.mkdir(mode=0o700,parents=False,exist_ok=False)
+    private_json(evidence/'before.json',before)
+    proof={'kind':'held-running-current-epoch','container':first,'policyHash':digest(policy_raw),'beforeSHA256':digest((evidence/'before.json').read_bytes()),'originalPreservationReplaced':False,'smokeExecuted':False,'requiresSeparateOriginalPreservationBridge':True}
+    private_json(evidence/'baseline-proof.json',proof)
+    return proof
+
+
 def main():
     stage('policy-load');parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)

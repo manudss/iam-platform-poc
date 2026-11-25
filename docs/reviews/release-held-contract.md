@@ -51,3 +51,10 @@ The final normal service must restore DNS/HTTPS authentication and the existing 
 ## Capture order after restored adoption
 
 A fresh direct held qualification includes authenticated smoke, which can add session/audit activity. Complete that qualification and adoption first. Then capture the live backlog for review, close/prove both access gates, recapture with the app still held, and compare before stopping. A qualification or rotation after the reviewed capture invalidates that capture and requires recapture. A prior baseline that predates the NATS rotation is not silently accepted if the strict preservation comparator refuses it. Regenerate a coherent baseline under the operator's controlled held procedure and retain both prior evidence sets.
+
+
+## Running-held baseline preparation
+
+Do not stop the current FIFO-held app solely to satisfy qualification.py --phase before. A normal docker start cannot safely release that FIFO. A new held_running_baseline helper now exists as a non-CLI preparation primitive: both actual journal/updater locks, fixed caller gate/confinement proof, requireAutomationHold policy, same container/restart count, two exact store captures, no smoke and no start/stop. It refuses moving stores, existing evidence directories and policy changes, and writes a distinct current-epoch before.json plus proof. It does not replace initial preservation evidence or establish that postrotation changes were allowed.
+
+This helper is NOT YET WIRED to adoption. Adoption still requires the original reviewed opening verifier, receipt/config inventory and before/after policy hashes. A separately executed preservation bridge from original evidence to the postrotation epoch, plus new E5 policy with reviewed origin coverage and exact installed closed config inventory, must be implemented/reviewed before this helper can be used for the new direct smoke. Merely rewriting hashes or rotating the baseline is forbidden. The operator must not stop held or execute this unfinished preparation on the host.
