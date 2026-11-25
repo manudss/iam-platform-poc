@@ -91,7 +91,8 @@ def execute(a,host_fixture=False,checkpoint=None):
   app=json.loads(run(['docker','inspect',cfg['container']]))[0];created.append(app['Id'])
   if app['State']['Running'] or app['Config']['Cmd']!=['-c',n.GUARD]:raise ValueError('fixture app was not stopped at FIFO')
   if list(data.iterdir()):raise ValueError('app data changed before FIFO')
-  result={'format':1,'result':'pre-fifo-network-qualified','app_started':False,'stage':'complete','image':a.image,'source_sha':a.source_sha,'normal_controller_sha256':hashlib.sha256(Path(n.__file__).read_bytes()).hexdigest(),'probe_runs':3,'stores':'empty fixture data and fake TCP PG/Bao only','limitation':'No release, full app, real stores, boot or production qualification'}
+  observations=result.get('positive_probe_observations',[])
+  result={'positive_probe_observations':observations,'format':1,'result':'pre-fifo-network-qualified','app_started':False,'stage':'complete','image':a.image,'source_sha':a.source_sha,'normal_controller_sha256':hashlib.sha256(Path(n.__file__).read_bytes()).hexdigest(),'probe_runs':3,'stores':'empty fixture data and fake TCP PG/Bao only','limitation':'No release, full app, real stores, boot or production qualification'}
  except Exception as error:
   result['stage']=stage
   known=('normal launcher command refused; inspect private diagnostics','exact FIFO image command differs','runtime security or network option differs','network topology differs','companion alias/IP differs','normal namespace probes failed','unexpected preexisting filter policy','actual runtime env differs from reviewed bytes','dedicated deny probe lacks actual rejection','verified DNS/TLS probe failed','IPv6 inactivity not proved','UDP/ICMP rejection not established','live capability proof failed')
