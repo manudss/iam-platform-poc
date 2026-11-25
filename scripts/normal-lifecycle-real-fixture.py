@@ -98,6 +98,13 @@ def main():
    checker=root/'fixture-check.py'
    checker.write_text("#!/usr/bin/python3\nimport sys,subprocess,json\nfrom pathlib import Path\na=sys.argv;get=lambda k:a[a.index(k)+1];phase=get('--phase');x=json.loads(subprocess.check_output(['docker','inspect',get('--container')]))[0];assert Path(get('--barrier-file')).is_file();assert x['State']['Running'] is (phase=='after')\n")
    checker.chmod(0o700)
+   full_qualification='--full-qualification' in __import__('sys').argv
+   if full_qualification:
+    token=root/'bao-token';token.write_text('synthetic-fixture-only');token.chmod(0o600)
+    auth=root/'auth.json';auth.write_text(json.dumps({'username':'demo-alice','password':'demo-only-not-a-secret'}));auth.chmod(0o600)
+    docker('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN=synthetic-fixture-only',bao,'bao','kv','put','secret/iam/qualification','value=synthetic')
+    policy=root/'qualification.json';policy.write_text(json.dumps({'format':1,'isolatedLoopbackTest':True,'requireAutomationHold':False,'origins':['http://127.0.0.1:18089'],'issuer':'http://127.0.0.1:18089/core','tenant':'acme-demo','network':nets[0],'pgContainer':pg,'pgUser':'lyam','pgDatabase':'lyam','baoAddress':'http://172.27.0.11:8200','baoTokenFile':str(token),'baoMetadataRoots':['secret/metadata/iam'],'authFile':str(auth),'credentialFiles':['core-state/credentials.json','core-state/iam-poc-account-blocks.json','core-state/iam-poc-authn-enrollments.json','core-state/iam-poc-password-history.json'],'appendOnlyTables':['public.activations','public.decision_audit'],'transformationVerifiers':{}}));policy.chmod(0o600)
+    checker.write_text('#!/bin/sh\nexec python3 '+str(code/'qualification.py')+' --isolated-loopback-test --policy '+str(policy)+' "$@"\n')
    settings={'LYAM_CONTAINER':app,'LYAM_DATA_DIR':str(data),'LYAM_BACKUP_DIR':str(backup),'LYAM_PORT':'18088','LYAM_LOCK_FILE':str(lock),'LYAM_PAUSE_FILE':str(root/'PAUSE'),'LYAM_FRONT_BARRIER_FILE':str(gate),'LYAM_NORMAL_RUNTIME':str(profile),'LYAM_NORMAL_RUNTIME_SHA256':hashlib.sha256(profile.read_bytes()).hexdigest(),'LYAM_NORMAL_LIFECYCLE_SHA256':hashlib.sha256((code/'normal-lifecycle.py').read_bytes()).hexdigest(),'LYAM_NORMAL_LAUNCHER_SHA256':hashlib.sha256((code/'normal-runtime.py').read_bytes()).hexdigest(),'LYAM_POST_UPDATE_CHECK':str(checker),'LYAM_HEALTH_TIMEOUT':'120'}
    values=dict(line.split('=',1) for line in env.read_text().splitlines());values.update(settings);values['IAM_PUBLIC_ORIGIN']='http://127.0.0.1:18089';env.write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
    shim=root/'fixture-bin';shim.mkdir(mode=0o700);docker_cli=shutil.which('docker')
@@ -113,7 +120,7 @@ def main():
     if len(records)!=1:raise ValueError('actual lifecycle completion missing')
     names=docker('ps','-a','--format','{{.Names}}').splitlines()
     owned.extend(name for name in names if name.startswith(app+'-preserved-'))
-    result.update(update_shell_exercised=True,updater_cold_data_archives=1,updater_completed_attempts=1,updater_front_reopened=True,updater_qualification='fixture ordering/stopped-before/running-after checker only; NOT full qualification/OIDC',updater_same_image=True)
+    result.update(update_shell_exercised=True,updater_cold_data_archives=1,updater_completed_attempts=1,updater_front_reopened=True,updater_qualification='fixture ordering/stopped-before/running-after checker only; NOT full qualification/OIDC',updater_same_image=True,full_qualification_exercised=full_qualification)
    finally:front.shutdown();front.server_close()
   count=docker('exec',pg,'psql','-U','lyam','-d','lyam','-Atc','SELECT count(*) FROM lifecycle_fixture;')
   if count!='2':raise ValueError('PG continuity differs')
