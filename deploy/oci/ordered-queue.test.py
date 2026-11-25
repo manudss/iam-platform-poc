@@ -185,4 +185,21 @@ class Recovery(unittest.TestCase):
   m=self.manifest();m['expected_delivered']={'sha':S(4),'digest':D(4)};m['chain']=[{'sha':S(5),'parent':S(4),'outcome':'replaced'},{'sha':S(6),'parent':S(5),'outcome':'delivered'}];m['target']={'sha':S(6),'digest':D(6)};m['qualification']={**m['target'],'evidence_refs':['new target attestation']}
   s=self.recover(m);self.assertEqual(len(s['recoveries']),2);self.assertEqual(s['recoveries'][0]['original_unresolved']['failed'],self.state['failed']);self.assertEqual(s['recovery_fence'],S(6));self.assertTrue(s['resume_required']);self.assertEqual([e['sha'] for e in s['history']],[S(1),S(4),S(6)])
 
+class FailureDiagnostic(unittest.TestCase):
+ def test_only_bounded_types_modules_lines(self):
+  import json
+  try:exec(compile('raise ValueError("private-token-value")','/private/directory/held-update-host.py','exec'))
+  except Exception as error:diag=q.failure_diagnostic(error)
+  self.assertEqual(diag,{'exceptionType':'ValueError','sourceFrames':[{'module':'held-update-host','line':1}]})
+  self.assertNotIn('private',json.dumps(diag));self.assertNotIn('token',json.dumps(diag))
+  try:exec(compile('raise LookupError("private")','/private/unknown.py','exec'))
+  except Exception as error:diag=q.failure_diagnostic(error)
+  self.assertEqual(diag,{'exceptionType':'Other','sourceFrames':[]})
+ def test_trace_is_capped(self):
+  scope={};exec(compile('def f(n):\n if n: return f(n-1)\n raise RuntimeError("private")','/private/ordered-queue.py','exec'),scope)
+  try:scope['f'](30)
+  except Exception as error:diag=q.failure_diagnostic(error)
+  self.assertEqual(len(diag['sourceFrames']),16)
+  self.assertTrue(all(0<f['line']<1000000 for f in diag['sourceFrames']))
+
 if __name__=='__main__':unittest.main()

@@ -24,6 +24,17 @@ def failure_details(stderr):
  if code:result['commandFailure']={'category':code[1],'returnCode':int(code[2]),'reason':code[3]}
  return result
 
+def docker_setup_failure(args,p):
+ # Fixed categories only. Never publish the Docker response, command arguments, URLs or names.
+ if len(args)<2 or args[:2]!=['docker','run']:return None
+ text=p.stderr.lower()
+ groups=[('DISK_FULL',('no space left on device',)),('RATE_LIMIT',('toomanyrequests','pull rate limit')),('PULL_ACCESS_DENIED',('pull access denied','requested access to the resource is denied','unauthorized: authentication required')),('NAME_CONFLICT',('is already in use by container',)),('DAEMON_UNAVAILABLE',('cannot connect to the docker daemon','error during connect:')),('NETWORK',('network is unreachable','i/o timeout','tls handshake timeout','temporary failure in name resolution','no such host'))]
+ reason=next((code for code,needles in groups if any(n in text for n in needles)),'UNCLASSIFIED')
+ return {'category':'DOCKER_RUN_SETUP','reason':reason,'returnCode':p.returncode,'stdoutPresent':bool(p.stdout),'stderrPresent':bool(p.stderr)}
+
+def timeout_details(error,extension,context):
+ return {'expired':isinstance(error,subprocess.TimeoutExpired),'seconds':error.timeout if isinstance(error,subprocess.TimeoutExpired) and type(error.timeout) in (int,float) else None,'deliveryExtension':bool(isinstance(error,subprocess.TimeoutExpired) and extension and error.cmd==['python3',extension,str(context)])}
+
 def a_delivery_command(args):
  return len(args)>1 and args[0]=='python3' and pathlib.Path(args[1]).name=='delivery-docker-integration.py'
 
@@ -31,6 +42,8 @@ def call(args,check=True):
  p=subprocess.run(args,text=True,capture_output=True,timeout=1200 if a_delivery_command(args) else 300)
  if check and p.returncode:
   COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,**failure_details(p.stderr))
+  setup=docker_setup_failure(args,p)
+  if setup is not None:COMMAND_DIAGNOSTIC['dockerSetupFailure']=setup
   raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
  return p
 
@@ -74,7 +87,7 @@ def main():
  p=argparse.ArgumentParser()
  for arg in ['image','helper','preflight','launcher','out']:p.add_argument('--'+arg,required=True)
  p.add_argument('--delivery-extension')
- p.add_argument('--delivery-scenario', choices=['fresh','upgrade'])
+ p.add_argument('--delivery-scenario', choices=['fresh','upgrade','held-update'])
  p.add_argument('--baseline-image')
  p.add_argument('--pg-image',default='postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
  p.add_argument('--bao-image',default='openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315')
@@ -197,7 +210,7 @@ def main():
   def ipv6shape(x):return {'interfaces':x['interfaces'],'addresses':sorted(x['addresses'].splitlines()),'routes':sorted(' '.join(l.split()[:5]+l.split()[-1:]) for l in x['routes'].splitlines())}
   if ipv6shape(postipv6)!=ipv6shape(launch['ipv6State']):raise ValueError('IPv6 state changed after AppModule')
   if a.delivery_extension:
-   context={'scenario':'fresh','root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(proofpath),'image':a.image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}
+   context={'scenario':a.delivery_scenario,'root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(proofpath),'image':a.image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}
    context_path=root/'delivery-context.json';context_path.write_text(json.dumps(context));context_path.chmod(0o600)
    call(['python3',a.delivery_extension,str(context_path)])
    return
@@ -220,7 +233,8 @@ def main():
     state=inspect(name)['State']
     states.append({'running':state['Running'],'exitCode':state['ExitCode'],'status':state['Status'],'oomKilled':state.get('OOMKilled')})
    except Exception:states.append({'unavailable':True})
-  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'gatewayFamily':gateway_family,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
+  timeout_summary=timeout_details(error,a.delivery_extension,root/'delivery-context.json')
+  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'timeout':timeout_summary,'ipv6Mode':a.ipv6_mode,'gatewayFamily':gateway_family,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
   raise
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)

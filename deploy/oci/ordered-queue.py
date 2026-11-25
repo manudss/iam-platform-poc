@@ -2,7 +2,7 @@
 """Durable ordered deployment journal. Root-owned, preinstalled operator trust boundary.
 Never fetched from an unqualified commit by an automatic deploy. No network credentials.
 """
-import hashlib, argparse, fcntl, json, os, re, subprocess, sys, tempfile, datetime
+import time, hashlib, argparse, fcntl, json, os, re, subprocess, sys, tempfile, datetime
 from pathlib import Path
 SHA = re.compile(r'^[a-f0-9]{40}$')
 DIGEST = re.compile(r'^sha256:[a-f0-9]{64}$')
@@ -270,6 +270,206 @@ def open_reviewed_ui_held(path,manifest,repository,container,verify=verify_sourc
         state['opening_intent']=intent;atomic(path,state)
         raise
 
+def check_held_update(state,manifest,*,pause_present):
+    """Pure preconditions + exact N-commit first-parent chain for a held->held update.
+    Does not execute anything. authorization_ref is an operator attestation only."""
+    if state.get('format')!=3 or state['history'][-1].get('mode')!='ui-open-automation-held' or state['history'][-1].get('automation_held') is not True:
+        raise ValueError('format 3 held UI state required')
+    if state.get('opening_intent') or state.get('pending') or state.get('failed') or state.get('resume_required') is not True or not pause_present:
+        raise ValueError('resolved held state with pause and resume barrier required')
+    base=state['history'][-1]['sha']
+    if state.get('recovery_fence')!=base: raise ValueError('fence/cursor mismatch')
+    checked_manifest(state,manifest,'reviewed-held-update')
+    chain=manifest.get('chain')
+    if not isinstance(chain,list) or not 1<=len(chain)<=256: raise ValueError('bounded held update chain required')
+    parent=base;seen={base};confirmed={e['sha'] for e in state['history']}
+    for e in chain:
+        if not {'sha','parent','digest'}<=set(e)<={'sha','parent','digest','qualification'} or not SHA.fullmatch(e['sha']) or not DIGEST.fullmatch(e['digest']) or e['parent']!=parent or e['sha'] in seen|confirmed:
+            raise ValueError('gap, duplicate or unqualified held update chain')
+        seen.add(e['sha']);parent=e['sha']
+    if manifest.get('target')!=chain[-1]: raise ValueError('target must be the last chain entry')
+    return chain
+
+PROTECTED=lambda st:not(st.st_uid or st.st_gid or st.st_mode&0o022)  # tests may replace; production keeps root-only
+
+def bound_module(spec,filename,name):
+    import importlib.util
+    path=Path(__file__).with_name(filename).absolute()
+    if not isinstance(spec,dict) or set(spec)!={'path','sha256'}:raise ValueError(name+' binding required')
+    for parent in [path]+list(path.parents):
+        st=parent.lstat()
+        if parent.is_symlink() or not PROTECTED(st):raise ValueError('protected installed '+name+' required')
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=spec['sha256'] or spec.get('path')!=str(path):raise ValueError(name+' changed or not at fixed installed path')
+    module_spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
+    return module
+
+HOOK_PHASES=re.compile(r'closed-step-\d{1,3}-(running|qualified|updater-spawned)|ops-gate-created|opening')
+HOOK_PROTECT=lambda st:not(st.st_uid or st.st_gid or st.st_mode&0o022)   # isolated runner dir must be root-owned, not group/world writable; tests may replace
+PRODUCTION_STATE='/opt/lyam/deploy-queue/state.json'
+def phase_hook_from(manifest,state_path):
+    """Test-only deterministic suspension point, inert by default. Narrow claim: it is enabled ONLY by a 'phase_hook' key in the reviewed,
+    hash-bound manifest (never environment or argv), refuses any alias of the production state file (resolved path AND device/inode), and
+    requires a hook directory whose WHOLE ancestry is real and protected. It does NOT prove the host is disposable; the isolation of the
+    runner stays an external fact. Handshake is fresh: before any intent, no reached/release trace may exist for the configured phases.
+    After a phase is durably persisted it writes <dir>/<phase>.reached (exclusive, no-follow; pid, phase, engagement, random nonce) and waits
+    for <dir>/<phase>.release, a protected regular file whose content equals the reached text exactly. Timeout RAISES. Returns a callable or None."""
+    cfg=manifest.get('phase_hook')
+    if cfg is None:return None
+    if not isinstance(cfg,dict) or set(cfg)!={'dir','phases','timeout'} or type(cfg['timeout']) not in (int,float) or not 1<=cfg['timeout']<=120 or not isinstance(cfg['phases'],list) or not cfg['phases'] or not all(isinstance(x,str) and HOOK_PHASES.fullmatch(x) for x in cfg['phases']) or len(set(cfg['phases']))!=len(cfg['phases']):
+        raise ValueError('invalid phase_hook')
+    sp=Path(state_path).absolute();prod=Path(PRODUCTION_STATE)
+    if '..' in sp.parts or str(sp.resolve())==PRODUCTION_STATE or str(sp)==PRODUCTION_STATE:raise ValueError('phase_hook refused on the production state path')
+    if prod.exists() and sp.exists() and os.path.samefile(sp,prod):raise ValueError('phase_hook refused on an alias of the production state file')
+    if any(str(x).startswith(PRODUCTION_STATE.rsplit('/',1)[0]) for x in (sp,sp.resolve())):raise ValueError('phase_hook refused inside the production queue directory')
+    d=Path(cfg['dir'])
+    if not d.is_absolute() or '..' in d.parts:raise ValueError('phase_hook directory must be absolute without dot segments')
+    for anc in [d]+list(d.parents):
+        st=anc.lstat()
+        if anc.is_symlink() or not anc.is_dir() or not HOOK_PROTECT(st):raise ValueError('phase_hook directory ancestry must be real and protected')
+    sent=d/'ISOLATED_HARNESS'
+    want=hashlib.sha256(('%s\n%s'%(sp,manifest.get('engagement_id'))).encode()).hexdigest()
+    if sent.is_symlink() or not sent.is_file() or not HOOK_PROTECT(sent.lstat()) or sent.read_text().strip()!=want:raise ValueError('phase_hook sentinel must bind this state path and engagement')
+    phases=set(cfg['phases']);timeout=float(cfg['timeout'])
+    for ph in phases:
+        for suffix in ('.reached','.release'):
+            if os.path.lexists(d/(ph+suffix)):raise ValueError('stale phase_hook trace refused before any intent: '+ph+suffix)
+    engagement=manifest.get('engagement_id')
+    def hook(phase):
+        if phase not in phases:return
+        flag=d/(phase+'.reached');text=json.dumps({'pid':os.getpid(),'phase':phase,'engagement_id':engagement,'nonce':os.urandom(16).hex()},sort_keys=True)
+        fd=os.open(flag,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'w') as f:f.write(text);f.flush();os.fsync(f.fileno())
+        end=time.monotonic()+timeout;rel=d/(phase+'.release')
+        while True:
+            if os.path.lexists(rel):
+                if rel.is_symlink() or not rel.is_file() or not HOOK_PROTECT(rel.lstat()) or rel.read_text()!=text:raise ValueError('phase_hook release is not the fresh protected echo of the reached marker')
+                return
+            if time.monotonic()>end:raise ValueError('phase_hook release timeout at '+phase)
+            time.sleep(.05)
+    return hook
+
+def held_update(path,manifest,repository,container,make_host,lock_fd,verify=verify_source_chain,observe=observe_running,controller=None,qualify=verify_qualification_receipt,hook=None):
+    """Sequential closed steps (one successor each, backup/qualification per step), accesses stay
+    closed between steps, then ONE reviewed UIHELD opening. History records each successor with its
+    true mode. Interruption or failure retains the intent; nothing is replayed or rolled back."""
+    import copy
+    if not isinstance(manifest.get('engagement_id'),str) or not re.fullmatch(r'[A-Za-z0-9._-]{8,64}',manifest['engagement_id']):raise ValueError('bounded engagement_id required in the reviewed manifest')
+    state=load(path);chain=check_held_update(state,manifest,pause_present=True)
+    base=state['history'][-1]['sha'];verify(repository,base,chain)
+    for e in chain:qualify(e.get('qualification'),e)  # prior CI qualification of EACH commit; distinct from the real closed qualification per step
+    hook=hook or phase_hook_from(manifest,path)   # configuration refusals happen BEFORE any intent or gate exists
+    host=make_host(manifest);host.preflight(container,state['history'][-1])
+    c=controller or opening_controller(manifest)
+    original_state=copy.deepcopy(state)
+    at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+    planned=host.plan_ops_gate('lyam-held-update-ops:%d:%s'%(os.getpid(),at))  # closure plan exists from the very first intent
+    intent={'queue':queue_identity(),'phase':'held-update-prepared','at':at,'manifest':copy.deepcopy(manifest),'gates':[planned],'container':container,'target':copy.deepcopy(chain[-1]),'steps':[],'original_fingerprint':fingerprint(state)}
+    state['opening_intent']=intent;state['format']=3;atomic(path,state)
+    def spawned(i,measure):
+        """Called by the host right after the updater child exists and before waiting for it: durable identity plus the measured state."""
+        intent['updater_child']={'identity':measure.get('identity'),'step':i,'measured':{'state':measure.get('state'),'fd8_is_lock':measure.get('fd8_is_lock')}}
+        persist('closed-step-%d-updater-spawned'%i)
+    if hasattr(host,'on_spawn'):host.on_spawn=spawned
+    def persist(phase):
+        intent['phase']=phase;intent['gates']=host.snapshot_gates();atomic(path,state)
+        if hook:hook(phase)   # after durable persistence; inert unless the reviewed manifest enables it in an isolated context
+    try:
+        intent['phase']='ops-gate-planned';atomic(path,state)  # exact bytes durable BEFORE creation
+        host.create_ops_gate();persist('ops-gate-created')
+        adopt=None
+        for i,entry in enumerate(chain):
+            persist('closed-step-%d-running'%i)
+            fields,receipt_path=(host.closed_step(entry,adopt,i,lock_fd,len(chain)) if getattr(host,'step_configs',None) is not None else host.closed_step(entry,adopt,i,lock_fd))
+            obs=observe(container,entry)
+            intent['steps'].append({'sha':entry['sha'],'parent':entry['parent'],'digest':entry['digest'],'receipt':fields,'receipt_path':receipt_path,'observed_running':obs,'config':(host.installed_configs[-1] if getattr(host,'step_configs',None) is not None else None)})
+            adopt=(fields,receipt_path);intent['updater_child']=None;persist('closed-step-%d-qualified'%i)
+        persist('opening')
+        last=intent['steps'][-1]
+        final=host.opening_manifest(manifest,last['receipt'],last['receipt_path'],intent['steps'][0]['receipt'])
+        target=chain[-1]
+        result=c.open_gates(final,container,target)
+        if result.get('mode')!='ui-open-automation-held' or result.get('public_status')!=200 or result.get('automation_held') is not True or result.get('pause_retained') is not True:raise ValueError('held UI opening proof incomplete')
+        observation=observe(container,target)
+        now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for i,st in enumerate(intent['steps']):
+            entry=chain[i];final_step=i==len(chain)-1
+            state['history'].append({'sha':entry['sha'],'digest':entry['digest'],'at':now,'automation_held':True,
+                'mode':'ui-open-automation-held' if final_step else 'closed-qualified-held','access':'open-ui-held' if final_step else 'closed'})
+        state.setdefault('recoveries',[]).append({'kind':'reviewed-held-update','at':now,'target':copy.deepcopy(target),'chain':copy.deepcopy(chain),'steps':copy.deepcopy(intent['steps']),'opening':copy.deepcopy(result),'observed_running':observation,'manifest':copy.deepcopy(manifest),'prior_fingerprint':intent['original_fingerprint']})
+        state.update(recovery_fence=target['sha'],resume_required=True)
+        state.setdefault('opening_audits',[]).append({**intent,'phase':'ui-open-automation-held','proof':result})
+        del state['opening_intent'];atomic(path,state)
+        return state
+    except BaseException:
+        try:
+            intent['gates']=intent['gates'] or host.snapshot_gates()
+            c.close_gates(intent)
+            if hasattr(c,'verify_closed_access'):c.verify_closed_access({'opening':manifest.get('opening_static')})
+            intent['phase']='failed-access-rearmed'
+        except BaseException:
+            intent['phase']='failed-access-unknown'
+            try:
+                if hasattr(c,'stop_candidate'):c.stop_candidate(container)
+            except BaseException:intent['stop_candidate_failed']=True
+        state=original_state;state['format']=3
+        state['opening_intent']=intent;atomic(path,state)
+        raise
+
+def queue_identity(pid=None):
+    pid=pid or os.getpid()
+    stat=Path('/proc/%d/stat'%pid).read_text()
+    rest=stat[stat.rindex(')')+2:].split()
+    return {'pid':pid,'starttime':rest[19],'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
+
+def queue_state(identity):
+    """'alive' | 'absent' | 'unknown'. Only certain absence is 'absent': a different kernel boot, ENOENT for the
+    pid, or the exact identity as a zombie. A reused pid, a bad schema or any read error is 'unknown'."""
+    if not isinstance(identity,dict) or set(identity)!={'pid','starttime','boot_id'} or type(identity['pid']) is not int or identity['pid']<2 \
+       or not isinstance(identity['starttime'],str) or not identity['starttime'].isdigit() or not isinstance(identity['boot_id'],str) or not identity['boot_id']:
+        return 'unknown'
+    try:boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    except OSError:return 'unknown'
+    if boot!=identity['boot_id']:return 'unknown'  # other boot = other identity, not inferred dead
+    try:stat=Path('/proc/%d/stat'%identity['pid']).read_text()
+    except FileNotFoundError:return 'absent'
+    except OSError:return 'unknown'
+    try:rest=stat[stat.rindex(')')+2:].split();state,start=rest[0],rest[19]
+    except (ValueError,IndexError):return 'unknown'
+    if start!=identity['starttime']:return 'unknown'
+    return 'absent' if state in ('Z','X') else 'alive'
+
+def queue_alive(identity):return queue_state(identity)=='alive'
+
+HELD_PHASES=('held-update-prepared','ops-gate-planned','ops-gate-created','closed-step-','opening')
+
+def rearm_held_update(path,controller=None,state_of=queue_state):
+    """Close access after an interrupted held-update. Proceeds only if the recorded queue identity is
+    CERTAINLY absent (pid+starttime+boot id); alive/unknown refuse. Called under both locks, state and
+    phase are re-read before mutation. Closure AND its measurement (503 on every reviewed origin) are one
+    guarded unit with a durable outcome; any failure is recorded as failed-access-unknown."""
+    state=load(path);intent=state.get('opening_intent')
+    if not intent or not str(intent.get('phase','')).startswith(HELD_PHASES):raise ValueError('no interrupted held-update intent')
+    if state_of(intent.get('queue'))!='absent':raise ValueError('queue identity alive or not certainly absent; no rearm')
+    uc=intent.get('updater_child')
+    if uc is not None and state_of((uc or {}).get('identity') if isinstance(uc,dict) else None)!='absent':raise ValueError('updater child alive or not certainly absent; no rearm')
+    c=controller or opening_controller(intent['manifest'])
+    view=intent.get('closing_view') or {'opening':intent['manifest']['opening_static']}
+    again=load(path)
+    if again!=state or state_of(intent.get('queue'))!='absent':raise ValueError('state or queue identity changed before rearm')
+    try:
+        c.close_gates(intent)
+        if hasattr(c,'verify_closed_access'):c.verify_closed_access(view)
+    except BaseException as error:
+        intent['phase']='failed-access-unknown';intent['rearm_error']=type(error).__name__
+        try:
+            if hasattr(c,'stop_candidate'):c.stop_candidate(intent['container'])
+        except BaseException:
+            intent['rearm_stop_failed']=True
+        atomic(path,state)
+        raise
+    intent['phase']='interrupted-access-rearmed';atomic(path,state)
+    return state
+
 def rearm_interrupted_opening(path):
     state=load(path);intent=state.get('opening_intent')
     if not intent:raise ValueError('no interrupted opening')
@@ -279,7 +479,7 @@ def rearm_interrupted_opening(path):
     return state
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','rearm-interrupted-opening'])
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening'])
     p.add_argument('--state',default='/opt/lyam/deploy-queue/state.json');p.add_argument('--sha');p.add_argument('--digest')
     p.add_argument('--pause-file',default='/opt/lyam/UPDATE_PAUSED');p.add_argument('--update-lock',default='/opt/lyam/.update.lock')
     p.add_argument('--repository');p.add_argument('--container')
@@ -299,10 +499,10 @@ def main():
         if a.command=='initialize-reviewed':
             if path.exists() or not SHA.fullmatch(a.sha or '') or not DIGEST.fullmatch(a.digest or ''): raise ValueError('explicit verified initial SHA/digest required, never overwrite')
             atomic(path,{'format':1,'history':[{'sha':a.sha,'digest':a.digest}]});return
-        if a.command in ['record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','rearm-interrupted-opening']:
+        if a.command in ['record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening']:
             if not pause.is_file(): raise ValueError('operator must retain the deployment pause during journal review')
             if not Path(a.update_lock).is_file(): raise ValueError('existing configured updater lock required')
-            manifest={} if a.command=='rearm-interrupted-opening' else json.load(sys.stdin)
+            manifest={} if a.command in ['rearm-interrupted-opening','rearm-held-update'] else json.load(sys.stdin)
             with open(a.update_lock,'a') as updater_lock:
                 fcntl.flock(updater_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 if a.command in ['record-reviewed-recovery','record-reviewed-in-place']:
@@ -316,6 +516,17 @@ def main():
                     if Path(env.get('LYAM_LOCK_FILE','/opt/lyam/.update.lock'))!=Path(a.update_lock) or Path(env.get('LYAM_PAUSE_FILE','/opt/lyam/UPDATE_PAUSED'))!=pause:raise ValueError('configured lock/pause mismatch')
                     open_reviewed_ui_held(path,manifest,a.repository,a.container,controller=controller)
                     print('UI open, automation held; pause and explicit resume barrier retained; not full delivery')
+                elif a.command=='held-update-reviewed':
+                    if not a.repository:raise ValueError('reviewed repository required')
+                    controller=opening_controller(manifest);env=controller.settings({'opening':manifest['opening_static']})
+                    if Path(env.get('LYAM_LOCK_FILE','/opt/lyam/.update.lock'))!=Path(a.update_lock) or Path(env.get('LYAM_PAUSE_FILE','/opt/lyam/UPDATE_PAUSED'))!=pause:raise ValueError('configured lock/pause mismatch')
+                    if manifest.get('updater',{}).get('path')!=str(Path(a.updater).absolute()):raise ValueError('updater path must equal the reviewed updater binding')
+                    hm=bound_module(manifest.get('held_host'),'held-update-host.py','held host')
+                    held_update(path,manifest,a.repository,a.container,lambda m:hm.Host(m['opening_static']['env']['path'],a.updater,m['receipt_dir'],a.update_lock,updater_sha256=m.get('updater',{}).get('sha256'),step_configs=m.get('step_configs')),updater_lock.fileno(),controller=controller)
+                    print('Held update journaled: all successors qualified closed, one UI-held opening; pause, resume barrier and hold retained')
+                elif a.command=='rearm-held-update':
+                    rearm_held_update(path)
+                    print('Access rearmed and measured closed; uncertain writes not reversed; review remains required')
                 elif a.command=='rearm-interrupted-opening':
                     rearm_interrupted_opening(path)
                     print('Access rearmed; uncertain writes not reversed; review remains required')
@@ -328,6 +539,20 @@ def main():
         plan=json.load(sys.stdin);deploy(path,plan,a.updater)
         print('ordered deployment plan confirmed')
 
+def failure_diagnostic(error):
+    """Bounded enums and line numbers, never exception messages, paths or private values."""
+    import traceback
+    allowed={'ordered-queue','held-update-host','held-update-durable','reviewed-ui-held'}
+    kind=type(error).__name__
+    if kind not in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','TypeError','KeyError','TimeoutError','TimeoutExpired','JSONDecodeError'}:kind='Other'
+    frames=[]
+    for frame in traceback.extract_tb(error.__traceback__):
+        module=Path(frame.filename).stem
+        if module in allowed and 0<frame.lineno<1000000:frames.append({'module':module,'line':frame.lineno})
+    return {'exceptionType':kind,'sourceFrames':frames[-16:]}
+
 if __name__=='__main__':
     try: main()
-    except Exception as e: print('OCI ordered queue refused: '+str(e),file=sys.stderr);sys.exit(1)
+    except Exception as e:
+        print('QUEUE_DIAG_V1 '+json.dumps(failure_diagnostic(e),sort_keys=True),file=sys.stderr)
+        print('OCI ordered queue refused: '+str(e),file=sys.stderr);sys.exit(1)

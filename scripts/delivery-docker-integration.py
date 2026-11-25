@@ -216,11 +216,17 @@ value=json.loads(Path(sys.argv[1]).read_text())
 r=subprocess.run(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',sys.argv[2],'bao','operator','unseal',value['unseal_keys_b64'][0]],capture_output=True)
 raise SystemExit(r.returncode)
 ''')
+        # Reviewed companion evidence must live under protected installed ancestry, not the runner-owned checkout.
+        companion_evidence=owned/'companion-evidence';companion_evidence.mkdir(mode=0o700)
+        for name in ['bao.hcl','bao-policy.hcl']:
+            src=source/'deploy/oci/companions'/name;dst=companion_evidence/name
+            shutil.copyfile(src,dst);dst.chmod(0o600)
+            if sha(src)!=sha(dst):raise RuntimeError('companion-evidence-copy-mismatch')
         settings.update({'LYAM_BACKUP_BAO_DIR':str(root/'bao-storage'),
                          'LYAM_BACKUP_BAO_CONTAINER':c['bao'],
                          'LYAM_BACKUP_BAO_KEYS_DIR':str(root/'bao-keys'),
-                         'LYAM_BAO_CONFIG_FILE':str(source/'deploy/oci/companions/bao.hcl'),
-                         'LYAM_BAO_POLICY_FILE':str(source/'deploy/oci/companions/bao-policy.hcl'),
+                         'LYAM_BAO_CONFIG_FILE':str(companion_evidence/'bao.hcl'),
+                         'LYAM_BAO_POLICY_FILE':str(companion_evidence/'bao-policy.hcl'),
                          'LYAM_BAO_UNSEAL_CMD':'python3 '+str(unseal)+' '+str(root/'bao-keys/init.json')+' '+c['bao']})
         # Include actual companion definitions, not invented empty placeholder files.
         (root / 'companions.env').write_text('PG_PASSWORD=synthetic-ci-only\n')
@@ -254,11 +260,20 @@ raise SystemExit(r.returncode)
         env.write_text(''.join(k + '=' + v + '\n' for k, v in settings.items()))
         # Reconfigure the running fresh image, or start the actual old image on its original volume.
         stage='restart-baseline-with-companions'
-        docker('rm', '-f', c['app'])
-        current = c.get('baselineImage') or c['image']
-        docker('run', '-d', '--name', c['app'], '--network', c['network'], '--restart', 'no',
+        if c['scenario'] != 'held-update':   # held-update keeps the closed-helper-launched baseline (the real UIHELD-equivalent runtime)
+          docker('rm', '-f', c['app'])
+          current = c.get('baselineImage') or c['image']
+        if c['scenario'] != 'held-update': docker('run', '-d', '--name', c['app'], '--network', c['network'], '--restart', 'no',
                '-p', '127.0.0.1:18089:8080', '-v', c['data'] + ':/data', '--env-file', str(env),
                '-e', 'IAM_DEMO_SEED_MODE=never', current)
+        if c['scenario']=='held-update':
+            # The initial closed helper boot predates the fixture TLS origin/env.
+            # Relaunch through the real confinement helper, never a plain docker run.
+            docker('stop',c['app']);docker('rm',c['app'])
+            config['ledgerSHA256']=sha(Path(c['data'])/'migrations/journal.json')
+            configpath.write_text(json.dumps(config))
+            helper_args=['--image',c['image'],'--container',c['app'],'--env-file',str(env),'--data-dir',c['data'],'--port','18089']
+            run([c['wrappers']['preflight'],*helper_args]);run([c['wrappers']['launcher'],*helper_args])
         stage='baseline-edge-health'
         health(c['app'])
         # Ensure TLS is genuinely verified, with no ignore-certificate option.
@@ -285,10 +300,18 @@ raise SystemExit(r.returncode)
                        'expected origin/form refused':'oidc-form-refused'}
         matches=[code for literal,code in smoke_reasons.items() if literal in warm.stderr]
         result['prebaselineSmokeReason']=matches[-1] if matches else 'unclassified'
+        known_stages={'smoke-hold','smoke-health','smoke-workflows-before','smoke-auth-input','smoke-oidc-form','smoke-oidc-login','smoke-oidc-token','smoke-oidc-session','smoke-activations','smoke-activations-validation','smoke-negative-redirect','smoke-workflows-after','smoke-ledger'}
+        result['prebaselineSmokeStage']=next((stage for stage in known_stages if 'QUALIFICATION_DIAG_V1:'+stage+'\n' in warm.stderr),'unclassified')
 
         if warm.returncode:
             raise RuntimeError('candidate-qualifier-smoke-refused')
-        if c['scenario'] == 'fresh':
+        if c['scenario'] == 'held-update':
+            stage = 'held-update-chain'
+            held = load_module(source / 'scripts/held-update-scenario.py', 'held_update_scenario')
+            held.run({'c': c, 'root': root, 'out': out, 'bindir': bindir, 'gates': gates, 'origin': origin, 'env': env, 'source': source,
+                      'result': result, 'run': run, 'docker': docker, 'load_module': load_module, 'health': health,
+                      'pol': pol, 'policy': policy, 'configpath': Path(c['config']), 'config': json.loads(Path(c['config']).read_text())})
+        elif c['scenario'] == 'fresh':
             stage='native-browser-trust'
             run(['mkdir','-p','/root/.pki/nssdb'])
             run(['certutil','-N','--empty-password','-d','sql:/root/.pki/nssdb'],False)
@@ -434,11 +457,17 @@ raise SystemExit(r.returncode)
         # Only our fixed errors, not external stderr, paths, tokens, or environment.
         result['errorType'] = type(error).__name__
         result['commandFailure']=COMMAND_FAILURE
-        if str(error) in {'candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
+        if str(error) in {'prequalification-updater-refused','prequalification-receipt-mismatch','prequalification-index-mismatch','prequalification-index-incomplete','prequalification-evidence-mismatch','prequalification-preservation-changed','tampered-qualification-accepted','missing-qualification-accepted','supervision-not-ready','supervision-process-did-not-exit','clean-run-contract-failed','history-modes-wrong','kill-phase-never-reached','200-before-opening-after-kill','cursor-advanced-after-interruption','unexpected-watchdog-category','origin-not-503-after-rearm','four distinct fixture images required','baseline image must be fixture image 0','candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
                           'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused',
                           'held-fixture-invalid', 'held-deploy-not-refused', 'held-resume-not-refused',
                           'held-status-not-refused', 'held-queue-mutated', 'unknown-format-not-refused'}:
             result['reason'] = str(error)
+        # Scenario errors are fixed literals authored in this source tree, never raw subprocess text.
+        if c['scenario']=='held-update':
+            import ast
+            tree=ast.parse((source/'scripts/held-update-scenario.py').read_text())
+            allowed={n.exc.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Raise) and isinstance(n.exc,ast.Call) and n.exc.args and isinstance(n.exc.args[0],ast.Constant) and isinstance(n.exc.args[0].value,str)}
+            if str(error) in allowed:result['heldScenarioReason']=str(error)
         raise
     finally:
         stopped = run(['docker', 'rm', '-f', caddy], False)
