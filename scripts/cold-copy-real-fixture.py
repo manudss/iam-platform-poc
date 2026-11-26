@@ -200,6 +200,12 @@ def main():
                      "const b=new AuditService();await b.list('acme-demo');"
                      "await a.onModuleDestroy();await b.onModuleDestroy();")
         docker('exec',dolt,'node','--input-type=module','-e',seed_native)
+        # Safe actual-image evidence before any shutdown experiment.
+        inspection="""const f=require('fs'),c=require('crypto');const out={sourceHashes:{},processes:[]};for(const path of ['/app/demo/start.sh','/app/demo/server.mjs'])out.sourceHashes[path]=c.createHash('sha256').update(f.readFileSync(path)).digest('hex');for(const n of f.readdirSync('/proc').filter(x=>/^[0-9]+$/.test(x))){try{const cmd=f.readFileSync('/proc/'+n+'/cmdline','utf8').split('\\0').filter(Boolean),stat=f.readFileSync('/proc/'+n+'/stat','utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');let role='unknown';if(cmd.includes('/app/demo/server.mjs'))role='edge';else if(cmd.includes('sql-server'))role='dolt';else if(cmd.some(x=>x.endsWith('nats-server')))role='nats';else if(cmd.includes('/app/iam-core'))role='core';else if(cmd.includes('dist/main.js'))role='api';else if(cmd.some(x=>x.endsWith('/web/server/server.mjs')))role='ssr';else if(cmd[0]==='sh'||cmd[0]==='/bin/sh')role='shell';else if(cmd[0]==='sleep')role='sleep';else if(cmd.includes('-e'))role='inspection';out.processes.push({pid:+n,ppid:+fields[1],state:fields[0],start:fields[19],role});}catch{}}console.log(JSON.stringify(out))"""
+        result['actual_image_inspection']=json.loads(docker('exec',dolt,'node','-e',inspection))
+        expected_hashes={'/app/demo/start.sh':'a3e24bcb8d4983b4ba5a86f819d917be358aec587bc0c12adc9a2caa8359429d','/app/demo/server.mjs':'1c502ba4616c43c69b397bd33ba467a10568f8b99412f5fb9e018ceed5932c36'}
+        result['actual_image_source_equivalence']=result['actual_image_inspection']['sourceHashes']==expected_hashes
+        if not result['actual_image_source_equivalence']:raise ValueError('image source bytes differ from Git revision')
         # Execute the HOST capture adapter itself on actual fictional stores.
         # Locks are real; fixed host TLS/gates are NOT tested on this runner.
         result['stage']='host-capture'
