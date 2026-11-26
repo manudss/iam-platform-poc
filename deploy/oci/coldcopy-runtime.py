@@ -162,6 +162,10 @@ def launch(c,before_effects):
    for proto in ('tcp','udp'):nscmd('iptables','-t','raw','-A','OUTPUT','-p',proto,'--dport','53','-j','DROP')
    hosts="require('fs').appendFileSync('/etc/hosts',"+json.dumps('\n'+c['pg']['ip']+' pg\n'+c['bao']['ip']+' bao\n')+")"
    call(['docker','exec',cid,'node','-e',hosts])
+   # Dolt CLI emits usage telemetry even for inventory SQL. Disable it in
+   # the disposable copy before any app/qualifier commands, keep DNS denied.
+   telemetry="const f=require('fs'),p=require('path').join(require('os').homedir(),'.dolt');f.mkdirSync(p,{recursive:true});const file=p+'/config_global.json';const c=f.existsSync(file)?JSON.parse(f.readFileSync(file,'utf8')):{};c['metrics.disabled']='true';f.writeFileSync(file,JSON.stringify(c),{mode:0o600})"
+   call(['docker','exec',cid,'node','-e',telemetry])
   exact={tool:nscmd(tool,'-S') for tool in ('iptables','ip6tables')}
   image_env=dict(v.split('=',1) for v in image['Config'].get('Env',[]));expected={**image_env,**env}
   if 'IAM_AUTOMATION_HOLD' in expected:raise ValueError('image must not bake HOLD')

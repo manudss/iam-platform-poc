@@ -1,7 +1,7 @@
 // Executed inside an isolated helper container (capture) or candidate (smoke).
 // Private auth and Bao tokens never leave this process or appear in stdout.
 import {execFileSync} from 'node:child_process';
-import {readFileSync,cpSync,mkdtempSync,existsSync} from 'node:fs';
+import {readFileSync,cpSync,mkdtempSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {createHash,randomBytes} from 'node:crypto';
 const hash=x=>createHash('sha256').update(x).digest('hex');
 let diagnosticStage='init';
@@ -36,6 +36,7 @@ function dolt(){
  // Offline Dolt may create global state under HOME even for read-only SQL.
  // Keep that state on helper tmpfs, never on the read-only image or source mount.
  const queryEnv=p.running?process.env:{...process.env,HOME:mkdtempSync('/tmp/qualification-home-')};
+ if(!p.running){mkdirSync(queryEnv.HOME+'/.dolt',{recursive:true});writeFileSync(queryEnv.HOME+'/.dolt/config_global.json',JSON.stringify({'metrics.disabled':'true'}),{mode:0o600});}
  const query=(db,sql)=>{try{const r0=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,env:queryEnv,encoding:'utf8',maxBuffer:64*1024*1024}));const r=r0&&typeof r0==='object'&&!Array.isArray(r0)&&Object.keys(r0).length===0?{rows:[]}:r0;   // dolt prints {} for a strictly empty result (compat fix shared with the producer)
  if(!r||!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;}catch(e){const kinds=['SHOW DATABASES','SELECT name, hash','SELECT DOLT_HASHOF_DB','SELECT DATABASE()','SHOW FULL TABLES','SHOW FULL COLUMNS','SHOW CREATE VIEW','SHOW KEYS','SHOW CREATE TABLE','SELECT DOLT_HASHOF_TABLE','SELECT COUNT(*)','SELECT * FROM dolt_schemas','SELECT * FROM dolt_procedures','SELECT table_name'];const diagnosticText=String(e?.stderr||'')+' '+String(e?.stdout||'')+' '+String(e?.message||'');const failurePatterns=[/read.only file system/i,/permission denied|EACCES|EPERM/i,/no space left|ENOSPC/i,/operation not permitted/i,/lock|another server/i,/failed to map|executable|noexec/i,/not found|ENOENT/i,/configuration|config.*directory|home directory/i,/connection refused/i,/runtime|panic|fatal error/i];console.error('DOLT_ERROR_MASK_V1:'+failurePatterns.reduce((n,r,i)=>n+(r.test(diagnosticText)?2**i:0),0));console.error('DOLT_THREAD_FAILURE_V1:'+(String(e?.stderr||'').includes('pthread_create failed')?1:0));console.error('DOLT_QUERY_KIND_V1:'+kinds.findIndex(k=>sql.startsWith(k)));throw e;}};
  const dbs=query('','SHOW DATABASES').map(r=>Object.values(r)[0]).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
