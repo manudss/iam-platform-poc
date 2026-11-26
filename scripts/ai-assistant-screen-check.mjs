@@ -41,8 +41,11 @@ window.fetch = async (url, init = {}) => {
   if (u.endsWith('/ai/conversations') && m === 'GET') return json({ conversations: [{ id: 'cv-aaaaaaaaaaaa', title: 'Accountant role', autoApproveWrites: false }] });
   if (u.includes('/conversations/cv-aaaaaaaaaaaa/chat')) {
     const sent = JSON.parse(init.body); window.__sent = sent;
+    if (sent.message.parts?.[0]?.text === 'fail stream') return { status: 200, ok: true, headers: new Headers({ 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' }), body: sse([{ type: 'error', errorText: 'Synthetic stream failure' }]) };
     return { status: 200, ok: true, headers: new Headers({ 'content-type': 'text/event-stream', 'x-vercel-ai-ui-message-stream': 'v1' }), body: sse([
       { type: 'start', messageId: 'a3' }, { type: 'start-step' },
+      { type: 'tool-input-available', toolCallId: 'read1', toolName: 'list_users', input: {}, dynamic: true },
+      { type: 'tool-output-available', toolCallId: 'read1', output: { count: 13 }, dynamic: true },
       { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'Done: nothing else to change.' }, { type: 'text-end', id: 't1' },
       { type: 'finish-step' }, { type: 'finish' }]) };
   }
@@ -65,7 +68,7 @@ checks.poisonShownAsText = el.querySelector('.call pre').textContent.includes('o
 checks.noMergeButton = !/merge|apply/i.test([...el.querySelectorAll('button')].map((b) => b.textContent).join(' '));
 checks.modelsListed = el.querySelectorAll('#ai-model-table tbody tr').length === 2;
 window.__shot = true; await wait(50);
-if (location.hash === '#approve') { const box = el.querySelector('[name=aimsg]'); box.value = 'thanks'; el.querySelector('#ai-send').click(); await wait(300); checks.sentOnlyLast = window.__sent?.message?.role === 'user' && Object.keys(window.__sent).join() === 'message'; checks.finalAnswer = el.textContent.includes('Done: nothing else to change.'); }
+if (location.hash === '#approve') { const box = el.querySelector('[name=aimsg]'); box.value = 'thanks'; el.querySelector('#ai-send').click(); await wait(300); checks.sentOnlyLast = window.__sent?.message?.role === 'user' && Object.keys(window.__sent).join() === 'message'; checks.finalAnswer = el.textContent.includes('Done: nothing else to change.'); checks.readyAfterAnswer = el._chat.status === 'ready' && !el.querySelector('#ai-send').disabled && !el.textContent.includes('Working...'); const again = el.querySelector('[name=aimsg]'); again.value = 'one more'; el.querySelector('#ai-send').click(); await wait(300); checks.secondMessage = window.__sent?.message?.parts?.[0]?.text === 'one more' && !el.querySelector('#ai-send').disabled; checks.toolRoundTrip = el.textContent.includes('list_users') && el.textContent.includes('13'); el.querySelector('[name=aimsg]').value = 'fail stream'; el.querySelector('#ai-send').click(); await wait(300); checks.errorRecovery = el._chat.status === 'error' && el.textContent.includes('Synthetic stream failure') && !el.querySelector('#ai-send').disabled && !el.textContent.includes('Working...'); window.__shotAfter = true; }
 document.getElementById('result').textContent = JSON.stringify(checks); document.title = 'ready';
 </script></body></html>`;
 
@@ -81,6 +84,6 @@ const dom = spawnSync(chrome, ['--headless=new', '--no-sandbox', '--disable-gpu'
 const m = /<pre id="result"[^>]*>([^<]*)<\/pre>/.exec(dom.stdout ?? '');
 const checks = m ? JSON.parse(m[1].replace(/&quot;/g, '"')) : null;
 console.log(JSON.stringify(checks));
-const want = ['toolCalls', 'refusalShown', 'sendEnabled', 'noApprovalUi', 'noInjectedElement', 'poisonShownAsText', 'noMergeButton', 'modelsListed', 'sentOnlyLast', 'finalAnswer'];
+const want = ['toolCalls', 'refusalShown', 'sendEnabled', 'noApprovalUi', 'noInjectedElement', 'poisonShownAsText', 'noMergeButton', 'modelsListed', 'sentOnlyLast', 'finalAnswer', 'readyAfterAnswer', 'secondMessage', 'toolRoundTrip', 'errorRecovery'];
 for (const k of want) if (!checks?.[k]) { console.error('FAILED check:', k); failed++; }
 process.exit(failed ? 1 : 0);

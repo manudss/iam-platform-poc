@@ -20,6 +20,7 @@ jobs:
         run: |
           npm ci --prefix scripts/ai-assistant-ui
           node scripts/ai-assistant-ui/build.mjs --check
+          node scripts/ai-assistant-screen-check.mjs /tmp/ai-floating-shots/screen-state
           npm run build --prefix apps/web
           node scripts/floating-ssr-check.mjs
           node scripts/ai-floating-check.mjs /tmp/ai-floating-shots

@@ -9,12 +9,16 @@ import { AbstractChat, DefaultChatTransport } from 'ai';
 
 /** The minimal (framework-free) ChatState the SDK's AbstractChat asks for: the screen re-renders on every change. */
 class ScreenChatState {
-  constructor(messages, onChange) { this.messages = messages; this.status = 'ready'; this.error = undefined; this.onChange = onChange; }
+  constructor(messages, onChange) { this.messages = messages; this._status = 'ready'; this._error = undefined; this.onChange = onChange; }
+  // AbstractChat writes state.status/error directly; it does not call a state.setStatus hook.
+  get status() { return this._status; }
+  set status(value) { this._status = value; this.onChange(); }
+  get error() { return this._error; }
+  set error(value) { this._error = value; this.onChange(); }
   pushMessage = (m) => { this.messages = [...this.messages, m]; this.onChange(); };
   popMessage = () => { this.messages = this.messages.slice(0, -1); this.onChange(); };
   replaceMessage = (i, m) => { this.messages = this.messages.map((x, j) => (j === i ? m : x)); this.onChange(); };
   snapshot = (v) => JSON.parse(JSON.stringify(v));
-  setStatus(status, error) { this.status = status; this.error = error; this.onChange(); }
 }
 class ScreenChat extends AbstractChat {
   constructor(init, onChange) {
