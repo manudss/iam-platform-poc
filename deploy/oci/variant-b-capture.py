@@ -14,9 +14,9 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
  for role,name in [('app',dolt),('pg',pg),('bao',bao)]:
      observed=json.loads(docker('inspect',name))[0]
      if observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['Image']!=iid[role] or not observed['State']['Running']:raise ValueError('all three running identities/restart policies required before signals')
-     identities[role]={'id':observed['Id'],'name':name,'image_id':iid[role],'restart_count':observed['RestartCount'],'restart_policy':'no','mounts':observed['Mounts']}
+     identities[role]={'id':observed['Id'],'name':name,'image_id':iid[role],'image':{'app':IMAGE,'pg':PG_IMAGE,'bao':BAO_IMAGE}[role],'restart_count':observed['RestartCount'],'restart_policy':'no','mounts':observed['Mounts']}
  capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':identities,
-   'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[]}
+   'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[],'code_directory':str(codedir),'evidence_root':str(root),'archive_root':str(arch),'quiescence':{'profile':'external-bao-v1','pg_user':'lyam','pg_database':'lyam','nats_log_relative':'nats.log'}}
  handles=[];bindings={}
  for role in ('journal','updater'):
      lp=Path('/root')/(eng+'-'+role+'.lock');lp.touch(mode=0o600);fh=lp.open('rb');fcntl.flock(fh,fcntl.LOCK_EX|fcntl.LOCK_NB);handles.append(fh);bindings[role]=(str(lp),fh.fileno())
@@ -30,13 +30,31 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
          mounts=[v for v in capture_spec['identities'][role]['mounts'] if v['Destination']==destination and v['Type']=='bind']
          if len(mounts)!=1 or Path(mounts[0]['Source']).resolve(strict=True)!=source.resolve(strict=True):raise ValueError('exact source mount differs')
      capture.assert_single_writer_sources(capture_spec,allowed_ids=[capture_spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
-     return _quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run,capture,capture_spec,retained_handles)
+     return capture_spec_bound(result,capture_spec,capture,{'docker':docker,'run':run,'write_new':write_new,'sha':sha,'load':load},retained_handles)
  finally:
      for fh in handles:fh.close()
      for fd in retained_handles.values():os.close(fd)
 
-def _quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run,capture,capture_spec,retained_handles):
- if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam-recovery').exists():raise ValueError('DEV runner only')
+def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
+ """Internal fixed external-bao-v1 path. Caller holds source locks and closed gates.
+ No authority grant or CLI; Host preflight stays disabled. No restart changes.
+ """
+ codedir=Path(spec['code_directory']);root=Path(spec['evidence_root']);arch=Path(spec['archive_root']);eng=spec['engagement_id']
+ docker=dependencies['docker'];run=dependencies['run'];write_new=dependencies['write_new'];sha=dependencies['sha'];load=dependencies['load']
+ capture_spec=spec
+ dolt=spec['identities']['app']['id'];pg=spec['identities']['pg']['id'];bao=spec['identities']['bao']['id']
+ homes={r:Path(spec['stores'][r]['path']) for r in ('dolt','pg','bao')}
+ PG_IMAGE=spec['identities']['pg']['image']
+ if spec['quiescence']['profile']!='external-bao-v1':raise ValueError('unsupported fixed process profile')
+ capture.locks();capture.close_access()
+ capture.assert_single_writer_sources(spec,allowed_ids=[spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
+ for role in ('app','pg','bao'):
+     expected=spec['identities'][role];observed=json.loads(docker('inspect',expected['id']))[0]
+     if observed['Id']!=expected['id'] or observed['Image']!=expected['image_id'] or observed['RestartCount']!=expected['restart_count'] or observed['Mounts']!=expected['mounts'] or observed['HostConfig']['RestartPolicy']['Name']!='no' or not observed['State']['Running']:raise ValueError('source identities before first signal differ')
+     store='dolt' if role=='app' else role
+     destination={'app':'/data','pg':'/var/lib/postgresql/data','bao':'/bao/file'}[role]
+     mounts=[v for v in observed['Mounts'] if v['Destination']==destination and v['Type']=='bind']
+     if len(mounts)!=1 or Path(mounts[0]['Source']).resolve(strict=True)!=homes[store].resolve(strict=True):raise ValueError('spec source mount mismatch')
  # DEV-only exit-observation experiment, deliberately no backup claim.
  result['stage']='dev-process-exit-experiment'
  original_inspect=json.loads(docker('inspect',dolt))[0]
@@ -50,11 +68,14 @@ def _quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMA
      capture.locks()
      for expected in capture_spec['identities'].values():
          observed=json.loads(docker('inspect',expected['id']))[0]
-         if observed['Id']!=expected['id'] or observed['Image']!=expected['image_id'] or observed['RestartCount']!=expected['restart_count'] or observed['Mounts']!=expected['mounts'] or observed['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('bound source identity moved at boundary')
+         changed=[k for k in ('id','image','restart','mounts','policy') if {'id':observed['Id']!=expected['id'],'image':observed['Image']!=expected['image_id'],'restart':observed['RestartCount']!=expected['restart_count'],'mounts':observed['Mounts']!=expected['mounts'],'policy':observed['HostConfig']['RestartPolicy']['Name']!='no'}[k]]
+         if changed:
+             result['identity_boundary_failure']={'role':next(r for r,v in capture_spec['identities'].items() if v['id']==expected['id']),'fields':changed,'mounts_expected':expected['mounts'],'mounts_observed':observed['Mounts']}
+             raise ValueError('bound source identity moved at boundary')
      write_new(evidence/('%03d.json'%len(probe_events)),event);probe_events.append(event)
  try:
      current=json.loads(docker('inspect',capture_spec['identities']['app']['id']))[0]
-     result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint,retain_handles=retained_handles)
+     result['dev_exit_probe']=probe.observe_bound_profile(current['State']['Pid'],checkpoint,retain_handles=retained_handles)
      # Independent network observation in the same app namespace.
      network_probe="""import json;from pathlib import Path
 out={}
@@ -78,11 +99,11 @@ print(json.dumps(out,sort_keys=True))"""
      if Path('/proc',str(current['State']['Pid']),'net/tcp6').read_text().count(' 0A '):raise ValueError('unexpected IPv6 listener')
      result['dev_residual_listeners_bound']=listeners
      checkpoint({'phase':'dev-network-store-quiet','observation':network,'residual_listeners':listeners})
-     clients=int(docker('exec',capture_spec['identities']['pg']['id'],'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()"))
+     clients=int(docker('exec',capture_spec['identities']['pg']['id'],'psql','-X','-A','-t','-U',spec['quiescence']['pg_user'],'-d',spec['quiescence']['pg_database'],'-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()"))
      result['dev_pg_remaining_remote_clients']=clients
      if clients:raise ValueError('PG remote client remains')
      checkpoint({'phase':'dev-pg-no-app-clients','count':clients})
-     nats_log=(src/'data/nats.log').read_text()
+     nats_log=(homes['dolt']/spec['quiescence']['nats_log_relative']).read_text()
      nats_hostpid=next(p for p,v in result['dev_exit_probe']['records'].items() if v['role']=='nats')
      nats_nspid=result['dev_exit_probe']['records'][nats_hostpid].get('namespace_pid')
      result['dev_nats_shutdown_log_confirmed']=bool(nats_nspid and re.search(r'(?m)^\['+str(nats_nspid)+r'\].*Server Exiting',nats_log))
@@ -142,14 +163,14 @@ print(json.dumps(out,sort_keys=True))"""
  # Flush each mounted filesystem, no claim of business multi-store atomicity.
  libc=ctypes.CDLL(None,use_errno=True)
  syncfs_results=[]
- for directory in (src/'data',src/'pg-data',src/'bao-storage'):
+ for directory in (homes['dolt'],homes['pg'],homes['bao']):
      fd=os.open(directory,os.O_RDONLY)
      try:
          if libc.syncfs(fd)!=0:raise OSError(ctypes.get_errno(),'syncfs refused')
          syncfs_results.append({'path':str(directory),'success':True})
      finally:os.close(fd)
- app_before=hostmod.inventory(src/'data')
- receipt={'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(src/d),sort_keys=True).encode()).hexdigest() for r,d in [('app','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'checkout_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
+ app_before=hostmod.inventory(homes['dolt'])
+ receipt={'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(homes[r]),sort_keys=True).encode()).hexdigest() for r,d in [('dolt','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'checkout_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(homes['dolt']),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
  result['dev_variant_b_receipt']=receipt
  receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
  if receipt_path.read_bytes()!=json.dumps(receipt,sort_keys=True).encode() or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
@@ -169,10 +190,10 @@ print(json.dumps(out,sort_keys=True))"""
  result['dev_envelope_exit']={k:envelope[k] for k in ('Running','ExitCode','OOMKilled')}
  if result['dev_envelope_exit']!={'Running':False,'ExitCode':137,'OOMKilled':False}:raise ValueError('unexpected envelope exit')
  if any(int(v) for f in Path(scan_b['cgroup_path']).rglob('cgroup.procs') for v in f.read_text().split()):raise ValueError('cgroup not empty after envelope')
- app_after=hostmod.inventory(src/'data')
+ app_after=hostmod.inventory(homes['dolt'])
  result['dev_app_home_identical_after_envelope']=app_before==app_after
  if app_before!=app_after:raise ValueError('app home bytes changed after envelope')
- lock_path=src/'data/.boot.lock';lock_stat=lock_path.stat();boot_lock=lock_path.open('rb');fcntl.flock(boot_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ lock_path=homes['dolt']/'.boot.lock';lock_stat=lock_path.stat();boot_lock=lock_path.open('rb');fcntl.flock(boot_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
  if (os.fstat(boot_lock.fileno()).st_dev,os.fstat(boot_lock.fileno()).st_ino)!=(lock_stat.st_dev,lock_stat.st_ino):raise ValueError('boot lock inode changed')
  result['dev_variant_b_receipt_sha256']=receipt_sha
  result['dev_boot_lock_same_inode_held']=True
@@ -180,7 +201,7 @@ print(json.dumps(out,sort_keys=True))"""
  # Execute the HOST capture adapter itself on actual fictional stores.
  # Locks are real; fixed host TLS/gates are NOT tested on this runner.
  result['stage']='host-capture'
- dolt_stat=(src/'data').lstat()
+ dolt_stat=(homes['dolt']).lstat()
  ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}
  hostmod=load(codedir/'current-baseline-host.py','capture_host')
  try:
@@ -197,7 +218,7 @@ print(json.dumps(out,sort_keys=True))"""
      boot_lock.close()
  result['host_archive_stage_actual']=True;result['host_capture_actual']=False;result['host_gates_tested']=False;result['dev_variant_b_capture_actual']=True
  result['host_capture_checkpoint']=bool(list(arch.glob('current-baseline-*/capture-complete.json')))
- ledger=src/'data'/'migrations'/'journal.json'
+ ledger=homes['dolt']/'migrations'/'journal.json'
  ledger_binding={'present':ledger.is_file(),'sha256':(sha(ledger) if ledger.is_file() else None)}
  result['migration_ledger_present']=ledger_binding['present']
  archives=baseline['archives']
@@ -205,7 +226,7 @@ print(json.dumps(out,sort_keys=True))"""
  # never run pg_controldata or Dolt tools on original source directories.
  pg_control_root=root/'pg-control-copy';pg_control_root.mkdir(mode=0o700)
  with tarfile.open(archives['pg']['path'],'r:gz') as t:t.extractall(pg_control_root,filter='data')
- control=docker('run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--entrypoint','pg_controldata','-v',str(pg_control_root/'pg-data')+':/verify:ro',PG_IMAGE,'/verify')
+ control=docker('run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--entrypoint','pg_controldata','-v',str(pg_control_root/homes['pg'].name)+':/verify:ro',PG_IMAGE,'/verify')
  result['dev_pg_copy_control_shut_down']=bool(re.search(r'Database cluster state:\s+shut down\s*$',control,re.M))
  if not result['dev_pg_copy_control_shut_down']:raise ValueError('PG copy control not shut down')
  shutil.rmtree(pg_control_root)

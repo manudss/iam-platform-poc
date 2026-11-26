@@ -57,6 +57,10 @@ def experiment(init,checkpoint,timeout=30,retain_handles=None):
  No process is resumed, retried, or KILLed here. Any mismatch refuses.
  """
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable GitHub runner only')
+ return observe_bound_profile(init,checkpoint,timeout,retain_handles)
+
+def observe_bound_profile(init,checkpoint,timeout=30,retain_handles=None):
+ """Physical external-bao-v1 primitive. Caller owns gates/locks/spec validation."""
  records,roles=scan(init);handles={};events=[]
  try:
   for pid in records:handles[pid]=os.pidfd_open(pid,0)

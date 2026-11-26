@@ -15,4 +15,11 @@ class Tests(unittest.TestCase):
   with patch.object(m.os,'geteuid',return_value=1000):
    with self.assertRaisesRegex(ValueError,'DEV runner'):
     m.quiesce_archive({},None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None)
+ def test_spec_unknown_profile_before_any_signal(self):
+  from types import SimpleNamespace
+  effects=[]
+  spec={'code_directory':'/code','evidence_root':'/proof','archive_root':'/archives','engagement_id':'e','identities':{r:{'id':r,'image':'image'} for r in ('app','pg','bao')},'stores':{r:{'path':'/'+r} for r in ('dolt','pg','bao')},'quiescence':{'profile':'wrong'}}
+  with self.assertRaisesRegex(ValueError,'profile'):
+   m.capture_spec_bound({},spec,SimpleNamespace(locks=lambda:effects.append('lock')),dict(docker=lambda *a:effects.append(a),run=None,write_new=None,sha=None,load=None),{})
+  self.assertEqual(effects,[])
 if __name__=='__main__':unittest.main()
