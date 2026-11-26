@@ -78,6 +78,13 @@ def experiment(init,checkpoint,timeout=30):
    if role in ('nats','dolt') and stopped['exit_raw']!=0:raise ValueError('store process exit not zero: '+role)
    event={'role':role,'pid':pid,'start':stopped['start'],'state':stopped['state'],'exit_raw':stopped['exit_raw'],'clean_exit_zero':stopped['exit_raw']==0,'application_drain_claimed':False}
    checkpoint({'phase':'dev-process-exit-observed',**event});events.append(event)
+  # No active userspace writers remain in this exact cgroup. Zombies are not
+  # executing; envelope and respawn shells must still be stopped, never resumed.
+  for pid in records:
+   state=same(pid)['state']
+   expected='T' if pid in [init,*roles['supervisor']] else 'Z'
+   if state!=expected:raise ValueError('unexpected final process state')
+  checkpoint({'phase':'dev-all-processes-nonexecuting','active_writers':0,'remaining_envelope_and_supervisors':'stopped'})
   proof={'kind':'DEV-process-exit-experiment','events':events,'writers_quiesced':False,'envelope_terminated':False,'application_drain_claimed':False,'capture_qualified':False,'limitation':'Exit observation only; no file/TCP/inflight/PG/Bao durability or envelope termination proof'}
   checkpoint(proof);return proof
  finally:

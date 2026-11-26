@@ -224,6 +224,26 @@ def main():
         try:
             current=json.loads(docker('inspect',dolt))[0]
             result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint)
+            # Independent network observation in the same app namespace.
+            network_probe="""import json;from pathlib import Path
+out={}
+for name in ('tcp','tcp6'):
+ rows=[v.split() for v in Path('/proc/net/'+name).read_text().splitlines()[1:]];out[name]={'established':sum(v[3]=='01' for v in rows),'listeners':[int(v[1].split(':')[1],16) for v in rows if v[3]=='0A']}
+print(json.dumps(out,sort_keys=True))"""
+            network=json.loads(run(['nsenter','-t',str(current['State']['Pid']),'-n','/usr/bin/python3','-c',network_probe]))
+            result['dev_network_after_store_exits']=network
+            if any(v['established'] or any(port in (3000,3307,4222,8081) for port in v['listeners']) for v in network.values()):raise ValueError('active store connection/listener remains')
+            checkpoint({'phase':'dev-network-store-quiet','observation':network})
+            result['dev_companion_clean_exits']={}
+            for role,name in [('pg',pg),('bao',bao)]:
+                checkpoint({'phase':'dev-companion-stop-intent','role':role,'id':json.loads(docker('inspect',name))[0]['Id']})
+                docker('stop','-t','60',name)
+                state=json.loads(docker('inspect',name))[0]['State']
+                value={k:state[k] for k in ('Running','ExitCode','OOMKilled')};result['dev_companion_clean_exits'][role]=value
+                if value!={'Running':False,'ExitCode':0,'OOMKilled':False}:raise ValueError('DEV companion clean exit refused')
+                checkpoint({'phase':'dev-companion-clean-exit','role':role,'state':value})
+            result['dev_all_store_processes_exited']=True
+            checkpoint({'phase':'dev-all-store-processes-exited','application_drain_claimed':False,'inflight_business_operations':'unknown','envelope_terminated':False})
         except BaseException as error:
             result['dev_exit_error_type']=type(error).__name__
             if str(error).startswith('unknown process in external-bao-v1: '):
@@ -239,7 +259,7 @@ def main():
         ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}
         hostmod=load(codedir/'current-baseline-host.py','capture_host')
         capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':{
-          role:{'id':ids[name],'name':name,'image_id':iid[role]} for role,name in [('app',dolt),('pg',pg),('bao',bao)]},
+          role:{'id':json.loads(docker('inspect',name))[0]['Id'],'name':name,'image_id':iid[role]} for role,name in [('app',dolt),('pg',pg),('bao',bao)]},
           'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[]}
         handles=[];bindings={}
         for role in ('journal','updater'):
