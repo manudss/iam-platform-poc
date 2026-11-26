@@ -10,8 +10,12 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
  original=json.loads(docker('inspect',dolt))[0]
  if original['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('restart policy must be no before any signal')
  hostmod=load(codedir/'current-baseline-host.py','capture_host')
- capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':{
-   role:{'id':json.loads(docker('inspect',name))[0]['Id'],'name':name,'image_id':iid[role],'restart_count':json.loads(docker('inspect',name))[0]['RestartCount'],'mounts':json.loads(docker('inspect',name))[0]['Mounts']} for role,name in [('app',dolt),('pg',pg),('bao',bao)]},
+ identities={}
+ for role,name in [('app',dolt),('pg',pg),('bao',bao)]:
+     observed=json.loads(docker('inspect',name))[0]
+     if observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['Image']!=iid[role] or not observed['State']['Running']:raise ValueError('all three running identities/restart policies required before signals')
+     identities[role]={'id':observed['Id'],'name':name,'image_id':iid[role],'restart_count':observed['RestartCount'],'restart_policy':'no','mounts':observed['Mounts']}
+ capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':identities,
    'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[]}
  handles=[];bindings={}
  for role in ('journal','updater'):
@@ -44,9 +48,12 @@ def _quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMA
  evidence=root/'dev-exit-events';evidence.mkdir(mode=0o700)
  def checkpoint(event):
      capture.locks()
+     for expected in capture_spec['identities'].values():
+         observed=json.loads(docker('inspect',expected['id']))[0]
+         if observed['Id']!=expected['id'] or observed['Image']!=expected['image_id'] or observed['RestartCount']!=expected['restart_count'] or observed['Mounts']!=expected['mounts'] or observed['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('bound source identity moved at boundary')
      write_new(evidence/('%03d.json'%len(probe_events)),event);probe_events.append(event)
  try:
-     current=json.loads(docker('inspect',dolt))[0]
+     current=json.loads(docker('inspect',capture_spec['identities']['app']['id']))[0]
      result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint,retain_handles=retained_handles)
      # Independent network observation in the same app namespace.
      network_probe="""import json;from pathlib import Path
@@ -71,12 +78,14 @@ print(json.dumps(out,sort_keys=True))"""
      if Path('/proc',str(current['State']['Pid']),'net/tcp6').read_text().count(' 0A '):raise ValueError('unexpected IPv6 listener')
      result['dev_residual_listeners_bound']=listeners
      checkpoint({'phase':'dev-network-store-quiet','observation':network,'residual_listeners':listeners})
-     clients=int(docker('exec',pg,'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()"))
+     clients=int(docker('exec',capture_spec['identities']['pg']['id'],'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()"))
      result['dev_pg_remaining_remote_clients']=clients
      if clients:raise ValueError('PG remote client remains')
      checkpoint({'phase':'dev-pg-no-app-clients','count':clients})
      nats_log=(src/'data/nats.log').read_text()
-     result['dev_nats_shutdown_log_confirmed']='Server Exiting' in nats_log
+     nats_hostpid=next(p for p,v in result['dev_exit_probe']['records'].items() if v['role']=='nats')
+     nats_nspid=result['dev_exit_probe']['records'][nats_hostpid].get('namespace_pid')
+     result['dev_nats_shutdown_log_confirmed']=bool(nats_nspid and re.search(r'(?m)^\['+str(nats_nspid)+r'\].*Server Exiting',nats_log))
      if not result['dev_nats_shutdown_log_confirmed']:raise ValueError('NATS shutdown marker absent')
      result['dev_companion_clean_exits']={}
      for role,name in [('pg',pg),('bao',bao)]:
@@ -140,7 +149,7 @@ print(json.dumps(out,sort_keys=True))"""
          syncfs_results.append({'path':str(directory),'success':True})
      finally:os.close(fd)
  app_before=hostmod.inventory(src/'data')
- receipt={'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(src/d),sort_keys=True).encode()).hexdigest() for r,d in [('app','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'code_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
+ receipt={'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(src/d),sort_keys=True).encode()).hexdigest() for r,d in [('app','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'checkout_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
  result['dev_variant_b_receipt']=receipt
  receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
  if receipt_path.read_bytes()!=json.dumps(receipt,sort_keys=True).encode() or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')

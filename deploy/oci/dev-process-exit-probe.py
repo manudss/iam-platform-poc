@@ -11,6 +11,9 @@ def stat(pid):
 
 def identity(pid):
  out=stat(pid);base=Path('/proc',str(pid))
+ nspid=[v for v in (base/'status').read_text().splitlines() if v.startswith('NSpid:')]
+ if len(nspid)!=1:raise ValueError('NSpid missing')
+ out['namespace_pid']=int(nspid[0].split()[-1])
  raw=(base/'cmdline').read_bytes();out.update(cmd_sha256=hashlib.sha256(raw).hexdigest(),exe=os.readlink(base/'exe'),pidns=os.stat(base/'ns/pid').st_ino)
  return out,raw.split(b'\0')
 
@@ -54,7 +57,12 @@ def experiment(init,checkpoint,timeout=30,retain_handles=None):
  No process is resumed, retried, or KILLed here. Any mismatch refuses.
  """
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable GitHub runner only')
- records,roles=scan(init);handles={pid:os.pidfd_open(pid,0) for pid in records};events=[]
+ records,roles=scan(init);handles={};events=[]
+ try:
+  for pid in records:handles[pid]=os.pidfd_open(pid,0)
+ except BaseException:
+  for fd in handles.values():os.close(fd)
+  raise
  def same(pid):
   now=stat(pid)
   if now['start']!=records[pid]['start']:raise ValueError('process identity changed')
