@@ -669,6 +669,26 @@ export class WorkflowStore {
     const m = await this.meta();
     try { const [r] = await m.query('select * from workflow_steps where run_id = ? and node_id = ?', [runId, nodeId]); const row = (r as Record<string, unknown>[])[0]; return row ? WorkflowStore.step(row) : null; } finally { await m.end(); }
   }
+  /** Atomic audited settlement, serialized with retry claims. Does not queue or execute anything. */
+  async reconcileJiraStep(tenant: string, runId: string, nodeId: string, decision: Record<string, unknown>, output: Record<string, unknown> | null): Promise<void> {
+    const work = this.transitionChain.then(async () => {
+      const m = await this.meta();
+      try {
+        await m.beginTransaction();
+        const [runs] = await m.query("select status from workflow_runs where id=? and tenant=?", [runId, tenant]);
+        const [steps] = await m.query("select status,error,log from workflow_steps where run_id=? and node_id=?", [runId,nodeId]);
+        const row = (steps as any[])[0];
+        if ((runs as any[])[0]?.status !== 'failed' || row?.status !== 'failed' || row?.error !== 'EXTERNAL_EFFECT_REVIEW_REQUIRED') throw new BadRequestException('Run or uncertain step changed; refresh before reconciliation');
+        const logs = typeof row.log === 'string' ? JSON.parse(row.log) : row.log ?? [];
+        const log = [...logs, 'JIRA_EFFECT_RECONCILED ' + JSON.stringify(decision)];
+        await m.query('update workflow_steps set status=?,error=?,output=?,log=? where run_id=? and node_id=?', [output?'done':'failed',output?null:'JIRA_EFFECT_CONFIRMED_NOT_CREATED',output?JSON.stringify(output):null,JSON.stringify(log),runId,nodeId]);
+        await m.commit();
+      } catch (e) { await m.rollback(); throw e; } finally { await m.end(); }
+    });
+    this.transitionChain = work.catch(() => undefined);
+    return work;
+  }
+
   async patchStep(runId: string, nodeId: string, patch: Partial<Pick<StepRow, 'status' | 'error' | 'log' | 'input' | 'output' | 'started_at' | 'finished_at'>> & { attempts?: number }): Promise<void> {
     const sets: string[] = [], vals: unknown[] = [];
     for (const k of ['status', 'error', 'started_at', 'finished_at', 'attempts'] as const) if (k in patch) { sets.push(`${k} = ?`); vals.push((patch as Record<string, unknown>)[k] ?? null); }

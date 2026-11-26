@@ -1,3 +1,4 @@
+import { WorkflowConnections } from './connections.js';
 import { assertAutomationAllowed } from '../automation/hold.js';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
@@ -23,7 +24,7 @@ export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
 export class WorkflowsService {
-  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly modules?: ModuleRef) {}
+  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly modules?: ModuleRef, @Optional() private readonly connections?: WorkflowConnections) {}
 
   private tasksWarned = false;
   /** The durable task service, resolved lazily (an import() type annotation emits Object metadata and Nest
@@ -402,6 +403,34 @@ export class WorkflowsService {
       throw e;
     }
     this.engine.kick(r.id);
+    return this.runView(tenant, r.id);
+  }
+
+  /** Explicit human reconciliation of ONE uncertain Jira-create step. Never starts execution. */
+  async reconcileJira(tenant: string, runId: unknown, nodeId: string, body: Record<string, unknown>, actor: unknown) {
+    assertAutomationAllowed();
+    if (body.confirm !== true || typeof actor !== 'string' || !actor || typeof body.evidence !== 'string' || body.evidence.trim().length < 20 || body.evidence.length > 1000) throw new BadRequestException('Explicit confirmation and provider evidence (20-1000 characters) required');
+    if (!['not-created', 'created'].includes(String(body.outcome))) throw new BadRequestException('Choose created or not-created');
+    const r = await this.store.getRun(tenant, this.checkId(runId, 'run id'));
+    if (!r || r.test || r.status !== 'failed') throw new ConflictException('Only a failed real run may be reconciled');
+    const node = r.graph.nodes.find(n => n.id === nodeId);
+    const step = (await this.store.steps(r.id)).find(s => s.node_id === nodeId);
+    if (node?.type !== 'jira-create-issue' || step?.status !== 'failed' || step.error !== 'EXTERNAL_EFFECT_REVIEW_REQUIRED' || !step.input) throw new ConflictException('Only the uncertain Jira-create step may be reconciled');
+    let output: Record<string, unknown> | null = null;
+    if (body.outcome === 'created') {
+      const key = String(body.issueKey ?? '');
+      if (!/^[A-Z][A-Z0-9_]+-[0-9]+$/.test(key) || !key.startsWith(String(step.input.project) + '-')) throw new BadRequestException('Exact Jira issue key in the expected project required');
+      if (!this.connections) throw new ConflictException('Managed connection unavailable');
+      const { settings } = await this.connections.resolve(tenant, r.base_branch ?? this.store.liveRef, String(step.input.connectionId), 'jira');
+      const root = String(settings.jiraInstanceUrl).replace(/\/$/, '');
+      const response = await fetch(`${root}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,project,issuetype,labels`, {redirect:'error',headers:{Authorization:'Basic '+Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64'),Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+      if (!response.ok) throw new ConflictException('Provider verification refused; uncertain step unchanged');
+      const ticket = await response.json() as any;
+      const labels = Array.isArray(step.input.labels) ? step.input.labels : String(step.input.labels ?? '').split(',').filter(Boolean);
+      if (ticket.key !== key || ticket.fields?.summary !== step.input.summary || ticket.fields?.project?.key !== step.input.project || String(ticket.fields?.issuetype?.id) !== String(step.input.issueTypeId) || !labels.every(l => ticket.fields?.labels?.includes(l))) throw new ConflictException('Provider ticket does not match this step; uncertain step unchanged');
+      output = { key, url: null };
+    }
+    await this.store.reconcileJiraStep(tenant, r.id, nodeId, { actor, outcome: String(body.outcome), evidence: body.evidence.trim(), issueKey: output?.key ?? null, at: new Date().toISOString() }, output);
     return this.runView(tenant, r.id);
   }
 
