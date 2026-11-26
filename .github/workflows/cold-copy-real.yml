@@ -11,6 +11,7 @@ on:
       - 'deploy/oci/isolated-copy-witness*'
       - 'deploy/oci/qualification*'
       - 'deploy/oci/current-baseline-host*'
+      - 'deploy/oci/dev-process-exit-probe.py'
       - '.github/workflows/cold-copy-real.yml'
   workflow_dispatch:
 permissions:

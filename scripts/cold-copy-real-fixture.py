@@ -214,6 +214,22 @@ def main():
         expected_hashes={'/app/demo/start.sh':'a3e24bcb8d4983b4ba5a86f819d917be358aec587bc0c12adc9a2caa8359429d','/app/demo/server.mjs':'1c502ba4616c43c69b397bd33ba467a10568f8b99412f5fb9e018ceed5932c36'}
         result['actual_image_source_equivalence']=result['actual_image_inspection']['sourceHashes']==expected_hashes
         if not result['actual_image_source_equivalence']:raise ValueError('image source bytes differ from Git revision')
+        # DEV-only exit-observation experiment, deliberately no backup claim.
+        result['stage']='dev-process-exit-experiment'
+        probe=load(codedir/'dev-process-exit-probe.py','dev_exit_probe')
+        probe_events=[]
+        evidence=root/'dev-exit-events';evidence.mkdir(mode=0o700)
+        def checkpoint(event):
+            write_new(evidence/('%03d.json'%len(probe_events)),event);probe_events.append(event)
+        try:
+            current=json.loads(docker('inspect',dolt))[0]
+            result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint)
+        except BaseException as error:
+            result['dev_exit_error_type']=type(error).__name__
+            result['dev_exit_error_categories']=[v for v in ('unknown process','roles absent','parent','changed','deadline','not zero','cgroup','count') if v in str(error)]
+            result['dev_exit_events']=probe_events
+            raise
+        raise ValueError('DEV observation complete, capture intentionally not attempted')
         # Execute the HOST capture adapter itself on actual fictional stores.
         # Locks are real; fixed host TLS/gates are NOT tested on this runner.
         result['stage']='host-capture'
