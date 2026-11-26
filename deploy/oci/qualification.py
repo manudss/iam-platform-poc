@@ -20,6 +20,9 @@ def cmd(args, input=None):
         global CHILD_STAGE
         matches=DIAGNOSTIC_RE.findall(r.stderr) if args[-1:] in (['smoke'],['capture']) else []
         CHILD_STAGE=matches[-1] if matches and matches[-1] in CHILD_STAGES else None
+        for tag,pattern in [('DOLT_THREAD_FAILURE_V1',r'[01]'),('DOLT_QUERY_KIND_V1',r'-?[0-9]{1,2}'),('QUALIFICATION_REASON_V1',r'-?[0-9]{1,2}')]:
+            values=re.findall(r'^'+tag+':('+pattern+r')$',r.stderr,re.M)[-1:]
+            for value in values:print(tag+':'+value,file=sys.stderr)
         codes=re.findall(r'^DOLT_TRANSFORMATION_REFUSED ([a-z][a-z-]{0,63})$',r.stderr,re.M)
         allowed={'evidence-missing','evidence-malformed','evidence-duplicate','change-categories','branch-set-changed','target-branch-absent','other-database-or-branch-changed','target-head-changed','no-target-change','schema-objects-changed','working-status-changed','table-already-present','table-set-changed','existing-table-changed','new-table-not-empty','new-table-columns','new-table-keys','new-table-column-attributes','new-table-collation','new-table-primary-key','new-table-indexes','ddl-not-calibrated','new-table-ddl','usage','unreadable-evidence'}
         for code in codes[-1:]:

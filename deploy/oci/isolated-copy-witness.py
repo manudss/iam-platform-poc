@@ -29,8 +29,8 @@ def install(label,ips,backend):
  # prove both paths counted before copied entrypoint release.
  hooks=[]
  for ip in addresses:
-  hooks.extend([['DOCKER-USER','-s',ip,'-j',label],['INPUT','-s',ip,'-m','conntrack','--ctstate','NEW','-m','comment','--comment',label,'-j','REJECT']])
- own=[['-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','RETURN'],['-d',str(net),'-j','RETURN'],['-j','REJECT']]
+  hooks.extend([['DOCKER-USER','-s',ip,'-j',label],['INPUT','-s',ip,'-m','conntrack','--ctstate','NEW','-m','comment','--comment',label,'-j','REJECT','--reject-with','icmp-port-unreachable']])
+ own=[['-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','RETURN'],['-d',str(net),'-j','RETURN'],['-j','REJECT','--reject-with','icmp-port-unreachable']]
  binding={'label':label,'ips':addresses,'backend':str(net),'pre_v4':invariants('iptables'),'pre_v6':invariants('ip6tables'),'hooks':hooks,'own':own}
  if any(label in shlex.split(l) for l in call(['iptables','-S']).splitlines()):raise ValueError('copy witness marker already present')
  try:
