@@ -279,7 +279,11 @@ class Isolated:
    after=self.w.snapshot(binding);quiet=self.w.verify_quiet(before,after)
    if app_binding:self.w.verify_quiet(app_before,self.w.snapshot(app_binding))
    for role,pid in {**pids,'app':launched.get('pid')}.items():
-    if pid is not None and self.counters(pid)!=counter_before[role]:raise ValueError('copy initiated denied traffic after permit: '+role)
+    if pid is not None:
+     current=self.counters(pid)
+     if current!=counter_before[role]:
+      delta={table:[b-a for a,b in zip(counter_before[role][table],current[table])] for table in ('filter','raw')}
+      raise ValueError('copy initiated denied traffic after permit: '+role+' counter-delta='+json.dumps(delta,sort_keys=True))
    if not isinstance(pr,dict) or pr.get('ok') is not True:raise ValueError('fixed copy probes failed')
    result={'direct_execution':True,'baseline':baseline,'target':spec['target'],'historical_preservation_claimed':False,'restored':restored,'guard':quiet,'launch_proof_sha256':hashlib.sha256(json.dumps(launched,sort_keys=True,default=str).encode()).hexdigest(),'probe':pr,'steps':list(self.steps)}
   except BaseException as e:err=e
