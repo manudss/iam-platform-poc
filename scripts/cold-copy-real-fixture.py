@@ -12,7 +12,7 @@ stores Bao keys/token/env/PG logs. Seeds are fictional.
 Status of this file when written: NOT RUN. Syntax checked and helper units tested
 without Docker only; the real proof is the GHA run.
 """
-import re,fcntl,hashlib,importlib.util,json,os,secrets,shutil,subprocess,sys,tarfile,threading,time
+import ctypes,re,fcntl,hashlib,importlib.util,json,os,secrets,shutil,subprocess,sys,tarfile,threading,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 
@@ -233,7 +233,20 @@ print(json.dumps(out,sort_keys=True))"""
             network=json.loads(run(['nsenter','-t',str(current['State']['Pid']),'-n','/usr/bin/python3','-c',network_probe]))
             result['dev_network_after_store_exits']=network
             if any(v['established'] or any(port in (3000,4000,3307,4222,8081) for port in v['listeners']) for v in network.values()):raise ValueError('active store connection/listener remains')
-            checkpoint({'phase':'dev-network-store-quiet','observation':network})
+            # Bind every residual TCP listener: exact edge8080 or embedded
+            # Docker DNS address whose translated port is visible in NAT.
+            nat=run(['nsenter','-t',str(current['State']['Pid']),'-n','iptables','-t','nat','-S'])
+            listeners=[]
+            for line in Path('/proc',str(current['State']['Pid']),'net/tcp').read_text().splitlines()[1:]:
+                fields=line.split()
+                if fields[3]!='0A':continue
+                address,port=fields[1].split(':');port=int(port,16)
+                if port==8080 and address=='00000000':listeners.append({'role':'frozen-edge','port':port});continue
+                if address=='0B00007F' and ('--to-destination 127.0.0.11:'+str(port)) in nat:listeners.append({'role':'docker-embedded-dns-nat-bound','port':port});continue
+                raise ValueError('unbound residual listener')
+            if Path('/proc',str(current['State']['Pid']),'net/tcp6').read_text().count(' 0A '):raise ValueError('unexpected IPv6 listener')
+            result['dev_residual_listeners_bound']=listeners
+            checkpoint({'phase':'dev-network-store-quiet','observation':network,'residual_listeners':listeners})
             clients=int(docker('exec',pg,'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND client_addr IS NOT NULL"))
             result['dev_pg_remaining_remote_clients']=clients
             if clients:raise ValueError('PG remote client remains')
@@ -258,7 +271,51 @@ print(json.dumps(out,sort_keys=True))"""
             result['dev_exit_error_categories']=[v for v in ('unknown process','roles absent','parent','changed','deadline','not zero','cgroup','count') if v in str(error)]
             result['dev_exit_events']=probe_events
             raise
-        raise ValueError('DEV observation complete, capture intentionally not attempted')
+        # Explicit DEV variant B: all checks precede any envelope termination.
+        result['stage']='dev-variant-b-envelope'
+        hostmod=load(codedir/'current-baseline-host.py','capture_host')
+        original_records=result['dev_exit_probe']['records']
+        def final_process_check():
+            current_ids=set()
+            group=Path('/proc',str(current['State']['Pid']),'cgroup').read_text().splitlines()
+            path=[v.split(':',2)[2] for v in group if v.startswith('0::')][0]
+            cg=Path('/sys/fs/cgroup')/path.lstrip('/')
+            for f in [cg/'cgroup.procs',*cg.rglob('cgroup.procs')]:current_ids.update(int(v) for v in f.read_text().split())
+            # Linux cgroup.procs may omit zombies, but no unbound live task may appear.
+            if not current_ids.issubset(set(original_records)):raise ValueError('new process before envelope intent')
+            for pid,record in original_records.items():
+                now=probe.stat(pid)
+                expected='T' if record['role'] in ('edge','supervisor') else 'Z'
+                if now['start']!=record['start'] or now['state']!=expected:raise ValueError('process identity/state changed before envelope')
+            return {'live_cgroup_ids':sorted(current_ids),'records':original_records,'cgroup_path':str(cg)}
+        scan_a=final_process_check();time.sleep(.1);scan_b=final_process_check()
+        if scan_a!=scan_b:raise ValueError('no fixed final process set')
+        # Flush each mounted filesystem, no claim of business multi-store atomicity.
+        libc=ctypes.CDLL(None,use_errno=True)
+        for directory in (src/'data',src/'pg-data',src/'bao-storage'):
+            fd=os.open(directory,os.O_RDONLY)
+            try:
+                if libc.syncfs(fd)!=0:raise OSError(ctypes.get_errno(),'syncfs refused')
+            finally:os.close(fd)
+        app_before=hostmod.inventory(src/'data')
+        receipt={'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
+        receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
+        if json.loads(receipt_path.read_bytes())!=receipt or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
+        final_process_check()
+        checkpoint({'phase':'dev-envelope-kill-intent','id':current['Id'],'receipt_sha256':receipt_sha})
+        docker('kill','--signal','KILL',current['Id'])
+        envelope=json.loads(docker('inspect',current['Id']))[0]['State']
+        result['dev_envelope_exit']={k:envelope[k] for k in ('Running','ExitCode','OOMKilled')}
+        if result['dev_envelope_exit']!={'Running':False,'ExitCode':137,'OOMKilled':False}:raise ValueError('unexpected envelope exit')
+        if any(int(v) for f in Path(scan_b['cgroup_path']).rglob('cgroup.procs') for v in f.read_text().split()):raise ValueError('cgroup not empty after envelope')
+        app_after=hostmod.inventory(src/'data')
+        result['dev_app_home_identical_after_envelope']=app_before==app_after
+        if app_before!=app_after:raise ValueError('app home bytes changed after envelope')
+        lock_path=src/'data/.boot.lock';lock_stat=lock_path.stat();boot_lock=lock_path.open('rb');fcntl.flock(boot_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        if (os.fstat(boot_lock.fileno()).st_dev,os.fstat(boot_lock.fileno()).st_ino)!=(lock_stat.st_dev,lock_stat.st_ino):raise ValueError('boot lock inode changed')
+        result['dev_variant_b_receipt_sha256']=receipt_sha
+        result['dev_boot_lock_same_inode_held']=True
+
         # Execute the HOST capture adapter itself on actual fictional stores.
         # Locks are real; fixed host TLS/gates are NOT tested on this runner.
         result['stage']='host-capture'
@@ -273,7 +330,11 @@ print(json.dumps(out,sort_keys=True))"""
             lp=Path('/root')/(eng+'-'+role+'.lock');lp.touch(mode=0o600);fh=lp.open('rb');fcntl.flock(fh,fcntl.LOCK_EX|fcntl.LOCK_NB);handles.append(fh);bindings[role]=(str(lp),fh.fileno())
         capture=hostmod.Host(capture_spec,bindings);capture.backup=arch
         capture.close_access=lambda:None  # NOT proof of production TLS/gates.
-        try:baseline=capture.capture_current_baseline(capture_spec)
+        try:
+            capture.assert_single_writer_sources(capture_spec)
+            folder=arch/('current-baseline-'+eng);folder.mkdir(mode=0o700)
+            checkpoints=folder/'checkpoints';checkpoints.mkdir(mode=0o700)
+            baseline=capture.archive_stopped_sources(capture_spec,folder,checkpoints)
         except BaseException as error:
             result['host_capture_error_type']=type(error).__name__
             result['host_capture_error_categories']=[v for v in ('lock','stop cleanly','overlapping','restart','space','archive','source changed','permission') if v in str(error)]
@@ -281,7 +342,8 @@ print(json.dumps(out,sort_keys=True))"""
             raise
         finally:
             for fh in handles:fh.close()
-        result['host_capture_actual']=True;result['host_gates_tested']=False
+            boot_lock.close()
+        result['host_archive_stage_actual']=True;result['host_capture_actual']=False;result['host_gates_tested']=False;result['dev_variant_b_capture_actual']=True
         result['host_capture_checkpoint']=bool(list(arch.glob('current-baseline-*/capture-complete.json')))
         ledger=src/'data'/'migrations'/'journal.json'
         ledger_binding={'present':ledger.is_file(),'sha256':(sha(ledger) if ledger.is_file() else None)}

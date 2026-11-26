@@ -141,6 +141,11 @@ class Host:
   for role in ['app','pg','bao']:
    expected=spec['identities'][role];x=self.inspect(expected['id'])
    if x['Id']!=expected['id'] or x['State']['Running']:raise ValueError('all three stores must be cold')
+  return self.archive_stopped_sources(spec,folder,checkpoints)
+
+ def archive_stopped_sources(self,spec,folder,checkpoints):
+  # Internal archive stage only. Caller owns physical quiescence and boot lock.
+  self.locks();self.close_access()
   self.assert_single_writer_sources(spec)
   inventories={role:inventory(spec['stores'][role]['path']) for role in ('dolt','pg','bao')}
   required=sum(v['size'] for values in inventories.values() for v in values.values())*3+1024**3

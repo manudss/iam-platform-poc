@@ -97,7 +97,7 @@ def experiment(init,checkpoint,timeout=30):
    expected='T' if pid in [init,*roles['supervisor']] else 'Z'
    if state!=expected:raise ValueError('unexpected final process state')
   checkpoint({'phase':'dev-all-processes-nonexecuting','active_writers':0,'remaining_envelope_and_supervisors':'stopped'})
-  proof={'kind':'DEV-process-exit-experiment','events':events,'writers_quiesced':False,'envelope_terminated':False,'application_drain_claimed':False,'capture_qualified':False,'limitation':'Exit observation only; no file/TCP/inflight/PG/Bao durability or envelope termination proof'}
+  proof={'records':records,'kind':'DEV-process-exit-experiment','events':events,'writers_quiesced':False,'envelope_terminated':False,'application_drain_claimed':False,'capture_qualified':False,'limitation':'Exit observation only; no file/TCP/inflight/PG/Bao durability or envelope termination proof'}
   checkpoint(proof);return proof
  finally:
   for fd in handles.values():os.close(fd)
