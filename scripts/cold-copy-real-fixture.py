@@ -195,6 +195,14 @@ def main():
             if not json.loads(docker('inspect',dolt))[0]['State']['Running']:raise ValueError('seed app died')
             time.sleep(2)
         else:raise ValueError('seed app health timeout')
+        # These services create tables lazily, not on health/startup. Exercise
+        # their native initializers against fictional seed PG BEFORE archiving.
+        seed_native=("const {ActivationService}=await import('/app/api/dist/activation/activation.service.js');"
+                     "const {AuditService}=await import('/app/api/dist/access/audit.service.js');"
+                     "const a=new ActivationService();await a.list('acme-demo');"
+                     "const b=new AuditService();await b.list('acme-demo');"
+                     "await a.onModuleDestroy();await b.onModuleDestroy();")
+        docker('exec',dolt,'node','--input-type=module','-e',seed_native)
         docker('stop','-t','30',dolt)
         docker('stop','-t','60',pg)
         # All three writers must be stopped before archiving.
