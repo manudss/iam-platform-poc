@@ -77,7 +77,7 @@ RUN ln -sfn ../../api/node_modules/@nestjs/common /app/node_modules/@nestjs/comm
 COPY --from=apibuild /src/plugins /app/plugins
 COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
-COPY demo/server.mjs demo/start.sh demo/dolt-state.mjs demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/secret-store.mjs demo/warm-signin.mjs /app/demo/
+COPY demo/server.mjs demo/timeout-policy.mjs demo/start.sh demo/dolt-state.mjs demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/secret-store.mjs demo/warm-signin.mjs /app/demo/
 # Update-safety contract: deploy/oci/update.sh refuses any image whose io.lyam.seed-modes label does
 # not list "never", so an image that would force a re-seed can never be rolled onto a persistent volume.
 COPY deploy/oci/data-migrations.sh /app/demo/data-migrations.sh
