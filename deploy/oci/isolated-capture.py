@@ -2,7 +2,7 @@
 """Copy-only cold capture helper. FIFO + namespace fence before trusted node.
 No app start.sh, no copied automation starts. Source is fixed adjacent qualifier.
 """
-import json,os,secrets,subprocess,time
+import json,os,secrets,subprocess,time,sys
 from pathlib import Path
 STAGE='init'
 FIFO='/tmp/lyam-copy-capture.fifo'
@@ -60,6 +60,9 @@ def capture(cmd,image,env_file,data_dir,network,source,payload):
   STAGE='verify-fence'
   if exact!=(ns(pid,'iptables','-S'),ns(pid,'iptables','-t','raw','-S'),ns(pid,'ip6tables','-S')):raise ValueError('capture fence changed')
   return result
+ except BaseException:
+  print('CAPTURE_STAGE_V1:'+STAGE,file=sys.stderr)
+  raise
  finally:
   if cid is None:
    candidates=cmd(['docker','ps','-aq','--filter','label='+label]).splitlines()

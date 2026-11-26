@@ -286,13 +286,13 @@ class Isolated:
   finally:
    failures=[]
    try:self.cleanup(made,nets,names)
-   except BaseException as e:failures.append(type(e).__name__+':'+('witness' if 'witness' in str(e) else 'container-network'))
+   except BaseException as e:failures.append(type(e).__name__+':'+('witness:'+','.join(k for k in ('delete-own-hook','foreign-reference-or-chain-content','delete-own-chain','own-rule-remains','protected-firewall-changed') if k in str(e)) if 'witness' in str(e) else 'container-network'))
    if app_binding and hasattr(self.w,'cleanup'):
     try:self.w.cleanup(app_binding)
-    except BaseException as e:failures.append(type(e).__name__+':'+('witness' if 'witness' in str(e) else 'container-network'))
+    except BaseException as e:failures.append(type(e).__name__+':'+('witness:'+','.join(k for k in ('delete-own-hook','foreign-reference-or-chain-content','delete-own-chain','own-rule-remains','protected-firewall-changed') if k in str(e)) if 'witness' in str(e) else 'container-network'))
    if binding and hasattr(self.w,'cleanup'):
     try:self.w.cleanup(binding)
-    except BaseException as e:failures.append(type(e).__name__+':'+('witness' if 'witness' in str(e) else 'container-network'))
+    except BaseException as e:failures.append(type(e).__name__+':'+('witness:'+','.join(k for k in ('delete-own-hook','foreign-reference-or-chain-content','delete-own-chain','own-rule-remains','protected-firewall-changed') if k in str(e)) if 'witness' in str(e) else 'container-network'))
    if failures:raise ValueError('copy cleanup incomplete: '+','.join(failures)) from err
   if err:raise err
   result['cleanup']=[]

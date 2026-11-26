@@ -46,7 +46,7 @@ def run(args,input_bytes=None,timeout=300):
     """Bound subprocess. Failure never carries stdout/stderr (secrets, logs)."""
     r=subprocess.run(args,input=(input_bytes.encode() if isinstance(input_bytes,str) else input_bytes),capture_output=True,timeout=timeout)
     if r.returncode:
-        stage=re.findall(rb'(?:QUALIFICATION_DIAG_V1|QUALIFICATION_STAGE_V1):([a-zA-Z0-9/-]+)',r.stderr)[-2:]
+        stage=re.findall(rb'(?:QUALIFICATION_DIAG_V1|QUALIFICATION_STAGE_V1|CAPTURE_STAGE_V1):([a-zA-Z0-9/-]+)',r.stderr)[-2:]
         lines=re.findall(rb'CAPTURE_LINES_V1:([0-9,]{0,100})',r.stderr)[-1:]
         raise ValueError('capture-lines='+','.join(x.decode() for x in lines)+' fixture command refused: '+' '.join(args[:3])+' stages='+','.join(x.decode() for x in stage))
     return r.stdout.decode().strip()
