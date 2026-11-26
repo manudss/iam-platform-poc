@@ -7,19 +7,21 @@ FIFO='/tmp/lyam-copy-capture.fifo'
 GUARD='set -eu; mkfifo -m 600 '+FIFO+'; read -r permit < '+FIFO+'; [ "$permit" = capture ]; rm -f '+FIFO+'; exec "$@"'
 def capture(cmd,image,env_file,data_dir,network,source,payload):
  policy=json.loads(payload)
+ if not data_dir.startswith('/opt/lyam-qualification/copies/') or '..' in data_dir.split('/'):raise ValueError('fixed copy data root required')
  if policy.get('isolatedCopy') is not True:raise ValueError('explicit isolated copy capture required')
  net=json.loads(cmd(['docker','network','inspect',network]))[0]
  if net.get('Internal') is not True or net.get('EnableIPv6') is not False:raise ValueError('capture network must be internal IPv4')
- name='lyam-copy-capture-'+secrets.token_hex(8);cid=None
+ name='lyam-copy-capture-'+secrets.token_hex(8);label='lyam-copy-capture='+name;cid=None
  def ns(pid,*args):return cmd(['nsenter','-t',str(pid),'-n',*args])
  try:
-  cid=cmd(['docker','run','-d','--name',name,'--network',network,'--restart','no','--read-only','--tmpfs','/tmp:rw,noexec,nosuid,size=1g','--memory','2147483648','--memory-swap','2147483648','--pids-limit','256','--cpus','1','--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1','--env-file',env_file,'-v',data_dir+':/data:ro','--entrypoint','sh',image,'-c',GUARD,'sh','sleep','infinity'])
+  cid=cmd(['docker','run','-d','--name',name,'--label',label,'--network',network,'--restart','no','--read-only','--tmpfs','/tmp:rw,noexec,nosuid,size=1g','--memory','2147483648','--memory-swap','2147483648','--pids-limit','256','--cpus','1','--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1','--env-file',env_file,'-v',data_dir+':/data:ro','--entrypoint','sh',image,'-c',GUARD,'sh','sleep','infinity'])
   x=json.loads(cmd(['docker','inspect',cid]))[0];pid=x['State']['Pid']
   for _ in range(50):
    try:cmd(['docker','exec',cid,'test','-p',FIFO]);break
    except ValueError:time.sleep(.1)
   else:raise ValueError('capture FIFO missing')
   ns(pid,'iptables','-P','OUTPUT','DROP');ns(pid,'ip6tables','-P','OUTPUT','DROP')
+  gateway=net['IPAM']['Config'][0]['Gateway'];ns(pid,'ip','route','replace','default','via',gateway)
   for proto in ['tcp','udp']:ns(pid,'iptables','-t','raw','-A','OUTPUT','-p',proto,'--dport','53','-j','DROP')
   ns(pid,'iptables','-A','OUTPUT','-o','lo','-d','127.0.0.1','-j','ACCEPT')
   ns(pid,'iptables','-A','OUTPUT','-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','ACCEPT')
@@ -43,6 +45,13 @@ def capture(cmd,image,env_file,data_dir,network,source,payload):
   if exact!=(ns(pid,'iptables','-S'),ns(pid,'iptables','-t','raw','-S'),ns(pid,'ip6tables','-S')):raise ValueError('capture fence changed')
   return result
  finally:
+  if cid is None:
+   candidates=cmd(['docker','ps','-aq','--filter','label='+label]).splitlines()
+   if len(candidates)>1:raise ValueError('ambiguous capture orphan identity')
+   if candidates:
+    orphan=json.loads(cmd(['docker','inspect',candidates[0]]))[0]
+    if orphan['Name'].lstrip('/')!=name or orphan['Config'].get('Labels',{}).get('lyam-copy-capture')!=name:raise ValueError('capture orphan binding differs')
+    cid=orphan['Id']
   if cid:
    cmd(['docker','rm','-f',cid])
    remaining=cmd(['docker','ps','-aq','--filter','id='+cid])

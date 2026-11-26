@@ -80,6 +80,14 @@ def main():
   for filename in ['normal-runtime.py','normal-lifecycle.py']:shutil.copyfile(repo/'deploy/oci'/('isolated-runtime.py' if isolated and filename=='normal-runtime.py' else filename),code/filename)
   def load(filename):
    s=importlib.util.spec_from_file_location(filename.replace('.','_'),code/filename);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+  if isolated and '--capture-helper' in __import__('sys').argv:
+   shutil.copyfile(repo/'deploy/oci/isolated-capture.py',code/'isolated-capture.py')
+   helper=load('isolated-capture.py')
+   payload=json.dumps({'isolatedCopy':True,'pgContainer':pg,'baoContainer':bao})
+   src="let raw='';for await (const c of process.stdin)raw+=c;JSON.parse(raw);console.log(JSON.stringify({helper:true}))"
+   proof=json.loads(helper.capture(run,IMAGE,str(env),str(data),nets[0],src,payload))
+   if proof!={'helper':True}:raise ValueError('capture helper actual exec failed')
+   result['isolated_capture_helper']=True
   n=load('normal-runtime.py');l=load('normal-lifecycle.py');im=json.loads(docker('image','inspect',IMAGE))[0]
   cfg={'format':1,'kind':'normal-two-network','image':IMAGE,'image_id':im['Id'],'source_sha':SHA,'container':app,'data_dir':str(data),'port':18088,'env':{'path':str(env),'sha256':hashlib.sha256(env.read_bytes()).hexdigest()},'backend':{'name':nets[0],'id':ids['backend']},'frontend':{'name':nets[1],'id':ids['frontend']},'pg':{'name':pg,'id':json.loads(docker('inspect',pg))[0]['Id'],'ip':'172.27.0.10'},'bao':{'name':bao,'id':json.loads(docker('inspect',bao))[0]['Id'],'ip':'172.27.0.11'},'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':['1.1.1.1','9.9.9.9'],'companion_extra_internal':[]}
   if isolated:cfg.update(kind='isolated-copy',dns_upstreams=[],resources={'memory_bytes':2147483648,'pids':256,'nano_cpus':1000000000});result['runtime_kind']='isolated-copy'
@@ -91,7 +99,7 @@ def main():
     # Resource flags are added ONLY to this disposable app invocation.
     original=n.call
     def bounded(args,pass_fds=()):
-     if args[:2]==['docker','run']:args=args[:2]+['--memory','2048m','--memory-swap','2048m','--pids-limit','256','--cpus','2','--oom-score-adj','1000']+args[2:]
+     if args[:2]==['docker','run'] and not isolated:args=args[:2]+['--memory','2048m','--memory-swap','2048m','--pids-limit','256','--cpus','2','--oom-score-adj','1000']+args[2:]
      return original(args,pass_fds)
     n.call=bounded
     try:proof=l.launch(cfg,str(root/('normal-attempt-'+str(generation)+'.json')),n)
@@ -99,7 +107,9 @@ def main():
     wait(app,3000,'/health');wait(app,8080,'/healthz');n.postcheck(cfg,proof);l.postcheck(cfg,str(root/('normal-attempt-'+str(generation)+'.json')),n)
     if generation==2 and '--synthetic-account' in __import__('sys').argv:
      docker('cp',str(repo/'scripts/qualification-account-synthetic.mjs'),app+':/tmp/qualification-account-synthetic.mjs')
-     account=json.loads(docker('exec',app,'node','/tmp/qualification-account-synthetic.mjs'))
+     account_process=subprocess.run(['docker','exec',app,'node','/tmp/qualification-account-synthetic.mjs'],capture_output=True,text=True,timeout=90)
+     account=json.loads(account_process.stdout);result['dedicated_account']=account
+     if account_process.returncode:raise ValueError('synthetic account step failed')
      if account.get('first_access_changed') is not True or account.get('no_role_smoke') is not True:raise ValueError('synthetic account contract failed')
      result['dedicated_account']=account
     # Persist in real PG and Bao to prove unchanged companions survive app swap.

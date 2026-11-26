@@ -134,7 +134,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Explicit isolated-copy networks, DNS deny counter and bounded runtime
-        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-copy-isolation-fixture.py --synthetic-account
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-copy-isolation-fixture.py --synthetic-account --capture-helper
       - uses: actions/upload-artifact@v4
         if: always()
         with:
