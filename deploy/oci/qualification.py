@@ -20,6 +20,9 @@ def cmd(args, input=None):
         global CHILD_STAGE
         matches=DIAGNOSTIC_RE.findall(r.stderr) if args[-1:] in (['smoke'],['capture']) else []
         CHILD_STAGE=matches[-1] if matches and matches[-1] in CHILD_STAGES else None
+        for tag,pattern in [('DOLT_ERROR_MASK_V1',r'[0-9]{1,4}'),('DOLT_THREAD_FAILURE_V1',r'[01]'),('DOLT_QUERY_KIND_V1',r'-?[0-9]{1,2}'),('QUALIFICATION_REASON_V1',r'-?[0-9]{1,2}')]:
+            values=re.findall(r'^'+tag+':('+pattern+r')$',r.stderr,re.M)[-1:]
+            for value in values:print(tag+':'+value,file=sys.stderr)
         codes=re.findall(r'^DOLT_TRANSFORMATION_REFUSED ([a-z][a-z-]{0,63})$',r.stderr,re.M)
         allowed={'evidence-missing','evidence-malformed','evidence-duplicate','change-categories','branch-set-changed','target-branch-absent','other-database-or-branch-changed','target-head-changed','no-target-change','schema-objects-changed','working-status-changed','table-already-present','table-set-changed','existing-table-changed','new-table-not-empty','new-table-columns','new-table-keys','new-table-column-attributes','new-table-collation','new-table-primary-key','new-table-indexes','ddl-not-calibrated','new-table-ddl','usage','unreadable-evidence'}
         for code in codes[-1:]:
@@ -110,7 +113,10 @@ def main():
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
     parser.add_argument('--isolated-loopback-test',action='store_true')
     parser.add_argument('--require-automation-hold',action='store_true')
-    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
+    parser.add_argument('--policy',default=os.environ.get('LYAM_QUALIFICATION_POLICY','/opt/lyam/qualification.json'));a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
+    copy_path=Path('/opt/lyam-qualification/copies') in Path(a.data_dir).resolve().parents
+    if copy_path or p.get('isolatedCopy') is True:
+        if not copy_path or p.get('isolatedCopy') is not True or not a.isolated_loopback_test or p.get('isolatedLoopbackTest') is not True:raise ValueError('explicit isolated copy mode required before probes')
     if a.require_automation_hold:
         p['requireAutomationHold']=True
     stage('tls-barriers')
@@ -141,7 +147,13 @@ def main():
         smoke=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'smoke']
         stage('auth-load');auth=json.loads(Path(p['authFile']).read_text())
         stage('smoke');smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth,'reviewedLegacyRollback':legacy_rollback})))
-    stage('capture');state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
+    stage('capture');capture_input=json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})
+    if a.phase=='before' and (p.get('isolatedCopy') is True or Path('/opt/lyam-qualification/copies') in Path(a.data_dir).resolve().parents):
+        if p.get('isolatedCopy') is not True or not a.isolated_loopback_test or p.get('isolatedLoopbackTest') is not True:raise ValueError('copy helper only in explicit loopback qualification')
+        import importlib.util
+        helper=Path(__file__).with_name('isolated-capture.py');hs=importlib.util.spec_from_file_location('isolated_capture',helper);hm=importlib.util.module_from_spec(hs);hs.loader.exec_module(hm)
+        state=json.loads(hm.capture(cmd,a.image,a.env_file,a.data_dir,p['network'],source,capture_input))
+    else:state=json.loads(cmd(node,capture_input))
     stage('ledger-load');ledger=Path(a.data_dir)/'migrations/journal.json'
     state['migrationLedger']=json.loads(ledger.read_text()) if ledger.exists() else None
     stage('credentials');state['credentials']=credential_hashes(Path(a.data_dir),p)
@@ -180,6 +192,8 @@ if __name__=='__main__':
         # Diagnostic enums and source line numbers only. Private messages and subprocess output never leave.
         frames=traceback.extract_tb(error.__traceback__)
         lines=[f.lineno for f in frames if Path(f.filename).name=='qualification.py'][-8:]
+        helper_lines=[f.lineno for f in frames if Path(f.filename).name=='isolated-capture.py'][-8:]
+        print('CAPTURE_LINES_V1:'+','.join(str(n) for n in helper_lines),file=sys.stderr)
         kind=type(error).__name__
         if kind not in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError'}:kind='Other'
         print('QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':kind,'sourceLines':lines},sort_keys=True),file=sys.stderr)

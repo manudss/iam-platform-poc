@@ -20,12 +20,19 @@ def atomic(path, value):
     finally:
         if os.path.exists(tmp): os.unlink(tmp)
 
-def load(path):
+def release_module():
+    import importlib.util
+    p=Path(__file__).with_name('release-held.py')
+    spec=importlib.util.spec_from_file_location('release_held',p)
+    m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+
+def load(path, allow_release=False, allow_restored=False):
     state = json.loads(path.read_text())
-    if state.get('format') not in [1,2,3] or not isinstance(state.get('history'), list) or not state['history']:
+    if state.get('format')==5 and not allow_restored:raise ValueError('restored held journal requires explicit release review')
+    if state.get('format') not in [1,2,3,4,5] or not isinstance(state.get('history'), list) or not state['history']:
         raise ValueError('uninitialized or corrupt deployment history')
     if any(not SHA.fullmatch(e.get('sha','')) for e in state['history']): raise ValueError('invalid history')
-    if state['format'] in [2,3]:
+    if state['format'] in [2,3,4,5]:
         fence=state.get('recovery_fence','');recoveries=state.get('recoveries')
         if not SHA.fullmatch(fence) or type(state.get('resume_required')) is not bool or not isinstance(recoveries,list) or not recoveries:
             raise ValueError('corrupt recovery fence/barrier/audit')
@@ -33,6 +40,10 @@ def load(path):
             raise ValueError('recovery audit/history divergence')
         if not state['resume_required'] and (not state.get('resumptions') or state['resumptions'][-1].get('observed_running',{}).get('sha')!=fence):
             raise ValueError('resume barrier removed without matching audit')
+    if state['format']==5 and (state.get('resume_required') is not True or state['history'][-1].get('mode')!='restored-automation-held' or state['history'][-1].get('automation_held') is not True or state['recoveries'][-1].get('kind')!='reviewed-restored-held'):raise ValueError('invalid restored held journal')
+    if state['format']==4:
+        release_module().validate_state(state)
+        if state.get('release_intent') and not allow_release:raise ValueError('release intent unresolved; explicit access-only review required')
     return state
 
 def validate(plan):
@@ -46,9 +57,9 @@ def validate(plan):
         seen.add(e['sha']); parent=e['sha']
     return entries
 
-def deploy(path, plan, updater, runner=subprocess.run):
+def deploy(path, plan, updater, runner=subprocess.run, env_file=None):
     entries=validate(plan); state=load(path)
-    if state.get('opening_intent') or state.get('pending') or state.get('failed') or state.get('resume_required'): raise ValueError('prior deployment unresolved, operator review required')
+    if state.get('release_finalize_required') or state.get('opening_intent') or state.get('pending') or state.get('failed') or state.get('resume_required'): raise ValueError('prior deployment unresolved, operator review required')
     confirmed=[e['sha'] for e in state['history']]
     if state.get('recovery_fence') and (plan['base'] not in confirmed or confirmed.index(plan['base'])<confirmed.index(state['recovery_fence'])):
         raise ValueError('plan predates reviewed recovery fence; recover a fresh plan')
@@ -67,7 +78,7 @@ def deploy(path, plan, updater, runner=subprocess.run):
         raise ValueError('noncontiguous plan')
     for entry in entries[overlap:]:
         state['pending']=entry; atomic(path,state)
-        result=runner([updater,'--image','ghcr.io/manudss/iam-platform-poc@'+entry['digest'],'--require-qualification'],check=False)
+        result=runner([updater,'--image','ghcr.io/manudss/iam-platform-poc@'+entry['digest'],'--require-qualification']+(['--env-file',str(env_file)] if env_file else []),check=False)
         if result.returncode:
             state['failed']={'sha':entry['sha'],'digest':entry['digest'],'exit':result.returncode,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
             atomic(path,state)
@@ -128,11 +139,13 @@ def observe_running(container, target):
         raise ValueError('running container image ID/digest mismatch')
     if image.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=target['sha']:
         raise ValueError('running image source revision mismatch')
-    return {'sha':target['sha'],'digest':target['digest'],'image_id':image['Id'],'container':container,'running':True}
+    return {'sha':target['sha'],'digest':target['digest'],'image_id':image['Id'],'container':container,'container_id':running.get('Id'),'running':True}
 
 def record_reviewed_recovery(path,manifest,repository,container,verify=verify_source_chain,observe=observe_running,*,_in_place=False):
     import copy
-    state=load(path);checked_manifest(state,manifest,'reviewed-in-place' if _in_place else 'reviewed-recovery')
+    state=load(path)
+    if state['format']==4:raise ValueError('legacy recovery cannot downgrade released journal')
+    checked_manifest(state,manifest,'reviewed-in-place' if _in_place else 'reviewed-recovery')
     if state.get('opening_intent'):raise ValueError('interrupted opening blocks incident adoption')
     pending,failed=state.get('pending'),state.get('failed')
     if not pending or not failed or state.get('resume_required'): raise ValueError('exact pending+failed incident required, not an unreviewed resume')
@@ -227,7 +240,9 @@ def opening_controller(manifest):
 
 def open_reviewed_ui_held(path,manifest,repository,container,verify=verify_source_chain,observe=observe_running,controller=None):
     import copy
-    state=load(path);checked_manifest(state,manifest,'reviewed-ui-held-after-fence')
+    state=load(path)
+    if state['format']==4:raise ValueError('legacy UI opening cannot downgrade released journal')
+    checked_manifest(state,manifest,'reviewed-ui-held-after-fence')
     if state.get('opening_intent') or state.get('pending') or state.get('failed') or state.get('resume_required') is not True:
         raise ValueError('resolved fenced state with resume barrier required')
     base=state['history'][-1]['sha']
@@ -478,34 +493,72 @@ def rearm_interrupted_opening(path):
     intent['phase']='interrupted-access-rearmed';atomic(path,state)
     return state
 
+def rearm_release_held(path,state_of=queue_state,host_factory=None):
+    state=load(path,allow_release=True);intent=state.get('release_intent')
+    if not intent:raise ValueError('no unresolved release intent')
+    if state_of(intent.get('queue'))!='absent':raise ValueError('release queue live or unknown')
+    child=intent.get('child')
+    if child is not None and state_of(child.get('identity'))!='absent':raise ValueError('release child live or unknown')
+    manifest=intent['manifest']
+    if host_factory is None:
+        hm=bound_module(manifest.get('release_host'),'release-host.py','release host')
+        host=hm.rearm_host(manifest)
+    else:host=host_factory(manifest)
+    again=load(path,allow_release=True)
+    if again!=state or state_of(intent.get('queue'))!='absent':raise ValueError('release changed during rearm')
+    host.close_access(intent)
+    intent.setdefault('failed_from',intent['phase']);intent['phase']='failed-closed';intent['access_rearmed']=True
+    atomic(path,state)
+    return state
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening'])
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','record-reviewed-in-place','reconcile-restored-held','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening','release-held-reviewed','rearm-release-held','finalize-release-held'])
     p.add_argument('--state',default='/opt/lyam/deploy-queue/state.json');p.add_argument('--sha');p.add_argument('--digest')
     p.add_argument('--pause-file',default='/opt/lyam/UPDATE_PAUSED');p.add_argument('--update-lock',default='/opt/lyam/.update.lock')
-    p.add_argument('--repository');p.add_argument('--container')
+    p.add_argument('--repository');p.add_argument('--container');p.add_argument('--env-file')
     p.add_argument('--updater',default='/opt/lyam/bin/update.sh');a=p.parse_args();path=Path(a.state);pause=Path(a.pause_file)
     if not path.parent.is_dir(): raise ValueError('operator must create private queue directory first')
     with open(str(path)+'.lock','a') as lock:
         os.chmod(lock.name,0o600);fcntl.flock(lock,fcntl.LOCK_EX)
         if a.command=='inspect-reviewed-state':
-            s=load(path)
+            s=load(path,allow_release=True)
             print(json.dumps({'format':s['format'],'state_fingerprint':fingerprint(s),'last_delivered':s['history'][-1],
                 'pending':s.get('pending'),'failed':s.get('failed'),'resume_required':s.get('resume_required',False),
-                'recovery_fence':s.get('recovery_fence'),'pause_present':pause.exists(),'opening_intent':s.get('opening_intent'),'delivery_mode':s['history'][-1].get('mode')}));return
+                'recovery_fence':s.get('recovery_fence'),'pause_present':pause.exists(),'opening_intent':s.get('opening_intent'),'release_intent_present':bool(s.get('release_intent')),'delivery_mode':s.get('delivery_mode',s['history'][-1].get('mode'))}));return
         if a.command=='status':
             s=load(path)
-            if pause.exists() or s.get('pending') or s.get('failed') or s.get('resume_required'): raise ValueError('deployment queue blocked or paused')
+            if s.get('release_finalize_required') or pause.exists() or s.get('pending') or s.get('failed') or s.get('resume_required'): raise ValueError('deployment queue blocked or paused')
             print(s['history'][-1]['sha']);return
         if a.command=='initialize-reviewed':
             if path.exists() or not SHA.fullmatch(a.sha or '') or not DIGEST.fullmatch(a.digest or ''): raise ValueError('explicit verified initial SHA/digest required, never overwrite')
             atomic(path,{'format':1,'history':[{'sha':a.sha,'digest':a.digest}]});return
-        if a.command in ['record-reviewed-recovery','record-reviewed-in-place','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening']:
-            if not pause.is_file(): raise ValueError('operator must retain the deployment pause during journal review')
+        if a.command in ['record-reviewed-recovery','record-reviewed-in-place','reconcile-restored-held','resume-reviewed','open-reviewed-ui-held','held-update-reviewed','rearm-held-update','rearm-interrupted-opening','release-held-reviewed','rearm-release-held','finalize-release-held']:
+            if a.command!='finalize-release-held' and not pause.is_file(): raise ValueError('operator must retain the deployment pause during journal review')
             if not Path(a.update_lock).is_file(): raise ValueError('existing configured updater lock required')
-            manifest={} if a.command in ['rearm-interrupted-opening','rearm-held-update'] else json.load(sys.stdin)
+            manifest={} if a.command in ['rearm-interrupted-opening','rearm-held-update','rearm-release-held','finalize-release-held'] else json.load(sys.stdin)
             with open(a.update_lock,'a') as updater_lock:
                 fcntl.flock(updater_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                if a.command in ['record-reviewed-recovery','record-reviewed-in-place']:
+                if a.command=='finalize-release-held':
+                    s=load(path);m=s['releases'][-1]['manifest']
+                    hm=bound_module(m.get('release_host'),'release-host.py','release host')
+                    release_module().finalize(sys.modules[__name__],path,pause,hm.Finalizer)
+                    print('Committed release finalized without startup or replay')
+                elif a.command=='release-held-reviewed':
+                    if manifest.get('state_path')!=str(path) or manifest.get('update_lock_path')!=a.update_lock or manifest.get('pause',{}).get('path')!=str(pause):raise ValueError('exact configured lock/pause required')
+                    hm=bound_module(manifest.get('release_host'),'release-host.py','release host')
+                    host=hm.Host(manifest,lock_fd=updater_lock.fileno())
+                    release_module().release(sys.modules[__name__],path,manifest,a.container,host,pause)
+                    print('Reviewed normal release committed; backlog startup was an effect, no rollback performed')
+                elif a.command=='rearm-release-held':
+                    rearm_release_held(path)
+                    print('Release access rearmed only; no start, replay, environment reversal or rollback')
+                elif a.command=='reconcile-restored-held':
+                    if manifest.get('update_lock_path')!=a.update_lock:raise ValueError('exact updater lock binding required')
+                    if not a.repository:raise ValueError('reviewed repository required')
+                    rm=bound_module(manifest.get('reconcile_controller'),'reconcile-restored-held.py','restored held reconciler')
+                    rm.reconcile(sys.modules[__name__],path,manifest,a.repository,a.container,pause,locks={'journal':lock.fileno(),'updater':updater_lock.fileno()})
+                    print('Restored held target appended; format5 fences legacy readers; pause/HOLD retained, no startup')
+                elif a.command in ['record-reviewed-recovery','record-reviewed-in-place']:
                     if not a.repository: raise ValueError('reviewed local source repository required')
                     (record_reviewed_in_place if a.command=='record-reviewed-in-place' else record_reviewed_recovery)(path,manifest,a.repository,a.container)
                     print('Observed corrected target journaled; incident retained; explicit resume still required; pause unchanged')
@@ -536,7 +589,7 @@ def main():
             return
         if pause.exists(): raise ValueError('deployment paused; no pending entry written')
         if not os.path.isfile(a.updater) or not os.access(a.updater,os.X_OK): raise ValueError('qualified updater must be preinstalled')
-        plan=json.load(sys.stdin);deploy(path,plan,a.updater)
+        plan=json.load(sys.stdin);deploy(path,plan,a.updater,env_file=a.env_file)
         print('ordered deployment plan confirmed')
 
 def failure_diagnostic(error):

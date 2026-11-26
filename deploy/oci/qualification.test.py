@@ -5,6 +5,11 @@ spec=importlib.util.spec_from_file_location('qual',Path(__file__).with_name('qua
 def baseline():return {'dolt':[{'branch':'personal/kept','root':'root'}],'bao':{'all/plugin':'hash'},'credentials':{'credentials.json':'hash'},'postgres':{'rows':{'public.business':{'row1':1},'public.audit':{'row1':1},'public.activations':{'held':1}},'schema':{'columns':[]},'sequenceDefinitions':[],'sequences':{'public.audit_id':{'last_value':1,'is_called':True}}}}
 class Preserve(unittest.TestCase):
  def setUp(self):self.p={'appendOnlyTables':['public.audit']};self.before=baseline();self.after=copy.deepcopy(self.before)
+ def test_environment_policy_selection_reaches_parser(self):
+  import sys,os
+  with patch.dict(os.environ,{'LYAM_QUALIFICATION_POLICY':'/opt/lyam-recovery/active/qualification.json'}),patch.object(sys,'argv',['qualification','--phase','before','--container','c','--image','i','--env-file','e','--data-dir','d','--backup-dir','b','--barrier-file','f','--target-image','i','--evidence-dir','v']),patch.object(q,'policy_load',side_effect=RuntimeError('stop')) as load:
+   with self.assertRaises(RuntimeError):q.main()
+   self.assertEqual(load.call_args.args[0],'/opt/lyam-recovery/active/qualification.json')
  def test_identical(self):self.assertEqual(q.compare(self.before,self.after,self.p),[])
  def test_audit_append_allowed_not_business(self):
   self.after['postgres']['rows']['public.audit']['row2']=1;self.assertEqual(q.compare(self.before,self.after,self.p),[])
@@ -65,6 +70,29 @@ class AfterFixture(unittest.TestCase):
     changed=copy.deepcopy(prior['postgres']);changed['rows']['public.business']={}
     with patch.object(q,'postgres',return_value=changed):
      with self.assertRaisesRegex(ValueError,'unexpected preservation'):q.main()
+
+class HeldBaseline(unittest.TestCase):
+ def test_live_double_capture_under_real_locks_no_smoke_no_restart(self):
+  import fcntl
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);data=root/'data';data.mkdir();token=root/'token';token.write_text('synthetic');policy=root/'policy';policy.write_text(json.dumps({'requireAutomationHold':True,'baoTokenFile':str(token)}));held={'Id':'container','RestartCount':0,'Config':{'Image':'image','Env':['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never']},'State':{'Running':True},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true']}};calls=[];closed=[]
+   def io(args,input=None):
+    calls.append(args)
+    if args[:2]==['docker','inspect']:return json.dumps([held])
+    self.assertEqual(args[-1],'capture');self.assertEqual(args[:2],['docker','exec']);return json.dumps({'dolt':[],'bao':{}})
+   paths=[root/'journal.lock',root/'updater.lock']
+   for path in paths:path.touch()
+   with paths[0].open('a') as j,paths[1].open('a') as u,patch.object(q,'policy_load',return_value=json.loads(policy.read_text())),patch.object(q,'cmd',side_effect=io),patch.object(q,'credential_hashes',return_value={'x':'hash'}),patch.object(q,'postgres',return_value={'rows':{}}):
+    locks={'journal':(str(paths[0]),j.fileno()),'updater':(str(paths[1]),u.fileno())}
+    source=Path(q.__file__).with_name('qualification-container.mjs').absolute();binding={'path':str(source),'sha256':q.digest(source.read_bytes())}
+    with self.assertRaisesRegex(ValueError,'exclusive lock'):q.held_running_baseline('held','image',root/'nope',policy,data,locks,lambda:closed.append(True),binding)
+    fcntl.flock(j,fcntl.LOCK_EX);fcntl.flock(u,fcntl.LOCK_EX)
+    proof=q.held_running_baseline('held','image',root/'fresh',policy,data,locks,lambda:closed.append(True),binding)
+    self.assertTrue((root/'fresh/held-running-baseline.json').is_file());self.assertFalse(proof['smokeExecuted']);self.assertEqual(len(closed),2)
+    self.assertFalse(any(a[:2] in (['docker','stop'],['docker','start'],['docker','run']) for a in calls))
+    with self.assertRaisesRegex(ValueError,'new held baseline'):q.held_running_baseline('held','image',root/'fresh',policy,data,locks,lambda:None,binding)
+    with patch.object(q,'postgres',side_effect=[{'rows':{}},{'rows':{'moving':1}}]),self.assertRaisesRegex(ValueError,'moving'):q.held_running_baseline('held','image',root/'moving',policy,data,locks,lambda:None,binding)
+    self.assertFalse((root/'moving').exists())
 
 class ExactActivations(unittest.TestCase):
  def test_held_exact_vs_ordinary_append(self):

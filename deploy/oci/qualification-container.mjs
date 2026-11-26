@@ -1,7 +1,7 @@
 // Executed inside an isolated helper container (capture) or candidate (smoke).
 // Private auth and Bao tokens never leave this process or appear in stdout.
 import {execFileSync} from 'node:child_process';
-import {readFileSync,cpSync,mkdtempSync,existsSync} from 'node:fs';
+import {readFileSync,cpSync,mkdtempSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {createHash,randomBytes} from 'node:crypto';
 const hash=x=>createHash('sha256').update(x).digest('hex');
 let diagnosticStage='init';
@@ -33,8 +33,12 @@ async function bao(){
 function dolt(){
  const dir=p.running?'/data/dolt':mkdtempSync('/tmp/qualification-')+'/dolt';
  if(!p.running)cpSync('/data/dolt',dir,{recursive:true,errorOnExist:true});
- const query=(db,sql)=>{const r0=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));const r=r0&&typeof r0==='object'&&!Array.isArray(r0)&&Object.keys(r0).length===0?{rows:[]}:r0;   // dolt prints {} for a strictly empty result (compat fix shared with the producer)
- if(!r||!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
+ // Offline Dolt may create global state under HOME even for read-only SQL.
+ // Keep that state on helper tmpfs, never on the read-only image or source mount.
+ const queryEnv=p.running?process.env:{...process.env,HOME:mkdtempSync('/tmp/qualification-home-')};
+ if(!p.running){mkdirSync(queryEnv.HOME+'/.dolt',{recursive:true});writeFileSync(queryEnv.HOME+'/.dolt/config_global.json',JSON.stringify({'metrics.disabled':'true'}),{mode:0o600});}
+ const query=(db,sql)=>{try{const r0=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,env:queryEnv,encoding:'utf8',maxBuffer:64*1024*1024}));const r=r0&&typeof r0==='object'&&!Array.isArray(r0)&&Object.keys(r0).length===0?{rows:[]}:r0;   // dolt prints {} for a strictly empty result (compat fix shared with the producer)
+ if(!r||!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;}catch(e){const kinds=['SHOW DATABASES','SELECT name, hash','SELECT DOLT_HASHOF_DB','SELECT DATABASE()','SHOW FULL TABLES','SHOW FULL COLUMNS','SHOW CREATE VIEW','SHOW KEYS','SHOW CREATE TABLE','SELECT DOLT_HASHOF_TABLE','SELECT COUNT(*)','SELECT * FROM dolt_schemas','SELECT * FROM dolt_procedures','SELECT table_name'];const diagnosticText=String(e?.stderr||'')+' '+String(e?.stdout||'')+' '+String(e?.message||'');const failurePatterns=[/read.only file system/i,/permission denied|EACCES|EPERM/i,/no space left|ENOSPC/i,/operation not permitted/i,/lock|another server/i,/failed to map|executable|noexec/i,/not found|ENOENT/i,/configuration|config.*directory|home directory/i,/connection refused/i,/runtime|panic|fatal error/i];console.error('DOLT_ERROR_MASK_V1:'+failurePatterns.reduce((n,r,i)=>n+(r.test(diagnosticText)?2**i:0),0));console.error('DOLT_THREAD_FAILURE_V1:'+(String(e?.stderr||'').includes('pthread_create failed')?1:0));console.error('DOLT_QUERY_KIND_V1:'+kinds.findIndex(k=>sql.startsWith(k)));throw e;}};
  const dbs=query('','SHOW DATABASES').map(r=>Object.values(r)[0]).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
  if(!dbs.includes('iam'))throw Error('business database absent');
  // Per-table evidence, hash/shape only (no row content): exact table inventory with kind, column shape, primary key order, row count and
@@ -150,13 +154,24 @@ async function smoke(){
  return {journal,held:p.requireAutomationHold===true,workflowPreserved:workflowBefore!==null,ledger:ledger.entries.map(e=>({id:e.id,checksum:e.checksum}))};
 }
 try{
- if(mode==='capture'){diagnosticStage='capture-dolt';const d=dolt();diagnosticStage='capture-bao';const b=await bao();console.log(JSON.stringify({dolt:d,bao:b}));}
- else if(mode==='held-state-check'){
+ if(mode==='dolt-only'){
+  diagnosticStage='capture-dolt';
+  if(typeof p.running!=='boolean')throw Error('explicit Dolt read mode required');
+  const d=dolt();if(!d.length)throw Error('Dolt coverage empty');
+  console.log(JSON.stringify({format:1,kind:'dolt-only-tables-v3',running:p.running,dolt:d}));
+ }
+ else if(mode==='capture'){diagnosticStage='capture-dolt';const d=dolt();diagnosticStage='capture-bao';const b=await bao();console.log(JSON.stringify({dolt:d,bao:b}));}
+ else if(mode==='held-state-check'||mode==='epoch-pre-smoke-check'){
   const log=readFileSync('/data/api.log','utf8');const captured=/automation hold: (\{[^\n]+\})/.exec(log);
   if(process.env.IAM_AUTOMATION_HOLD!=='1'||!captured||JSON.parse(captured[1]).held!==true)throw Error('captured hold required');
   const hashes=await workflowHashes();if(!Object.keys(hashes).length)throw Error('workflow coverage empty');
+  if(mode==='epoch-pre-smoke-check'){
+   const ledger=JSON.parse(readFileSync('/data/migrations/journal.json','utf8'));
+   const manifest=JSON.parse(readFileSync('/app/migration-source/data/migrations/manifest.json','utf8'));
+   if(ledger.format!==1||ledger.pending||!Array.isArray(ledger.entries)||!ledger.entries.length||!Array.isArray(manifest.versions)||manifest.versions.length!==ledger.entries.length||manifest.versions.some((v,i)=>v.id!==ledger.entries[i].id||v.checksum!==ledger.entries[i].checksum))throw Error('pre-smoke migration ledger mismatch');
+  }
   console.log(JSON.stringify({held:true,hashes}));
  }
  else if(mode==='smoke')console.log(JSON.stringify(await smoke()));
  else throw Error('invalid mode');
-}catch{console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}
+}catch(error){const known=['Dolt table listing shape unknown','Dolt system table columns unknown','Dolt system table value unknown','Dolt inventory moved during capture','Dolt session identity mismatch','Dolt view DDL unknown','Dolt table kind unknown','Dolt DDL unknown','Dolt inventory unknown'];const reason=known.indexOf(error?.message);console.error('QUALIFICATION_REASON_V1:'+reason);console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}

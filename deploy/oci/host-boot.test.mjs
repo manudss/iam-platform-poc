@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, chmodSync, existsSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +51,8 @@ function setup({ pg = true, bao = true, unseal = true, pgDown = false, appSick =
   const env = join(dir, 'lyam.env');
   writeFileSync(env, [
     'IAM_PUBLIC_ORIGIN=https://example.invalid',
+    `LYAM_QUEUE_STATE=${join(dir,'state.json')}`,
+    `LYAM_ORDERED_QUEUE=${join(here,'ordered-queue.py')}`,
     'LYAM_HEALTH_TIMEOUT=0',
     'LYAM_BOOT_TRIES=1',
     pg ? 'LYAM_BACKUP_PG_CONTAINER=pg' : '',
@@ -184,4 +186,26 @@ test('persistent automation hold refuses boot start or recreate', () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /manual reviewed recovery required/);
   assert.doesNotMatch(r.calls, /docker start|update.sh/);
+});
+
+test('paused or resume-required journal refuses boot before any container command',()=>{
+ for(const blocked of ['pause','resume','opening']){
+  const {env,dir}=setup();const state=join(dir,'state.json'),pause=join(dir,'PAUSED');
+  writeFileSync(state,JSON.stringify({format:3,history:[{}],resume_required:blocked==='resume',opening_intent:blocked==='opening'?{phase:'opening'}:null}));
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_QUEUE_STATE=${state}\nLYAM_PAUSE_FILE=${pause}\n`);if(blocked==='pause')writeFileSync(pause,'');
+  const r=run(env);assert.notEqual(r.status,0);assert.doesNotMatch(r.calls,/docker|update.sh/);
+ }
+});
+
+test('missing new boot guard never bypasses resume-required legacy journal',()=>{
+ const {env,dir,stub}=setup();const legacy=join(dir,'host-boot.sh');copyFileSync(boot,legacy);
+ const state=join(dir,'state.json');writeFileSync(state,JSON.stringify({format:3,resume_required:true}));
+ writeFileSync(env,readFileSync(env,'utf8')+`LYAM_QUEUE_STATE=${state}\nLYAM_PAUSE_FILE=${dir}/PAUSED\n`);
+ const r=spawnSync('sh',[legacy,env],{encoding:'utf8',env:{PATH:`${dir}/bin:/usr/bin:/bin`,STUB_DIR:stub}});
+ assert.notEqual(r.status,0);assert.match(r.stderr,/guard missing/);assert.ok(!existsSync(join(stub,'calls')));
+});
+
+test('nonlegacy active root without explicit queue paths refuses before reading wrong legacy state',()=>{
+ const {env}=setup();writeFileSync(env,readFileSync(env,'utf8').replace(/^LYAM_QUEUE_STATE=.*\n/m,''));
+ const r=run(env);assert.notEqual(r.status,0);assert.match(r.stderr,/explicit queue/);assert.equal(r.calls,'');
 });

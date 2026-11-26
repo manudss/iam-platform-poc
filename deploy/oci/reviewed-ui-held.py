@@ -93,7 +93,7 @@ def verify(manifest,container,target,public=503):
  if policy.get('requireAutomationHold') is not True:raise ValueError('held policy required')
  import importlib.util
  qualifier_path,_=read_spec(opening['qualifier'])
- if str(qualifier_path)!=env.get('LYAM_POST_UPDATE_CHECK') or str(policy_path)!='/opt/lyam/qualification.json':raise ValueError('qualification entrypoint/policy mismatch')
+ if str(qualifier_path)!=env.get('LYAM_POST_UPDATE_CHECK') or str(policy_path)!=env.get('LYAM_QUALIFICATION_POLICY','/opt/lyam/qualification.json'):raise ValueError('qualification entrypoint/policy mismatch')
  inventory=config['qualificationSHA256']
  for path in [qualifier_path,qualifier_path.with_name('qualification-container.mjs'),policy_path]:
   if hashlib.sha256(protected(path).read_bytes()).hexdigest()!=inventory.get(str(path)):raise ValueError('qualification must match reviewed config inventory')
@@ -101,7 +101,7 @@ def verify(manifest,container,target,public=503):
  q.policy_load(str(policy_path))
  before=json.loads(read_spec(opening['before'])[1]);after=json.loads(read_spec(opening['after'])[1]);smoke=json.loads(read_spec(opening['smoke'])[1])
  policyhash=hashlib.sha256(policyraw).hexdigest()
- if str(qualifier_path)!=env.get('LYAM_POST_UPDATE_CHECK') or str(policy_path)!='/opt/lyam/qualification.json':raise ValueError('qualification entrypoint/policy mismatch')
+ if str(qualifier_path)!=env.get('LYAM_POST_UPDATE_CHECK') or str(policy_path)!=env.get('LYAM_QUALIFICATION_POLICY','/opt/lyam/qualification.json'):raise ValueError('qualification entrypoint/policy mismatch')
  if any(v.get('policyHash')!=policyhash or v.get('transportCoverage')!='TLS_EXPECTED_ORIGINS' for v in [before,after]) or after.get('image')!=image:raise ValueError('qualified policy/transport/image mismatch')
  q.exact_held_activations(before,after)
  if q.compare(before,after,policy):raise ValueError('preservation evidence changed; no automatic transform acceptance')

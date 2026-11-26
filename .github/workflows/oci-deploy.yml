@@ -61,7 +61,7 @@ jobs:
             node -e 'const s=process.env.QUALIFICATION_SHA;if(!/^[a-f0-9]{40}$/.test(s))throw Error("full SHA required");const p={format:1,qualificationOnly:true,entries:[{sha:s}]};require("fs").writeFileSync("oci-plan.json",JSON.stringify(p));require("fs").appendFileSync(process.env.GITHUB_OUTPUT,"has_work=true\nmatrix="+JSON.stringify({include:[{sha:s}]})+"\n")'
             exit 0
           fi
-          BASE=$(ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$OCI_SSH_USER@$OCI_SSH_HOST" 'sudo python3 /opt/lyam/bin/ordered-queue.py status')
+          BASE=$(ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$OCI_SSH_USER@$OCI_SSH_HOST" 'lyam-status')
           git fetch origin main
           HEAD=$(git rev-parse origin/main)
           MATRIX=$(node scripts/oci-plan.mjs plan "$BASE" "$HEAD" oci-plan.json)
@@ -144,4 +144,4 @@ jobs:
           printf '%s\n' "$OCI_SSH_KEY" > ~/.ssh/oci_deploy
           chmod 600 ~/.ssh/oci_deploy
           printf '%s\n' "$OCI_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$OCI_SSH_USER@$OCI_SSH_HOST" 'sudo python3 /opt/lyam/bin/ordered-queue.py drain' < qualified-plan.json
+          ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$OCI_SSH_USER@$OCI_SSH_HOST" 'lyam-drain' < qualified-plan.json

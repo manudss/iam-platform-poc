@@ -1,0 +1,143 @@
+name: Normal runtime namespace harness
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'deploy/oci/normal-runtime*'
+      - 'deploy/oci/dolt-current*'
+      - 'scripts/dolt-current-cleanup-fixture.py'
+      - 'scripts/normal-lifecycle-real-fixture.py'
+      - 'scripts/normal-copy-isolation-fixture.py'
+      - 'scripts/normal-runtime-docker-fixture.py'
+      - '.github/workflows/normal-runtime-harness.yml'
+      - 'scripts/normal-runtime-host*.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: normal-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  namespace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Unit contracts
+        run: python3 deploy/oci/normal-runtime.test.py
+      - name: Exact image, fake PG and Bao, no app effect
+        env:
+          IMAGE: ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904
+          SOURCE_SHA: 276d32d3162c940d7744eca9432e8b914976539f
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-runtime-docker-fixture.py --image "$IMAGE" --source-sha "$SOURCE_SHA" --out /tmp/normal-runtime-proof.json
+      - name: Exercise exact host fixture path on disposable runner
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-runtime-hosted-host-path.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-runtime-network-proof
+          path: |
+            /tmp/normal-runtime-proof.json
+            /tmp/normal-runtime-host-path-proof.json
+          if-no-files-found: warn
+  dolt-copy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Dolt copy and held unit contracts
+        run: |
+          python3 deploy/oci/dolt-current-client.test.py
+          python3 deploy/oci/dolt-current-observation.test.py
+          python3 deploy/oci/dolt-current-orchestration.test.py
+          python3 deploy/oci/dolt-copy-capture.test.py
+          python3 deploy/oci/dolt-held-capture.test.py
+          python3 deploy/oci/dolt-migration-evidence.test.py
+          python3 deploy/oci/qualification-dolt-only.test.py
+      - name: Existing exact image only
+        run: docker pull ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904
+      - name: Real disposable cleanup with SIGUSR1 during finish and remove
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/dolt-current-cleanup-fixture.py
+      - name: Actual copy CLI with synthetic offline Dolt data
+        run: |
+          for attempt in 1 2 3; do
+            sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/dolt-copy-hosted-fixture.py
+            cp /tmp/dolt-copy-runner-proof.json /tmp/dolt-copy-runner-proof-$attempt.json
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dolt-copy-runner-proof
+          path: |
+            /tmp/dolt-copy-runner-proof*.json
+            /tmp/dolt-current-cleanup-proof.json
+          if-no-files-found: warn
+
+  lifecycle-real:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Real normal lifecycle twice with synthetic Dolt PostgreSQL and Bao
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-lifecycle-real-fixture.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-lifecycle-real-proof
+          path: /tmp/normal-lifecycle-real-proof.json
+          if-no-files-found: warn
+
+  updater-real:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Actual normal updater shell with disposable three stores and local fixture front
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-lifecycle-real-fixture.py --updater
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-updater-real-proof
+          path: /tmp/normal-lifecycle-real-proof.json
+          if-no-files-found: warn
+
+  updater-full-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Actual normal updater with full installed qualifier and synthetic OIDC three stores
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-lifecycle-real-fixture.py --updater --full-qualification
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-updater-full-qualification-proof
+          path: /tmp/normal-lifecycle-real-proof.json
+          if-no-files-found: warn
+
+  copy-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Explicit isolated-copy networks, DNS deny counter and bounded runtime
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/normal-copy-isolation-fixture.py --synthetic-account --capture-helper
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: normal-copy-isolation-proof
+          path: /tmp/normal-lifecycle-real-proof.json
+          if-no-files-found: warn

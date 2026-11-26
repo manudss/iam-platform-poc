@@ -1,0 +1,48 @@
+name: Cold three store isolated replay
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'scripts/cold-copy-real-fixture.py'
+      - 'deploy/oci/cold-three-store-copy*'
+      - 'deploy/oci/coldcopy-runtime.py'
+      - 'deploy/oci/isolated-copy-*'
+      - 'deploy/oci/isolated-capture*'
+      - 'deploy/oci/isolated-copy-witness*'
+      - 'deploy/oci/qualification*'
+      - 'deploy/oci/current-baseline-host*'
+      - 'deploy/oci/dev-process-exit-probe*'
+      - 'deploy/oci/variant-b-capture*'
+      - 'deploy/oci/source-rw-*'
+      - '.github/workflows/cold-copy-real.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cold-copy-real-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  cold-copy-real:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Unit contracts, synthetic doubles only
+        run: |
+          python3 deploy/oci/cold-three-store-copy.test.py
+          python3 deploy/oci/dev-process-exit-probe.test.py
+          python3 deploy/oci/variant-b-capture.test.py
+          python3 deploy/oci/source-rw-runtime.test.py
+          python3 deploy/oci/source-rw-transaction.test.py
+          python3 deploy/oci/source-rw-journal.test.py
+          python3 deploy/oci/source-rw-copy.test.py
+      - name: Cold actual PG Bao Dolt archives, exact restore and isolated full qualifier
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_SHA python3 scripts/cold-copy-real-fixture.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cold-copy-real-proof
+          path: /tmp/cold-copy-real-proof.json
+          if-no-files-found: warn
