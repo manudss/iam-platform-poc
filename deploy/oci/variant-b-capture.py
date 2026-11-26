@@ -19,7 +19,7 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
      if observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['Image']!=iid[role] or not observed['State']['Running']:raise ValueError('all three running identities/restart policies required before signals')
      identities[role]={'id':observed['Id'],'name':name,'image_id':iid[role],'image':{'app':IMAGE,'pg':PG_IMAGE,'bao':BAO_IMAGE}[role],'restart_count':observed['RestartCount'],'restart_policy':'no','mounts':canonical_mounts(observed['Mounts'])}
  capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':identities,
-   'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[],'code_directory':str(codedir),'evidence_root':str(root),'archive_root':str(arch),'quiescence':{'profile':'external-bao-v1','pg_user':'lyam','pg_database':'lyam','nats_log_relative':'nats.log'}}
+   'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[],'code_directory':str(codedir),'evidence_root':str(root),'archive_root':str(arch),'quiescence':{'profile':'external-bao-v1','pg_user':'lyam','pg_database':'lyam','nats_log_relative':'nats.log'},'code_bindings':{'variant-b-capture.py':{'path':str(codedir/'variant-b-capture.py'),'sha256':LOADED_SHA256}}}
  handles=[];bindings={}
  for role in ('journal','updater'):
      lp=Path('/root')/(eng+'-'+role+'.lock');lp.touch(mode=0o600);fh=lp.open('rb');fcntl.flock(fh,fcntl.LOCK_EX|fcntl.LOCK_NB);handles.append(fh);bindings[role]=(str(lp),fh.fileno())
@@ -33,7 +33,9 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
          mounts=[v for v in capture_spec['identities'][role]['mounts'] if v['Destination']==destination and v['Type']=='bind']
          if len(mounts)!=1 or Path(mounts[0]['Source']).resolve(strict=True)!=source.resolve(strict=True):raise ValueError('exact source mount differs')
      capture.assert_single_writer_sources(capture_spec,allowed_ids=[capture_spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
-     return capture_spec_bound(result,capture_spec,capture,{'docker':docker,'run':run,'write_new':write_new,'sha':sha,'load':load},retained_handles)
+     out=capture.capture_variant_b_review_only(capture_spec,result,{'docker':docker,'run':run,'write_new':write_new,'sha':sha,'load':load})
+     result['host_review_candidate_spec_bound_actual']=True
+     return out
  finally:
      for fh in handles:fh.close()
      for fd in retained_handles.values():os.close(fd)

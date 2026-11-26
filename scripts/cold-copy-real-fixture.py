@@ -234,12 +234,17 @@ def main():
         if not all(result['dev_real_always_restart_negative'].values()):raise ValueError('always negative container changed')
         docker('rm','-f',always);owned.remove(always)
         unknown='lq-unknown-'+eng;owned.append(unknown)
-        docker('run','-d','--network','none','--restart','no','--name',unknown,'--entrypoint','/bin/sh',IMAGE,'-c','sleep 3600')
+        docker('run','-d','--network','none','--restart','no','--name',unknown,'--entrypoint','/bin/sh',IMAGE,'-c','for n in 1 2 3 4 5 6 7; do sleep 3600 & done; wait')
         unknown_before=json.loads(docker('inspect',unknown))[0]
+        for _ in range(50):
+            cg=Path('/proc',str(unknown_before['State']['Pid']),'cgroup').read_text().split('0::',1)[1].strip()
+            if len((Path('/sys/fs/cgroup')/cg.lstrip('/')/'cgroup.procs').read_text().split())>=8:break
+            time.sleep(.02)
+        else:raise ValueError('unknown negative process fixture not ready')
         probe_negative=load(codedir/'dev-process-exit-probe.py','negative_probe');negative_checkpoints=[]
         try:probe_negative.experiment(unknown_before['State']['Pid'],negative_checkpoints.append,timeout=1)
         except ValueError as e:
-            if str(e) not in ('unexpected bounded process count',) and not str(e).startswith('unknown process'):raise
+            if not str(e).startswith('unknown process'):raise
         else:raise ValueError('unknown process profile not refused')
         unknown_after=json.loads(docker('inspect',unknown))[0]
         result['dev_real_unknown_profile_negative']={'refused':True,'no_signal_intent_written':negative_checkpoints==[],'restart_count_unchanged':unknown_before['RestartCount']==unknown_after['RestartCount'],'started_at_unchanged':unknown_before['State']['StartedAt']==unknown_after['State']['StartedAt'],'still_running':unknown_after['State']['Running']}
