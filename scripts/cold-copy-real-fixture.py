@@ -229,7 +229,18 @@ def main():
             seq[0]+=1;write_new(root/'effects'/('%03d-%s.json'%(seq[0],event['phase'])),{k:v for k,v in event.items()})  # durable, O_EXCL, fsync
         q=cold.Qualification(run,codedir/'qualification.py',sha(codedir/'qualification.py'),str(policy_path),str(env_path),str(root/'barrier'),str(root/'backup'),str(root/'evidence'/'preservation'),IMAGE)
         iso=cold.Isolated(run,w,n,None)
-        out=iso.qualify(baseline,spec,env_binding,q,before_effects,l,str(root/'normal-attempt-1.json'))
+        try:out=iso.qualify(baseline,spec,env_binding,q,before_effects,l,str(root/'normal-attempt-1.json'))
+        except BaseException as error:
+            result['module_steps']=iso.steps
+            stages=['witness','counter','cleanup','private','policy','restore','network','companion','FIFO','placeholder','ledger','unseal','launcher','command refused']
+            chain=[];seen=set();current=error
+            while current is not None and id(current) not in seen and len(chain)<8:
+                seen.add(id(current));message=str(current)
+                chain.append({'type':type(current).__name__,'categories':[x for x in stages if x.lower() in message.lower()],'counter_missing':'not counted' in message or 'not reachable' in message,'foreign':'foreign' in message,'firewall_changed':'firewall-changed' in message,'rule_remains':'own-rule-remains' in message})
+                current=current.__cause__ or current.__context__
+            result['module_failure_chain']=chain
+            raise
+
         result.update(stage='completed',direct_execution=out['direct_execution'],baseline_bound=out['baseline']==baseline,historical_preservation_claimed=out['historical_preservation_claimed'],cleanup=out['cleanup'],retained_private_copy=out['retained_private_copy'],steps=out['steps'],probe={k:out['probe'][k] for k in ('phases','evidence_sha256','transport')},restored_members={r:v['members'] for r,v in out['restored'].items()},launch_proof_sha256=out['launch_proof_sha256'],guard=out['guard'])
         result['passed']=out['direct_execution'] is True and out['baseline']==baseline and out['cleanup']==[]
     finally:

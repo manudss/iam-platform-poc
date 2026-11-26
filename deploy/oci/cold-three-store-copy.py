@@ -84,6 +84,7 @@ class Isolated:
  def __init__(self,run,witness,launcher,prepare_env,clock=time.time):
   self.run=run;self.w=witness;self.L=launcher;self.prep=prepare_env;self.steps=[]
  def do(self,label,args,inp=None):
+  self.steps.append('begin-'+label)
   out=self.run(args,inp);self.steps.append(label);return out
  def js(self,label,args):return json.loads(self.do(label,args))[0]
 
