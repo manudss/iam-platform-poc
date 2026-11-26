@@ -80,7 +80,7 @@ def tar_cold(src_parent,top,out):
             if not (m.isreg() or m.isdir()):raise ValueError('cold archive contains non-regular member')
 
 def load(path,name):
-    s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+    s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);raw=path.read_bytes();exec(compile(raw,str(path),'exec'),m.__dict__);m.LOADED_SHA256=hashlib.sha256(raw).hexdigest();return m
 
 def image_user(image,user):
     """Native uid/gid from the image itself, never assumed."""
@@ -218,7 +218,21 @@ def main():
         for rel in sentinel_paths:
             (src/'data'/rel).write_bytes(('fictional-sentinel:'+rel).encode());(src/'data'/rel).chmod(0o600)
         adapter=load(codedir/'variant-b-capture.py','variant_b_capture')
-        result['variant_b_module_sha256']=sha(codedir/'variant-b-capture.py')
+        result['variant_b_module_sha256']=adapter.LOADED_SHA256
+        # Real negative: independent throwaway always-policy envelope, no stores,
+        # network none. B must refuse before loading any process/signalling code.
+        always='lq-negative-'+eng;owned.append(always)
+        docker('run','-d','--network','none','--restart','always','--name',always,'--entrypoint','/bin/sh',IMAGE,'-c','sleep 3600')
+        always_before=json.loads(docker('inspect',always))[0]
+        try:
+            adapter.quiesce_archive({},codedir,root,src,arch,eng,pg,bao,always,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run)
+        except ValueError as e:
+            if str(e)!='restart policy must be no before any signal':raise
+        else:raise ValueError('always restart policy not refused')
+        always_after=json.loads(docker('inspect',always))[0]
+        result['dev_real_always_restart_negative']={'refused':True,'restart_count_unchanged':always_before['RestartCount']==always_after['RestartCount'],'started_at_unchanged':always_before['State']['StartedAt']==always_after['State']['StartedAt'],'still_running':always_after['State']['Running']}
+        if not all(result['dev_real_always_restart_negative'].values()):raise ValueError('always negative container changed')
+        docker('rm','-f',always);owned.remove(always)
         baseline,ledger_binding,archives=adapter.quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run)
         dolt_stat=(src/'data').lstat()
         ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}

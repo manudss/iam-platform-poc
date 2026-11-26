@@ -94,7 +94,7 @@ print(json.dumps(out,sort_keys=True))"""
          if libc.syncfs(fd)!=0:raise OSError(ctypes.get_errno(),'syncfs refused')
      finally:os.close(fd)
  app_before=hostmod.inventory(src/'data')
- receipt={'module_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
+ receipt={'code_commit':os.environ.get('GITHUB_SHA'),'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
  result['dev_variant_b_receipt']=receipt
  receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
  if receipt_path.read_bytes()!=json.dumps(receipt,sort_keys=True).encode() or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
@@ -104,7 +104,8 @@ print(json.dumps(out,sort_keys=True))"""
  checkpoint({'phase':'dev-envelope-kill-intent','id':current['Id'],'receipt_sha256':receipt_sha})
  docker('kill','--signal','KILL',current['Id'])
  envelope=json.loads(docker('inspect',current['Id']))[0]['State']
- if json.loads(docker('inspect',current['Id']))[0]['RestartCount']!=original_restart_count:raise ValueError('restart count changed after envelope')
+ result['dev_restart_count_after_envelope']=json.loads(docker('inspect',current['Id']))[0]['RestartCount']
+ if result['dev_restart_count_after_envelope']!=original_restart_count:raise ValueError('restart count changed after envelope')
  result['dev_envelope_exit']={k:envelope[k] for k in ('Running','ExitCode','OOMKilled')}
  if result['dev_envelope_exit']!={'Running':False,'ExitCode':137,'OOMKilled':False}:raise ValueError('unexpected envelope exit')
  if any(int(v) for f in Path(scan_b['cgroup_path']).rglob('cgroup.procs') for v in f.read_text().split()):raise ValueError('cgroup not empty after envelope')

@@ -56,4 +56,39 @@ class Tests(unittest.TestCase):
   def alter(case,o,p):saved.append(case);o['network_boundary']=lambda *a:(_ for _ in ()).throw(ValueError('network boundary'))
   with self.assertRaisesRegex(ValueError,'boundary'):self.run_case(alter)
   self.assertNotIn((8,signal.SIGINT),saved[0][3])
+ def test_supervisor_never_freezes_no_children_signalled(self):
+  saved=[]
+  def alter(case,o,p):
+   saved.append(case);original=o['stat']
+   def unfrozen(pid):
+    v=original(pid)
+    if pid==2:v['state']='S'
+    return v
+   o['stat']=unfrozen
+  with self.assertRaisesRegex(ValueError,'deadline'):self.run_case(alter)
+  self.assertFalse(any(sig!=signal.SIGSTOP for pid,sig in saved[0][3]))
+ def test_pid_reuse_refuses_before_signal(self):
+  saved=[]
+  def alter(case,o,p):
+   saved.append(case);original=o['stat']
+   o['stat']=lambda pid:{**original(pid),'start':999}
+  with self.assertRaisesRegex(ValueError,'identity'):self.run_case(alter)
+  self.assertEqual(saved[0][3],[])
+ def test_fork_during_freeze_refused_before_child_signal(self):
+  saved=[]
+  def alter(case,o,p):
+   saved.append(case);original=o['scan'];n=[0]
+   def scan(pid):
+    n[0]+=1;r,roles=original(pid)
+    if n[0]>1:r[99]={**r[1],'pid':99}
+    return r,roles
+   o['scan']=scan
+  with self.assertRaisesRegex(ValueError,'set changed'):self.run_case(alter)
+  self.assertFalse(any(sig!=signal.SIGSTOP for pid,sig in saved[0][3]))
+ def test_proc_permission_failure_refuses_before_signal(self):
+  saved=[]
+  def alter(case,o,p):
+   saved.append(case);o['stat']=lambda pid:(_ for _ in ()).throw(PermissionError('proc'))
+  with self.assertRaises(PermissionError):self.run_case(alter)
+  self.assertEqual(saved[0][3],[])
 if __name__=='__main__':unittest.main()
