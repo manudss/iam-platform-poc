@@ -99,6 +99,16 @@ const duration = (r: { startedAt?: string; finishedAt?: string | null; started_a
   <div class="row"><span class="chip" [attr.data-status]="st.status">{{st.status}}</span><b>{{st.name}}</b><span class="chip" [attr.data-status]="categoryOf(st)">{{categoryLabel(categoryOf(st))}}</span><small>attempts: {{st.attempts}} — {{dur(st)}}</small><span class="spacer"></span>
   @if (!uncertain(v) && (v.run.status === 'completed' || v.run.status === 'failed' || v.run.status === 'canceled') && st.status !== 'skipped') {<button class="secondary" (click)="rerunFrom(st.node_id)" title="Re-run the workflow from this step">Re-run from here</button>}</div>
   @if (st.error) {<p class="msg error">{{st.error}}</p>}
+  @if (v.run.status === 'failed' && st.type === 'jira-create-issue' && st.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED') {
+    <details><summary>Reconcile Jira effect</summary>
+    <p>Read Jira first. Record the provider check and its coverage. This does not run any step. If a ticket exists, the server verifies its project, summary, type and labels before accepting its key.</p>
+    <label>Outcome<select [(ngModel)]="jiraOutcome"><option value="created">Ticket created</option><option value="not-created">Confirmed no ticket created</option></select></label>
+    <label>Issue key (if created)<input [(ngModel)]="jiraIssue" /></label>
+    <label>Provider evidence and check time (no secrets)<textarea [(ngModel)]="jiraEvidence"></textarea></label>
+    <label><input type="checkbox" [(ngModel)]="jiraConfirm" /> I checked the provider for this run and confirm this outcome.</label>
+    <button [disabled]="!jiraConfirm || jiraEvidence.trim().length < 20" (click)="reconcileJira(st.node_id)">Record reconciliation</button>
+    </details>
+  }
   @if (dataLinkOf(v, st); as l) {<p style="margin:.3rem 0"><a class="btn secondary" [routerLink]="['/database', 'data']" [queryParams]="{ table: l.table, ref: l.ref, filter: l.filter }">{{l.removed ? 'Open the table in Data (row removed)' : 'Open the row in Data'}}</a> <span class="hint">{{l.table}} on {{l.ref}}</span></p>}
   <details><summary>Input</summary><pre class="wf-log">{{st.input | json}}</pre></details>
   <details open><summary>Output</summary><pre class="wf-log">{{st.output | json}}</pre></details>
@@ -182,6 +192,11 @@ export class WorkflowExecutionsPage implements OnInit, OnDestroy {
       this.note.set((e as Error).message);
       if ((e as Error).message.includes('unknown run')) { this.tabs.drop('run', id); this.close(); }
     }
+  }
+  protected jiraOutcome = 'created'; protected jiraIssue = ''; protected jiraEvidence = ''; protected jiraConfirm = false;
+  protected async reconcileJira(node: string) {
+    try { this.view.set(await clientOf(this.s).reconcileJira(this.selected()!, node, {outcome:this.jiraOutcome,issueKey:this.jiraIssue,evidence:this.jiraEvidence,confirm:this.jiraConfirm})); this.jiraConfirm=false; this.note.set('Reconciliation recorded. Review the remaining steps, then use Retry to continue this same run.'); }
+    catch (e) { this.note.set((e as Error).message); }
   }
   protected uncertain(v:RunView) {return v.steps.some(s=>s.error==='EXTERNAL_EFFECT_REVIEW_REQUIRED');}
   protected async retry() { try { this.view.set(await clientOf(this.s).retry(this.selected()!)); } catch (e) { this.note.set((e as Error).message); } }

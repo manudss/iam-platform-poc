@@ -202,6 +202,7 @@ export class WorkflowClient {
     return this.req<{ runs: RunSummary[] }>('GET', `/workflow-runs${q ? `?${q}` : ''}`);
   }
   run(id: string) { return this.req<RunView>('GET', `/workflow-runs/${id}`); }
+  reconcileJira(id: string, node: string, body: Record<string, unknown>) { return this.req<RunView>('POST', `/workflow-runs/${id}/steps/${node}/reconcile-jira`, body); }
   retry(id: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/retry`, {}); }
   removeRun(id: string) { return this.req<{ deleted: string }>('DELETE', `/workflow-runs/${id}`); }
   rerunFrom(id: string, nodeId: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/rerun-from/${nodeId}`, {}); }

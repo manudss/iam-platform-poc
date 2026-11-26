@@ -45,6 +45,7 @@ export class WorkflowsController {
   @Get('workflow-runs') runs(@Param('tenant') t: string, @Query('definition') definition?: string, @Query('status') status?: string, @Query('tests') tests?: string) { return this.wf.listRuns(t, definition, { status, tests: tests === '1' || tests === 'true' }); }
   @Get('workflow-runs/:runId') run(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.runView(t, runId); }
   @Post('workflow-runs/:runId/rerun-from/:nodeId') rerunFrom(@Param('tenant') t: string, @Param('runId') runId: string, @Param('nodeId') nodeId: string) { return this.wf.rerunFrom(t, runId, nodeId); }
+  @Post('workflow-runs/:runId/steps/:nodeId/reconcile-jira') reconcileJira(@Param('tenant') t: string, @Param('runId') runId: string, @Param('nodeId') nodeId: string, @Body() body: Record<string, unknown>, @Req() r: Req_) { return this.wf.reconcileJira(t, runId, nodeId, body ?? {}, r.user?.sub); }
   @Post('workflow-runs/:runId/retry') retry(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.retry(t, runId); }
   @Post('workflow-runs/:runId/cancel') cancel(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.cancel(t, runId); }
   @Post('workflow-runs/:runId/review') review(@Param('tenant') t: string, @Param('runId') runId: string, @Req() r: Req_) { return this.wf.review(t, runId, r.user?.sub); }

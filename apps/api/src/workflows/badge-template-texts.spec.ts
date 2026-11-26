@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import nock from 'nock';
 import { externalBlock, validateGraph } from './model.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
@@ -29,11 +30,14 @@ describe('badge templates: validated texts and ticket label', () => {
     const action = adapter.pieceAction('@activepieces/piece-jira-cloud', 'create_issue');
     const old = action.run; let captured: any;
     action.run = async (ctx: any) => { captured = ctx.propsValue; return { key: 'KAN-99' }; };
+    const projectLookup = nock('https://example.atlassian.net').get('/rest/api/3/project/KAN').reply(200, {id:'10000',key:'KAN'});
     try {
       const j = externalBlock('jira-create-issue')!;
       const config = j.validate({ project: 'KAN', issueTypeId: '10001', summary: 'Badge fictif', labels: 'badge-demo', dryRun: false });
       await j.run({ config, settings: { jiraInstanceUrl: 'https://example.atlassian.net', jiraEmail: 'fiction@example.test', jiraApiToken: 'fictitious-test-value' }, dryRun: false, log() {} } as any);
       assert.deepEqual(captured.issueFields.labels, ['badge-demo']);
+      assert.equal(captured.projectId, '10000');
+      assert.equal(projectLookup.isDone(), true);
     } finally { action.run = old; }
   });
   it('labels: optional, bounded, no space', () => {

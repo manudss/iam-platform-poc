@@ -95,6 +95,7 @@ describe('whole badge graphs with real local state and provider network fixtures
     nock('https://sheets.googleapis.com').persist().put(/\/values\//).query(true).reply((_uri: string, body: any) => {
       body.values[0].forEach((val: unknown, index: number) => { if (val !== null) { values[index] = String(val); writes.push(columns[index]); } }); return [200, { updatedCells: 1 }];
     });
+    nock('https://fictional.atlassian.net').persist().get('/rest/api/3/project/KAN').reply(200, {id:'10000',key:'KAN'});
     nock('https://fictional.atlassian.net').persist().get(/\/createmeta\//).query(true).reply(200, { fields: [], startAt: 0, maxResults: 100, total: 0 });
     nock('https://fictional.atlassian.net').persist().post(/\/issue$/).reply(201, () => { tickets++; return { id: '123', key: 'KAN-123', self: 'https://fictional.atlassian.net/rest/api/3/issue/123' }; });
     nock('https://fictional.atlassian.net').persist().get('/rest/api/3/issue/123').reply(200, { id: '123', key: 'KAN-123', fields: { summary: 'Fixture badge' } });

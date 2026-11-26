@@ -8,6 +8,7 @@ import { runPieceAction } from './adapter.mjs';
 import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, updateGoogleCellChecked, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
+import { withJiraTransport } from './jira-transport.mjs';
 import { sendOneMail } from './mail-api.mjs';
 import { LYAM_ADMIN_BLOCKS, assertResetApproval } from './lyam-admin-blocks.mjs';
 
@@ -439,10 +440,16 @@ const jiraCreateIssue = {
     const email = str(ctx.settings?.jiraEmail, 'jira email', 200, false);
     const apiToken = str(ctx.settings?.jiraApiToken, 'jira api token', 500, false);
     if (!instanceUrl || !email || !apiToken) bad('jira-create-issue: fill the Jira settings of the workflow-connectors plugin first (console), or keep dryRun on');
-    const result = await runPieceAction('@activepieces/piece-jira-cloud', 'create_issue', {
+    // The native action requires a numeric project ID, while this block exposes a project KEY.
+    const root = instanceUrl.replace(/\/$/, '');
+    const projectResponse = await fetch(`${root}/rest/api/3/project/${encodeURIComponent(c.project)}`, {redirect:'error', headers:{Authorization:'Basic '+Buffer.from(`${email}:${apiToken}`).toString('base64'),Accept:'application/json'},signal:AbortSignal.timeout(15000)});
+    if (!projectResponse.ok) bad('jira-create-issue: project lookup refused');
+    const project = await projectResponse.json();
+    if (!/^[0-9]+$/.test(String(project.id)) || project.key !== c.project) bad('jira-create-issue: project identity mismatch');
+    const result = await withJiraTransport(ctx.settings, () => runPieceAction('@activepieces/piece-jira-cloud', 'create_issue', {
       auth: { props: { instanceUrl, email, apiToken } },
-      propsValue: { projectId: c.project, issueTypeId: c.issueTypeId, issueFields: { summary: c.summary, ...(c.description ? { description: c.description } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } },
-    });
+      propsValue: { projectId: String(project.id), issueTypeId: c.issueTypeId, issueFields: { summary: c.summary, ...(c.description ? { description: c.description } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } },
+    }));
     const key = String(result?.key ?? '');
     ctx.log(`Jira issue ${key} created (REAL, on ${instanceUrl})`);
     // The browsable site: the connection's site URL (needed when instanceUrl is a gateway), else the site origin itself.
