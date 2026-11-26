@@ -16,6 +16,8 @@ import { branchContext } from '../workspace/context.js';
 import { WorkflowEngine } from './engine.js';
 import { validateGraph } from './model.js';
 import { WorkflowConnections } from './connections.js';
+import { SIGNUP_REQUEST_STORE, SignupRequestStore } from '../profile/signup-request-store.js';
+import { UsersService } from '../users/users.service.js';
 import { SignupService } from '../profile/signup.service.js';
 import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
@@ -1249,32 +1251,59 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     } finally { probes.mock.restore(); }
   });
 
-  it('signup approval fails before branch creation, pending removal, directory calls or account events', async () => {
-    const signup = app.get(SignupService);
-    const approve = mock.method(signup, 'approve'); const events = mock.method(app.get(ApplicationBus), 'emit');
-    // Fictional preconfirmed request. No real mailbox, password or external service.
-    signup.pending.set('intake-demo', { tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() });
+  it('signup approval stages on its own branch, survives until publication, then finalizes the exact request', async () => {
+    await app.get(UsersService).init(); // production workspace boot initializes the directory before run branches exist
+    const signup = app.get(SignupService), queue = app.get<SignupRequestStore>(SIGNUP_REQUEST_STORE);
+    await queue.save(T, (await queue.load(T)).revision, [{ tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() }]);
+    const events = mock.method(app.get(ApplicationBus), 'emit');
+    const stageOriginal = signup.stageApprove.bind(signup); let stageError = '';
+    const stageSpy = mock.method(signup, 'stageApprove', async (...args: Parameters<typeof signup.stageApprove>) => { try { return await stageOriginal(...args); } catch(e) { stageError = String(e); throw e; } });
     const def = await ok('POST', '/workflows', { name: 'Signup intake', graph: { nodes: [
       { id: 'read', type: 'lyam-read-intake-request', name: 'read', config: { kind: 'signup', subject: 'intake-demo' } },
       { id: 'resolve', type: 'lyam-resolve-intake-request', name: 'resolve', config: { kind: 'signup', subject: 'intake-demo', snapshot: '{{steps.read.snapshot}}', decision: 'approve' } },
-    ], edges: [{ from: 'read', to: 'resolve' }] } }) as { definition: { id: string } };
-    const oldWorkspace = process.env.IAM_WORKSPACE_MODE; process.env.IAM_WORKSPACE_MODE = '1';
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Review signup intake-demo' } },
+      { id: 'final', type: 'lyam-finalize-signup', name: 'finalize', config: { subject: 'intake-demo' } },
+    ], edges: [{ from: 'read', to: 'resolve' }, { from: 'resolve', to: 'publish' }, { from: 'publish', to: 'final' }] } }) as { definition: { id: string } };
+    const oldWorkspace = process.env.IAM_WORKSPACE_MODE;
     try {
-    const start = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).start(T, def.definition.id, 'demo-alice')) as RunView;
-    let done: RunView = start; const until = Date.now() + 20000;
-    while (!['completed', 'failed'].includes(done.run.status) && Date.now() < until) {
-      await new Promise(r => setTimeout(r, 100));
-      done = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).runView(T, start.run.id)) as RunView;
-    }
-    assert.equal(done.run.status, 'failed'); assert.match(done.run.error!, /publication-aware/);
-    assert.equal(done.run.branch, null); assert.equal(approve.mock.calls.length, 0);
-    assert.equal(signup.pending.has('intake-demo'), true, 'the request survives the refusal');
-    assert.ok(!events.mock.calls.some(c => ['user.created', 'user.blocked', 'signup.approved'].includes(c.arguments[0].type) && c.arguments[0].payload.subject === 'intake-demo'));
-    const live = (await app.get(VersioningService).tableRows('main', 'identities', 100, 0)) as unknown as { rows: { id: string }[] };
-    assert.ok(!live.rows.some(x => x.id === 'intake-demo'), 'approval does not publish the new account');
-    assert.ok(!JSON.stringify(done).includes('fictional-hash') && !JSON.stringify(done).includes('fictional-salt'));
-    assert.notEqual(done.run.error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED', 'known pre-effect refusal is not an uncertain write');
-    } finally { approve.mock.restore(); events.mock.restore(); if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace; }
+      process.env.IAM_WORKSPACE_MODE = '1';
+      const start = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).start(T, def.definition.id, 'demo-alice')) as RunView;
+      const until = Date.now() + 20000;
+      let approval: any;
+      while (Date.now() < until) {
+        const tasks = await app.get(WorkflowStore).listTasks(T);
+        approval = tasks.find(t => t.run_id === start.run.id && t.kind === 'publish-approval');
+        const run = await app.get(WorkflowStore).getRunById(start.run.id);
+        if (approval || run?.status === 'failed') break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace;
+      assert.ok(approval, stageError + JSON.stringify(await app.get(WorkflowStore).getRunById(start.run.id)));
+      const staged = await waitRun(start.run.id, ['waiting']);
+      assert.ok(staged.run.branch && staged.run.branch !== 'main');
+      assert.equal((await signup.list(T)).requests.some((r: any) => r.id === 'intake-demo'), true);
+      assert.ok(!(await app.get(UsersService).list('main')).some(u => u.id === 'intake-demo'));
+      assert.ok((await app.get(UsersService).list(staged.run.branch!)).some(u => u.id === 'intake-demo'));
+      assert.ok(!events.mock.calls.some(c => ['user.created', 'signup.approved', 'user.blocked'].includes(c.arguments[0].type) && c.arguments[0].payload.subject === 'intake-demo'));
+      await assert.rejects(signup.finalize(T, 'intake-demo', 'demo-alice', start.run.id), /not effectively published/);
+      const approved = await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+      assert.ok(approved.status < 300, JSON.stringify(approved.body));
+      const watch = await waitTask(start.run.id, 'publish-merge-watch');
+      const prId = Number((approval.detail.pr as Record<string, unknown>).id);
+      const merged = await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` });
+      assert.ok(merged.status < 300, JSON.stringify(merged.body));
+      const published = (await app.get(UsersService).list('main')).find(u => u.id === 'intake-demo');
+      assert.equal(published?.login_enabled, true, 'hold=false: publication makes sign-in eligible before finalization, not vice versa');
+      assert.equal(published?.hasCredential, true);
+      assert.equal((await signup.list(T)).requests.some((r: any) => r.id === 'intake-demo'), true, 'request still awaits explicit finalization after publication');
+      const marked = await call('POST', `/workflow-tasks/${watch.id}/decision`, { decision: 'merged', justification: 'reviewed and merged' }, { token: `${T}:admin-two` });
+      assert.ok(marked.status < 300, JSON.stringify(marked.body));
+      const done = await waitRun(start.run.id, ['completed', 'failed'], 30000);
+      assert.equal(done.run.status, 'completed', done.run.error ?? '');
+      assert.equal((await signup.list(T)).requests.some((r: any) => r.id === 'intake-demo'), false);
+      assert.equal(events.mock.calls.filter(c => c.arguments[0].type === 'signup.approved' && c.arguments[0].payload.subject === 'intake-demo').length, 1);
+      assert.ok(!JSON.stringify(done).includes('fictional-hash') && !JSON.stringify(done).includes('fictional-salt'));
+    } finally { stageSpy.mock.restore(); events.mock.restore(); if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace; }
   });
 
   it('connection CRUD and draft probes stay behind tenant/auth/admin and never reveal credentials', async()=>{

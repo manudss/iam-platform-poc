@@ -131,7 +131,7 @@ export class UsersService {
       return true;
     }));
   }
-  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo', temporary?: { expiresAt: number }) {
+  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo', temporary?: { expiresAt: number }, deferCreateEvent = false) {
     const branch = currentBranch(true); await this.validate(tenant, pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
@@ -150,7 +150,7 @@ export class UsersService {
     const saved = (await this.list()).find(x => x.id === id) as Record<string, unknown> | undefined;
     // Application events (workflow start triggers): emitted after the write succeeded, fire-and-forget.
     const at = new Date().toISOString();
-    if (create) this.events?.emit({ type: 'user.created', tenant, branch, at, payload: { subject: id, displayName: String(saved?.display_name ?? ''), department: String(saved?.department ?? ''), email: String(saved?.email ?? '') } });
+    if (create && !deferCreateEvent) this.events?.emit({ type: 'user.created', tenant, branch, at, payload: { subject: id, displayName: String(saved?.display_name ?? ''), department: String(saved?.department ?? ''), email: String(saved?.email ?? '') } });
     else if (prev) {
       if (String(prev.department ?? '') !== String(saved?.department ?? '')) this.events?.emit({ type: 'user.department-changed', tenant, branch, at, payload: { subject: id, from: String(prev.department ?? ''), to: String(saved?.department ?? '') } });
       if (!!prev.login_enabled && saved && !saved.login_enabled) this.events?.emit({ type: 'user.disabled', tenant, branch, at, payload: { subject: id } });

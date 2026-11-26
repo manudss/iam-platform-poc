@@ -595,14 +595,16 @@ export function createWorkflowEngine(deps) {
       tasks: deps.tasks,
       connectionTests: deps.connectionTests,
       intake: deps.intake ? {
+        finalize: async subject => { await ctx.markEffectPending({ kind: 'signup-finalize', subject }); return deps.intake.finalize(run.tenant, subject, run.started_by, run.id); },
         read: (kind, subject) => deps.intake.read(run.tenant, kind, subject, run.started_by),
         resolve: async (kind, subject, snapshot, decision) => {
           // Validate unsupported cases before recording an effect intent or creating any branch.
           // Profile resolution uses the existing immediate personal-branch merge/refusal.
-          await deps.intake.prepareResolve(kind, decision, run.started_by);
+          await deps.intake.prepareResolve(kind, decision, run.started_by, run.id);
           await ctx.markEffectPending({ kind, subject, decision });
-          const branch = run.base_branch ?? deps.versioning.defaultBranch;
-          return deps.branchRun(branch, () => deps.intake.resolve(run.tenant, kind, subject, snapshot, decision, run.started_by));
+          const staged = kind === 'signup' && decision === 'approve';
+          const branch = staged ? await ensureBranch(run, say) : run.base_branch ?? deps.versioning.defaultBranch;
+          return deps.branchRun(branch, () => deps.intake.resolve(run.tenant, kind, subject, snapshot, decision, run.started_by, staged ? { run: run.id, branch } : undefined));
         },
       } : undefined,
       reads: deps.reads,

@@ -325,7 +325,7 @@ const lyamSetLoginEnabled = writeBlock('lyam-set-login-enabled', 'Enable or disa
     return { id: c.id, enabled: c.enabled, updated: true };
 });
 
-const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a signup or profile request', 'REAL: administrator starter required. Resolves the exact snapshot read earlier; changed or self requests are refused. Signup approve is REFUSED before effects until publication-aware request finalization exists: a discarded branch must not lose the request or emit an early approval/account-block event. Signup reject removes the pending request immediately. Profile resolution uses the existing immediate personal-branch merge/refusal. Self edits and resolution are serialized inside one API process, not across API replicas. A crash during the call stops for review, never blindly repeats. Pending signup requests are in memory and do not survive a server restart.', [
+const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a signup or profile request', 'REAL: administrator starter required. Resolves the exact snapshot read earlier; changed or self requests are refused. Signup approve prepares a no-role account on the isolated workflow branch and keeps the durable request reserved until a reviewed publication followed by Finalize signup verifies live state. Workspace mode is required; holdAfterVerification currently refuses before account effects. Signup reject removes the pending request immediately. Profile resolution uses the existing immediate personal-branch merge/refusal. Self edits and resolution are serialized inside one API process, not across API replicas. A crash during the call stops for review, never blindly repeats. Pending signup requests use the operational request store and survive restarts when its Dolt backend is selected.', [
     { key: 'kind', label: 'Kind', type: 'select', options: ['signup', 'profile'], required: true },
     { key: 'subject', label: 'Request id', type: 'string', required: true },
     { key: 'snapshot', label: 'Digest from Read request', type: 'string', required: true },
@@ -335,6 +335,13 @@ const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a s
     if (ctx.test || ctx.dryRun) return { kind: c.kind, subject: c.subject, resolved: false, dryRun: true };
     if (!['signup', 'profile'].includes(c.kind) || !['approve', 'reject'].includes(c.decision)) bad('kind: signup/profile; decision: approve/reject');
     return need(ctx.intake, 'lyam-resolve-intake-request').resolve(c.kind, c.subject, c.snapshot, c.decision);
+});
+
+const lyamFinalizeSignup = writeBlock('lyam-finalize-signup', 'Finalize a published signup', 'Verifies the exact prepared identity, credential revision and profile values on main before finalizing its request. Must follow reviewed publication. No password or request data is returned. A discarded or unpublished branch cannot consume the request.', [
+    { key: 'subject', label: 'Signup request id', type: 'string', required: true },
+], cfg => ({ subject: str(cfg.subject, 'subject', 32) }), async ctx => {
+    if (ctx.test || ctx.dryRun) return { finalized: false, dryRun: true };
+    return need(ctx.intake, 'lyam-finalize-signup').finalize(ctx.config.subject);
 });
 
 const lyamCreateRole = writeBlock('lyam-create-role', 'Create a role', 'REAL write ON THE RUN BRANCH: creates a role (id, label, sensitivity). The change is reviewed and published like every other data change.', [
@@ -1461,7 +1468,7 @@ const lyamApplyPasswordReset = {
 export const LYAM_ADMIN_BLOCKS = [
     // P0
     lyamRequestApproval,
-    lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamReadSodConflicts, lyamTestConnections, lyamReadIntake, lyamResolveIntake, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
+    lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamReadSodConflicts, lyamTestConnections, lyamReadIntake, lyamResolveIntake, lyamFinalizeSignup, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
     lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamUpdateRole, lyamProposeRoleRemoval,
     igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign, igaReadOverdue, igaReassignReviews,
     lyamGrantAssignment, lyamRevokeAssignment,
