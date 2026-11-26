@@ -221,6 +221,20 @@ def main():
                     try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
                     except BlockingIOError:return
                     raise ValueError('transaction lock missing')
+            # Real refusal before first permit: existing exclusive commit slot
+            # forces journal.append failure with no mocked Docker/filesystem.
+            negative_journal=jm.Journal(txroot/'negative-events')
+            class FailCommitSlot:
+                def create(self,event):
+                    negative_journal.create(event)
+                    (negative_journal.path/'000001.json').write_bytes(b'occupied')
+                def append(self,event):return negative_journal.append(event)
+            negative_adapter=am.Adapter(plan,docker,check_lock)
+            try:tx.commit(plan,negative_adapter,FailCommitSlot())
+            except FileExistsError:pass
+            else:raise ValueError('journal collision failed to refuse')
+            result['source_rw_dev_journal_negative']={'real_exclusive_collision':True,'no_permit_issued':not negative_adapter.issued,'all_markers_absent':all(not (Path(v)/'committed').exists() for v in stores.values()),'all_new_still_running':all(json.loads(docker('inspect',v['id']))[0]['State']['Running'] for v in generations['new'].values()),'close_on_failure_recorded':negative_adapter.closed_on_failure,'normal_start_claimed':False}
+            if not all(result['source_rw_dev_journal_negative'][k] for k in ('no_permit_issued','all_markers_absent','all_new_still_running','close_on_failure_recorded')):raise ValueError('journal collision had effects')
             adapter_tx=am.Adapter(plan,docker,check_lock);journal=jm.Journal(txroot/'events')
             committed=tx.commit(plan,adapter_tx,journal)
         events=[json.loads(v.read_text()) for v in sorted((txroot/'events').glob('*.json'))]
