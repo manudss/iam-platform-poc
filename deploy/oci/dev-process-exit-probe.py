@@ -44,6 +44,7 @@ def experiment(init,checkpoint,timeout=30):
  This deliberately leaves the envelope/supervisors stopped for outer DEV cleanup.
  No process is resumed, retried, or KILLed here. Any mismatch refuses.
  """
+ if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():raise ValueError('disposable GitHub runner only')
  records,roles=scan(init);handles={pid:os.pidfd_open(pid,0) for pid in records};events=[]
  def same(pid):
   now=stat(pid)
