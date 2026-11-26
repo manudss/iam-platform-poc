@@ -182,13 +182,21 @@ def main():
         del keys,init
         docker('stop','-t','60',bao)
         result['stage']='seed-dolt'
-        owned.append(dolt);docker('run','-d','--name',dolt,'--network','none','--memory','2048m','--pids-limit','256','-v',f'{src/"data"}:/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',IMAGE)
+        # Seed the same PG-backed app mode used on replay, so startup creates
+        # its own native tables BEFORE the preservation baseline is archived.
+        docker('start',pg)
+        for _ in range(90):
+            if subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=10).returncode==0:break
+            time.sleep(1)
+        else:raise ValueError('seed pg restart never ready')
+        owned.append(dolt);docker('run','-d','--name',dolt,'--network',seednet,'-e','IAM_PG_URL=postgres://lyam@'+pg+':5432/lyam','--memory','2048m','--pids-limit','256','-v',f'{src/"data"}:/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',IMAGE)
         for _ in range(100):
             if subprocess.run(['docker','exec',dolt,'node','-e',"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],capture_output=True,timeout=10).returncode==0:break
             if not json.loads(docker('inspect',dolt))[0]['State']['Running']:raise ValueError('seed app died')
             time.sleep(2)
         else:raise ValueError('seed app health timeout')
         docker('stop','-t','30',dolt)
+        docker('stop','-t','60',pg)
         # All three writers must be stopped before archiving.
         for n in (pg,bao,dolt):
             if json.loads(docker('inspect',n))[0]['State']['Running']:raise ValueError('writer still running before cold archive')
