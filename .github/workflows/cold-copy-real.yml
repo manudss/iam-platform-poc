@@ -1,0 +1,34 @@
+name: Cold three store isolated replay
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'scripts/cold-copy-real-fixture.py'
+      - 'deploy/oci/cold-three-store-copy*'
+      - 'deploy/oci/coldcopy-runtime.py'
+      - 'deploy/oci/isolated-copy-*'
+      - '.github/workflows/cold-copy-real.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cold-copy-real-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  cold-copy-real:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Unit contracts, synthetic doubles only
+        run: python3 deploy/oci/cold-three-store-copy.test.py
+      - name: Cold actual PG Bao Dolt archives, exact restore and isolated full qualifier
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT python3 scripts/cold-copy-real-fixture.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cold-copy-real-proof
+          path: /tmp/cold-copy-real-proof.json
+          if-no-files-found: warn

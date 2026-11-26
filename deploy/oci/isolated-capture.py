@@ -3,11 +3,12 @@
 No app start.sh, no copied automation starts. Source is fixed adjacent qualifier.
 """
 import json,os,secrets,subprocess,time
+from pathlib import Path
 FIFO='/tmp/lyam-copy-capture.fifo'
 GUARD='set -eu; mkfifo -m 600 '+FIFO+'; read -r permit < '+FIFO+'; [ "$permit" = capture ]; rm -f '+FIFO+'; exec "$@"'
 def capture(cmd,image,env_file,data_dir,network,source,payload):
  policy=json.loads(payload)
- if not data_dir.startswith('/opt/lyam-qualification/copies/') or '..' in data_dir.split('/'):raise ValueError('fixed copy data root required')
+ if Path('/opt/lyam-qualification/copies') not in Path(data_dir).resolve().parents or '..' in data_dir.split('/'):raise ValueError('fixed copy data root required')
  if policy.get('isolatedCopy') is not True:raise ValueError('explicit isolated copy capture required')
  net=json.loads(cmd(['docker','network','inspect',network]))[0]
  if net.get('Internal') is not True or net.get('EnableIPv6') is not False:raise ValueError('capture network must be internal IPv4')

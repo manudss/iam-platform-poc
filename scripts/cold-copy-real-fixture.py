@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""Disposable REAL cold 3-store backup -> restore -> isolated replay fixture.
+GitHub-hosted runner only. No production, no E5, no real provider.
+Owner of this file: fixture only. It never edits deploy/oci modules.
+
+Flow: seed real Dolt (app image), real Postgres, real file-backed Bao (non-dev,
+initialised once, key JSON root 0600) -> stop cleanly -> cold tar archives (native
+uid/gid) -> hash baseline -> actual cold-three-store-copy.Isolated.qualify() with
+actual normal-runtime/normal-lifecycle/witness/qualification.py/isolated-capture.
+Output: allowlisted JSON only (/tmp/cold-copy-real-proof.json). Never prints or
+stores Bao keys/token/env/PG logs. Seeds are fictional.
+Status of this file when written: NOT RUN. Syntax checked and helper units tested
+without Docker only; the real proof is the GHA run.
+"""
+import fcntl,hashlib,importlib.util,json,os,secrets,shutil,subprocess,sys,tarfile,threading,time
+from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+from pathlib import Path
+
+IMAGE='ghcr.io/manudss/iam-platform-poc@sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904'
+SHA='276d32d3162c940d7744eca9432e8b914976539f'
+DIGEST='sha256:81aeb18f91f8413d44508866ef7e06becbe4816aa2478869fbff0d33bdef0904'
+PG_IMAGE='postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73'
+BAO_IMAGE='openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315'
+COPIES=Path('/opt/lyam-qualification/copies')
+FRONT_PORT=18089
+APP_PORT=18088
+BAO_HCL='ui = false\ndisable_mlock = true\nstorage "file" {\n  path = "/bao/file"\n}\nlistener "tcp" {\n  address = "0.0.0.0:8200"\n  tls_disable = 1\n}\napi_addr = "http://127.0.0.1:8200"\n'
+# Runs in a companion's network namespace through host Python (no tool needed in image).
+HTTP_SRC=("import json,sys,time,urllib.request\n"
+"a=json.loads(sys.stdin.buffer.read());h={'Content-Type':'application/json'}\n"
+"if a.get('token'):h['X-Vault-Token']=a['token']\n"
+"r=urllib.request.Request('http://127.0.0.1:8200'+a['path'],data=(json.dumps(a['body']).encode() if a.get('body') is not None else None),headers=h,method=a['method'])\n"
+"for i in range(60):\n"
+" try:\n"
+"  with urllib.request.urlopen(r,timeout=5) as x:print(x.read().decode() or '{}');break\n"
+" except OSError as e:\n"
+"  if i==59:raise\n"
+"  time.sleep(.5)\n")
+
+def run(args,input_bytes=None,timeout=300):
+    """Bound subprocess. Failure never carries stdout/stderr (secrets, logs)."""
+    r=subprocess.run(args,input=(input_bytes.encode() if isinstance(input_bytes,str) else input_bytes),capture_output=True,timeout=timeout)
+    if r.returncode:raise ValueError('fixture command refused: '+' '.join(args[:3]))
+    return r.stdout.decode().strip()
+
+def docker(*a,inp=None):return run(['docker',*a],inp)
+
+def write_new(path,value,mode=0o600):
+    raw=value if isinstance(value,bytes) else json.dumps(value,sort_keys=True).encode()
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,mode)
+    with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+    d=os.open(Path(path).parent,os.O_RDONLY)
+    try:os.fsync(d)
+    finally:os.close(d)
+    return hashlib.sha256(raw).hexdigest()
+
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+def tar_cold(src_parent,top,out):
+    """Cold archive keeping numeric uid/gid and modes; regular files and dirs only."""
+    with tarfile.open(out,'w:gz') as t:t.add(Path(src_parent)/top,arcname=top)
+    Path(out).chmod(0o600)
+    with tarfile.open(out,'r:gz') as t:
+        for m in t.getmembers():
+            if not (m.isreg() or m.isdir()):raise ValueError('cold archive contains non-regular member')
+
+def load(path,name):
+    s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+
+def image_user(image,user):
+    """Native uid/gid from the image itself, never assumed."""
+    uid=int(docker('run','--rm','--entrypoint','id',image,'-u',user));gid=int(docker('run','--rm','--entrypoint','id',image,'-g',user))
+    return uid,gid
+
+def bao_call(pid,method,path,body=None,token=None):
+    payload=json.dumps({'method':method,'path':path,'body':body,'token':token}).encode()
+    out=run(['nsenter','-t',str(pid),'-n','/usr/bin/python3','-c',HTTP_SRC],payload)
+    return json.loads(out)
+
+class Front(BaseHTTPRequestHandler):
+    """Loopback maintenance front: always 503 (qualifier requires it in both phases)."""
+    def do_GET(self):self.send_response(503);self.end_headers()
+    def log_message(self,*a):pass
+
+def main():
+    if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam').exists() or Path('/opt/lyam-recovery').exists():
+        raise ValueError('disposable github-hosted runner only')
+    repo=Path(__file__).resolve().parents[1];oci=repo/'deploy/oci'
+    eng='cf-'+secrets.token_hex(6)
+    root=COPIES/eng;src=Path('/opt/lyam-qualification/fixture-src')/eng;arch=Path('/root')/('cold-archives-'+eng);codedir=Path('/opt/lyam-qualification/code')/eng
+    result={'kind':'cold-three-store-copy-real-fixture','production_data_used':False,'passed':False,'stage':'setup','engagement':eng,'e5':False}
+    owned=[];nets=[];front=None;lockf=None
+    try:
+        for p in [Path('/opt'),Path('/opt/lyam-qualification'),COPIES,src.parent,codedir.parent]:
+            p.mkdir(parents=True,exist_ok=True);os.chown(p,0,0);p.chmod(0o755 if p==Path('/opt') else 0o700)
+        for d in [src,arch,codedir]:d.mkdir(mode=0o700)
+        for f in oci.iterdir():
+            if f.is_file():shutil.copyfile(f,codedir/('normal-runtime.py' if f.name=='coldcopy-runtime.py' else f.name))
+        shutil.copyfile(oci/'coldcopy-runtime.py',codedir/'normal-runtime.py')
+        os.chmod(codedir,0o755)
+        for image in [IMAGE,PG_IMAGE,BAO_IMAGE]:docker('pull',image)
+        iid={k:json.loads(docker('image','inspect',v))[0]['Id'] for k,v in [('app',IMAGE),('pg',PG_IMAGE),('bao',BAO_IMAGE)]}
+        pg_uid,pg_gid=image_user(PG_IMAGE,'postgres');bao_uid,bao_gid=image_user(BAO_IMAGE,'openbao')
+        revision=json.loads(docker('image','inspect',IMAGE))[0]['Config']['Labels'].get('org.opencontainers.image.revision')
+        if revision!=SHA:raise ValueError('app image revision differs from reviewed sha')
+
+        # ---------- seed three real stores ----------
+        result['stage']='seed-network'
+        seednet='lq-seed-'+eng;docker('network','create','--internal','--subnet','172.31.0.0/24',seednet);nets.append(seednet)
+        (src/'data').mkdir(mode=0o700);(src/'pg-data').mkdir(mode=0o700);(src/'bao-storage').mkdir(mode=0o700)
+        os.chown(src/'pg-data',pg_uid,pg_gid);os.chown(src/'bao-storage',bao_uid,bao_gid)
+        hcl_seed=src/'bao.hcl';hcl_seed.write_text(BAO_HCL);hcl_seed.chmod(0o644)
+        pg='lq-seed-'+eng+'-pg';bao='lq-seed-'+eng+'-bao';dolt='lq-seed-'+eng+'-dolt'
+        safety=['--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1','--restart','no']
+        result['stage']='seed-pg'
+        owned.append(pg);docker('run','-d',*safety,'--user',f'{pg_uid}:{pg_gid}','--name',pg,'--network',seednet,'-v',f'{src/"pg-data"}:/var/lib/postgresql/data','--tmpfs',f'/var/run/postgresql:uid={pg_uid},gid={pg_gid},mode=0755','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',PG_IMAGE)
+        for _ in range(90):
+            if subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=10).returncode==0:break
+            time.sleep(1)
+        else:raise ValueError('seed pg never ready')
+        docker('exec',pg,'psql','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1','-c',"CREATE TABLE cold_fixture(id int primary key,v text);INSERT INTO cold_fixture VALUES(1,'fictional-pg-row');")
+        docker('stop','-t','60',pg)
+        result['stage']='seed-bao'
+        owned.append(bao);docker('run','-d',*safety,'--user',f'{bao_uid}:{bao_gid}','--name',bao,'--network',seednet,'-v',f'{src/"bao-storage"}:/bao/file','-v',f'{hcl_seed}:/bao/config/bao.hcl:ro',BAO_IMAGE,'server','-config=/bao/config/bao.hcl')
+        pid=json.loads(docker('inspect',bao))[0]['State']['Pid']
+        init=bao_call(pid,'PUT','/v1/sys/init',{'secret_shares':1,'secret_threshold':1})
+        keys=init['keys_base64'];token=init['root_token']
+        bao_call(pid,'PUT','/v1/sys/unseal',{'key':keys[0]})
+        bao_call(pid,'POST','/v1/sys/mounts/secret',{'type':'kv','options':{'version':'2'}},token)
+        bao_call(pid,'POST','/v1/secret/data/iam/qualification',{'data':{'value':'fictional-bao-row'}},token)
+        # Operator-shaped key file, never printed. Fictional root token only in this disposable fixture.
+        root.mkdir(mode=0o700)
+        keyfile=root/'unseal-keys.json'
+        write_new(keyfile,{'unseal_keys_b64':keys,'unseal_threshold':1,'root_token':token})
+        tokenfile=root/'bao-token';write_new(tokenfile,token.encode())
+        del keys,init
+        docker('stop','-t','60',bao)
+        result['stage']='seed-dolt'
+        owned.append(dolt);docker('run','-d','--name',dolt,'--network','none','--memory','2048m','--pids-limit','256','-v',f'{src/"data"}:/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',IMAGE)
+        for _ in range(100):
+            if subprocess.run(['docker','exec',dolt,'node','-e',"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],capture_output=True,timeout=10).returncode==0:break
+            if not json.loads(docker('inspect',dolt))[0]['State']['Running']:raise ValueError('seed app died')
+            time.sleep(2)
+        else:raise ValueError('seed app health timeout')
+        docker('stop','-t','30',dolt)
+        # All three writers must be stopped before archiving.
+        for n in (pg,bao,dolt):
+            if json.loads(docker('inspect',n))[0]['State']['Running']:raise ValueError('writer still running before cold archive')
+        dolt_stat=(src/'data').lstat()
+        ledger=src/'data'/'migrations'/'journal.json'  # hashed AFTER writers stopped, BEFORE archive
+        ledger_binding={'present':ledger.is_file(),'sha256':(sha(ledger) if ledger.is_file() else None)}
+        result['migration_ledger_present']=ledger_binding['present']
+        result['stage']='archive'
+        archives={}
+        for role,top in [('dolt','data'),('pg','pg-data'),('bao','bao-storage')]:
+            out=arch/(role+'.tar.gz');tar_cold(src,top,out);archives[role]={'path':str(out),'sha256':sha(out)}
+        baseline={'target':{'sha':SHA,'digest':DIGEST},'coherent_three_store_backup':True,'archives':archives}
+        ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}
+
+        # ---------- copy engagement ----------
+        result['stage']='copy-setup'
+        for d in ['effects','evidence','backup','qual']:(root/d).mkdir(mode=0o700)
+        (root/'barrier').write_text('armed\n');(root/'barrier').chmod(0o600)
+        hcl=root/'qual/bao.hcl';write_new(hcl,BAO_HCL.encode(),0o644)
+        auth=root/'qual/auth.json';write_new(auth,{'username':'demo-alice','password':'demo-only-not-a-secret'})
+        be={'name':'lq-'+eng+'-be','subnet':'172.29.0.0/24'};fe={'name':'lq-'+eng+'-fe','subnet':'172.30.0.0/24'};ips={'pg':'172.29.0.10','bao':'172.29.0.11'}
+        policy={'format':1,'isolatedCopy':True,'isolatedLoopbackTest':True,'requireAutomationHold':False,'origins':[f'http://127.0.0.1:{FRONT_PORT}'],'issuer':f'http://127.0.0.1:{FRONT_PORT}/core','tenant':'acme-demo','network':be['name'],'pgContainer':'lq-'+eng+'-pg','baoContainer':'lq-'+eng+'-bao','pgUser':'lyam','pgDatabase':'lyam','baoAddress':'http://'+ips['bao']+':8200','baoTokenFile':str(tokenfile),'baoMetadataRoots':['secret/metadata/iam'],'authFile':str(auth),'credentialFiles':['core-state/credentials.json','core-state/iam-poc-account-blocks.json','core-state/iam-poc-authn-enrollments.json','core-state/iam-poc-password-history.json'],'appendOnlyTables':['public.activations','public.decision_audit'],'transformationVerifiers':{}}
+        policy_path=root/'qual/qualification.json';policy_sha=write_new(policy_path,policy)
+        envmod=load(codedir/'isolated-copy-env.py','copyenv')
+        source_env=('IAM_DEMO_SEED_MODE=never\nIAM_PG_URL=postgres://lyam@pg:5432/lyam\nIAM_BAO_ADDR=http://bao:8200\nIAM_BAO_TOKEN='+tokenfile.read_text()+'\nIAM_PUBLIC_ORIGIN=http://127.0.0.1:%d\n'%FRONT_PORT).encode()
+        env_raw,delta=envmod.prepare(source_env,{'IAM_PG_URL':'postgres://lyam@pg:5432/lyam','IAM_BAO_ADDR':'http://bao:8200','IAM_BAO_TOKEN':tokenfile.read_text(),'IAM_PUBLIC_ORIGIN':f'http://127.0.0.1:{FRONT_PORT}'})
+        env_path=root/'qual/normal.env';write_new(env_path,env_raw)
+        env_binding={'path':str(env_path),'sha256':sha(env_path)}
+        result['env_delta']=delta
+        spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},
+         'stores':{'dolt':{'path':str(src/'data'),'uid':dolt_stat.st_uid,'gid':dolt_stat.st_gid},'pg':{'path':str(src/'pg-data'),'uid':pg_uid,'gid':pg_gid},'bao':{'path':str(src/'bao-storage'),'uid':bao_uid,'gid':bao_gid}},
+         'identities':{'app':{'name':dolt,'id':ids[dolt],'restart_count':0,'image_id':iid['app'],'image':IMAGE,'uid':dolt_stat.st_uid,'gid':dolt_stat.st_gid},
+                       'pg':{'name':pg,'id':ids[pg],'restart_count':0,'image_id':iid['pg'],'image':PG_IMAGE,'uid':pg_uid,'gid':pg_gid},
+                       'bao':{'name':bao,'id':ids[bao],'restart_count':0,'image_id':iid['bao'],'image':BAO_IMAGE,'uid':bao_uid,'gid':bao_gid}},
+         'copy':{'backend':be,'frontend':fe,'ips':ips,'bao_hcl_copy':str(hcl),'unseal_key_binding':{'path':str(keyfile),'sha256':sha(keyfile)},'policy_binding':{'path':str(policy_path),'sha256':policy_sha},'migration_ledger_binding':ledger_binding,'port':APP_PORT,'public_probe':'1.1.1.1','tls_probe':'example.com','resources':{'memory_bytes':2147483648,'pids':256,'nano_cpus':1000000000}}}
+        # seed network/containers are not needed any more; remove before the copy run
+        for n in reversed(owned):docker('rm','-f','-v',n)
+        owned.clear();docker('network','rm',seednet);nets.clear()
+        shutil.rmtree(src)  # live-lead source stores removed: copy must run from archives only
+        # ---------- run the actual modules ----------
+        result['stage']='modules'
+        cold=load(codedir/'cold-three-store-copy.py','coldcopy');n=load(codedir/'normal-runtime.py','normalruntime');l=load(codedir/'normal-lifecycle.py','normallifecycle');w=load(codedir/'isolated-copy-witness.py','copywitness')
+        lock=root/'qual/update.lock';lock.touch(mode=0o600);lockf=lock.open('rb');fcntl.flock(lockf,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        n.LOCK_FDS=(lockf.fileno(),);n.LOCK_PATHS=(str(lock),)
+        front=ThreadingHTTPServer(('127.0.0.1',FRONT_PORT),Front);threading.Thread(target=front.serve_forever,daemon=True).start()
+        seq=[0]
+        def before_effects(event):
+            seq[0]+=1;write_new(root/'effects'/('%03d-%s.json'%(seq[0],event['phase'])),{k:v for k,v in event.items()})  # durable, O_EXCL, fsync
+        q=cold.Qualification(run,codedir/'qualification.py',sha(codedir/'qualification.py'),str(policy_path),str(env_path),str(root/'barrier'),str(root/'backup'),str(root/'evidence'/'preservation'),IMAGE)
+        iso=cold.Isolated(run,w,n,None)
+        out=iso.qualify(baseline,spec,env_binding,q,before_effects,l,str(root/'normal-attempt-1.json'))
+        result.update(stage='completed',direct_execution=out['direct_execution'],baseline_bound=out['baseline']==baseline,historical_preservation_claimed=out['historical_preservation_claimed'],cleanup=out['cleanup'],retained_private_copy=out['retained_private_copy'],steps=out['steps'],probe={k:out['probe'][k] for k in ('phases','evidence_sha256','transport')},restored_members={r:v['members'] for r,v in out['restored'].items()},launch_proof_sha256=out['launch_proof_sha256'],guard=out['guard'])
+        result['passed']=out['direct_execution'] is True and out['baseline']==baseline and out['cleanup']==[]
+    finally:
+        failures=[]
+        try:
+            if front:front.shutdown();front.server_close()
+        except Exception:failures.append('front')
+        try:
+            names=docker('ps','-a','--format','{{.Names}}').splitlines()
+            owned.extend(x for x in names if x.startswith('lq-') and eng in x and x not in owned)
+        except Exception:failures.append('enumeration')
+        for x in reversed(owned):
+            p=subprocess.run(['docker','rm','-f','-v',x],capture_output=True,timeout=30)
+            if p.returncode and subprocess.run(['docker','inspect',x],capture_output=True,timeout=10).returncode==0:failures.append('container')
+        try:
+            names=docker('network','ls','--format','{{.Name}}').splitlines()
+            nets.extend(x for x in names if eng in x and x not in nets)
+        except Exception:failures.append('network-enumeration')
+        for x in reversed(nets):
+            if subprocess.run(['docker','network','rm',x],capture_output=True,timeout=20).returncode:failures.append('network')
+        if lockf:lockf.close()
+        # Retained copy secrets (copied keys, token, auth) are DEV-only; purge and prove absence.
+        for d in (root,src,arch,codedir):
+            shutil.rmtree(d,ignore_errors=True)
+            if d.exists():failures.append('purge:'+d.name)
+        result['fixture_purged']=not any(x.startswith('purge') for x in failures)
+        result['cleanup_failures']=failures
+        if failures:result['passed']=False
+        Path('/tmp/cold-copy-real-proof.json').write_text(json.dumps(result,sort_keys=True,default=str))
+    if not result['passed']:raise ValueError('cold copy real fixture refused')
+
+if __name__=='__main__':
+    try:main()
+    except Exception as e:
+        print('COLD_COPY_FIXTURE_DIAG:'+type(e).__name__+':'+str(e)[:120],file=sys.stderr);sys.exit(1)
