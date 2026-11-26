@@ -159,7 +159,8 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 22);
+    assert.equal(routes.length, 23);
+    assert.ok(routes.includes('reconcileJira'), 'effect reconciliation stays behind the same controller guard chain');
     assert.ok(routes.includes('connectorFile'), 'native export download stays behind the same controller guard chain');
   });
 
