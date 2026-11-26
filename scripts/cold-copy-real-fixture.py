@@ -390,7 +390,7 @@ def main():
         shutil.rmtree(src)  # live-lead source stores removed: copy must run from archives only
         # ---------- run the actual modules ----------
         result['stage']='modules'
-        cold=load(codedir/'cold-three-store-copy.py','coldcopy');n=load(codedir/'normal-runtime.py','normalruntime');l=load(codedir/'normal-lifecycle.py','normallifecycle');w=load(codedir/'isolated-copy-witness.py','copywitness')
+        cold=load(codedir/'source-rw-copy.py','source_rw_copy');n=load(codedir/'source-rw-runtime.py','normalruntime');l=load(codedir/'normal-lifecycle.py','normallifecycle');w=load(codedir/'isolated-copy-witness.py','copywitness')
         lock=root/'qual/update.lock';lock.touch(mode=0o600);lockf=lock.open('rb');fcntl.flock(lockf,fcntl.LOCK_EX|fcntl.LOCK_NB)
         n.LOCK_FDS=(lockf.fileno(),);n.LOCK_PATHS=(str(lock),)
         front=ThreadingHTTPServer(('127.0.0.1',FRONT_PORT),Front);threading.Thread(target=front.serve_forever,daemon=True).start()
@@ -412,6 +412,8 @@ def main():
             raise
 
         result.update(stage='completed',direct_execution=out['direct_execution'],baseline_bound=out['baseline']==baseline,historical_preservation_claimed=out['historical_preservation_claimed'],cleanup=out['cleanup'],retained_private_copy=out['retained_private_copy'],steps=out['steps'],probe={k:out['probe'][k] for k in ('phases','evidence_sha256','transport')},restored_members={r:v['members'] for r,v in out['restored'].items()},launch_proof_sha256=out['launch_proof_sha256'],guard=out['guard'])
+        result['source_rw_real_stores_isolated_composition']={k:out[k] for k in ('source_rw_copy_plan','source_rw_copy_plan_sha256','all_six_ids_before_companion_permits','normal_start_claimed')}
+        result['source_rw_effect_event_phases']=[json.loads(p.read_text()).get('phase') for p in sorted((root/'effects').glob('*.json'))]
         restored_home=Path(out['restored']['dolt']['path'])
         result['dev_restored_app_home_sentinels']=all((restored_home/rel).read_bytes()==('fictional-sentinel:'+rel).encode() for rel in sentinel_paths)
         if not result['dev_restored_app_home_sentinels']:raise ValueError('app_home sentinel restore differs')

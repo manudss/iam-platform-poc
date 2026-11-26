@@ -37,6 +37,7 @@ jobs:
           python3 deploy/oci/source-rw-runtime.test.py
           python3 deploy/oci/source-rw-transaction.test.py
           python3 deploy/oci/source-rw-journal.test.py
+          python3 deploy/oci/source-rw-copy.test.py
       - name: Cold actual PG Bao Dolt archives, exact restore and isolated full qualifier
         run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_SHA python3 scripts/cold-copy-real-fixture.py
       - uses: actions/upload-artifact@v4
