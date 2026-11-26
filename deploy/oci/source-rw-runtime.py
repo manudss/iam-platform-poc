@@ -77,8 +77,11 @@ def topology(c,companions_running=True):
  for role in ('pg','bao'):
   x=inspect(c[role]['id']);nets=x.get('NetworkSettings',{}).get('Networks',{})
   if x.get('Id')!=c[role]['id'] or x.get('Name','').lstrip('/')!=c[role]['name'] or (companions_running and x.get('State',{}).get('Running') is not True) or set(nets)!=({c['backend']['name']}|{n['name'] for n in c['companion_extra_internal']}) or x.get('HostConfig',{}).get('PortBindings'):raise ValueError('companion must be running only on private backend without published ports')
+  # Docker CREATED endpoints have blank resolved NetworkID/IPAddress.
+  # Network name->ID was independently inspected above; static IPAM/alias
+  # stay exact. Running activation requires resolved ID and address.
   net=nets[c['backend']['name']]
-  if net.get('NetworkID')!=c['backend']['id'] or net.get('IPAddress') not in ([c[role]['ip']] if companions_running else ['',c[role]['ip']]) or net.get('IPAMConfig',{}).get('IPv4Address')!=c[role]['ip'] or role not in net.get('Aliases',[]):raise ValueError('companion alias/IP differs')
+  if net.get('NetworkID') not in ([c['backend']['id']] if companions_running else ['',c['backend']['id']]) or net.get('IPAddress') not in ([c[role]['ip']] if companions_running else ['',c[role]['ip']]) or net.get('IPAMConfig',{}).get('IPv4Address')!=c[role]['ip'] or role not in net.get('Aliases',[]):raise ValueError('companion alias/IP differs')
 
 def rules(c,gateways=()):
  common=[['-P','OUTPUT','DROP'],['-A','OUTPUT','-m','conntrack','--ctstate','ESTABLISHED','--ctdir','REPLY','-j','ACCEPT']]
