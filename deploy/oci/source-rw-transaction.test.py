@@ -6,6 +6,8 @@ def plan():
  p={'format':1,'kind':'source-rw-normal-transaction','engagement':'normal-e001','baseline':binding.copy(),'target':{'sha':'b'*40,'digest':'sha256:'+'c'*64},'old':{},'new':{},'stores':{r:'/protected/'+r for r in ('dolt','pg','bao')},'env':binding.copy(),'policy':binding.copy(),'runtime':binding.copy(),'code':{'module.py':'d'*64}}
  for i,(generation,role) in enumerate((g,r) for g in ('old','new') for r in ('app','pg','bao')):
   p[generation][role]={'name':generation+'-'+role,'id':str(i+1)*64,'image_id':'sha256:'+'e'*64}
+ p['access']={k:binding.copy() for k in ('caddy','pause','host_network','oci_network')}
+ p['access']['open_order']=['operations','maintenance','host443','oci443']
  p['updater']={'container':p['new']['app']['name'],'runtime':p['runtime'],'target':p['target']}
  return p
 class Journal:

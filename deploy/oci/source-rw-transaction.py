@@ -8,14 +8,22 @@ import hashlib,json,re
 def digest(value):
  return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
+def binding(b):
+ if not isinstance(b,dict) or set(b)!={'path','sha256'} or not isinstance(b['path'],str) or not b['path'].startswith('/') or '..' in b['path'].split('/') or not re.fullmatch('[a-f0-9]{64}',str(b['sha256'])):raise ValueError('exact protected binding required')
+ return b
+
 def validate(plan):
- required={'format','kind','engagement','baseline','target','old','new','stores','env','policy','runtime','code','updater'}
+ required={'format','kind','engagement','baseline','target','old','new','stores','env','policy','runtime','code','updater','access'}
  if set(plan)!=required or plan['format']!=1 or plan['kind']!='source-rw-normal-transaction':raise ValueError('exact source-RW plan required')
  if not re.fullmatch(r'[a-zA-Z0-9-]{8,48}',plan['engagement']):raise ValueError('bounded fresh engagement required')
  if set(plan['target'])!={'sha','digest'} or not re.fullmatch('[a-f0-9]{40}',plan['target']['sha']) or not re.fullmatch('sha256:[a-f0-9]{64}',plan['target']['digest']):raise ValueError('immutable target required')
  for group in ('baseline','env','policy','runtime'):
-  b=plan[group]
-  if set(b)!={'path','sha256'} or not b['path'].startswith('/') or '..' in b['path'].split('/') or not re.fullmatch('[a-f0-9]{64}',b['sha256']):raise ValueError('exact protected binding required')
+  binding(plan[group])
+ a=plan['access']
+ if not isinstance(a,dict) or set(a)!={'caddy','pause','host_network','oci_network','open_order'}:raise ValueError('explicit complete access contract required')
+ for key in ('caddy','pause','host_network','oci_network'):binding(a[key])
+ order=a['open_order']
+ if not isinstance(order,list) or len(order)!=4 or set(order[:2])!={'operations','maintenance'} or set(order[2:])!={'host443','oci443'}:raise ValueError('file gates must precede network exposure')
  if set(plan['old'])!={'app','pg','bao'} or set(plan['new'])!={'app','pg','bao'} or set(plan['stores'])!={'dolt','pg','bao'}:raise ValueError('three stores and writers required')
  ids=[];names=[]
  for generation in ('old','new'):
@@ -46,7 +54,7 @@ def commit(plan,adapter,journal):
  journal.create({'kind':'source-rw-prepared','plan':plan,'plan_sha256':sha,'source_effects_committed':False})
  def verify():
   if validate(plan)!=sha:raise ValueError('source-RW plan mutated')
-  adapter.locks();adapter.closed();adapter.bindings(plan)
+  adapter.locks();adapter.closed();adapter.bindings(plan);adapter.single_writer(plan)
  try:
   verify();adapter.inspect_prepared(plan);adapter.single_writer(plan)
   # This is the effect commit, BEFORE the first companion permit, not app start.

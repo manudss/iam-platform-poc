@@ -273,9 +273,10 @@ class Isolated:
     return {'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
    runtime_binding=make_binding('runtime.json',contract)
    self.source_rw_plan={'format':1,'kind':'source-rw-normal-transaction','engagement':eng,'old':{r:{k:spec['identities'][r][k] for k in ('id','name','image_id')} for r in ('app','pg','bao')},'new':{r:{'id':cid[r],'name':names[r],'image_id':spec['identities'][r]['image_id']} for r in ('app','pg','bao')},'target':spec['target'],'baseline':make_binding('baseline.json',baseline),'stores':{r:restored[r]['path'] for r in ('dolt','pg','bao')},'env':env_binding,'policy':c['policy_binding'],'runtime':runtime_binding,'code':{'transaction':txsha,'journal':jsha,'copy':sha(Path(__file__))},'updater':{'container':names['app'],'runtime':runtime_binding,'target':spec['target']}}
+   self.source_rw_plan['access']={k:make_binding('dev-access-'+k+'.json',{'isolated_copy_only':True,'source_rw_authorized':False}) for k in ('caddy','pause','host_network','oci_network')}
+   self.source_rw_plan['access']['open_order']=['operations','maintenance','host443','oci443']
    plan_hash=tx.validate(self.source_rw_plan)
    transaction_journal=jm.Journal(root/'source-rw-events')
-   transaction_journal.create({'kind':'source-rw-prepared','plan':self.source_rw_plan,'plan_sha256':plan_hash,'source_effects_committed':False,'copy_only':True})
    self.companion_before_permit={}
    for r in ('pg','bao'):
     x=self.js('prepermit-'+r,['docker','inspect',cid[r]])
@@ -283,13 +284,6 @@ class Isolated:
     unchanged=companion_before[r]==source_inventory(restored[r]['path'])
     self.companion_before_permit[r]={'container_id':cid[r],'guard_cmd_exact':x['Config']['Cmd']==['-c',GUARD,'sh']+((self.js('prepermit-image-'+r,['docker','image','inspect',spec['identities'][r]['image_id']])['Config'].get('Entrypoint') or [])+(BAO_CMD if r=='bao' else self.js('prepermit-cmd-'+r,['docker','image','inspect',spec['identities'][r]['image_id']])['Config'].get('Cmd') or [])),'fifo_waiting':self.do('prepermit-fifo-'+r,['docker','exec',cid[r],'sh','-c','test -p '+FIFO+' && printf waiting'])=='waiting','source_inventory_unchanged':unchanged,'process_observation':processes}
     if not unchanged or not self.companion_before_permit[r]['fifo_waiting'] or not self.companion_before_permit[r]['guard_cmd_exact']:raise ValueError('companion source touched before permit')
-   transaction_journal.append({'phase':'source-effects-committed','plan_sha256':plan_hash,'source_effects_committed':True})
-   for r in ('pg','bao'):
-    transaction_journal.append({'phase':'permit-intent','role':r,'id':cid[r],'plan_sha256':plan_hash})
-    self.do('release-'+r,['docker','exec',cid[r],'sh','-c','test -p '+FIFO+' && printf "%s\n" start-companion > '+FIFO])
-    transaction_journal.append({'phase':'permit-returned','role':r,'id':cid[r],'plan_sha256':plan_hash})
-   self.unseal(names['bao'],c['unseal_key_binding'])
-   if getattr(probes,'before_phase','in-launch')=='pre-launch':self.before_with_placeholder(eng,{**names,'app':names['app']+'-before'},spec,restored,probes,before_effects)
    iso=self
    class Proxy:
     def __getattr__(s,k):return getattr(iso.L,k)
@@ -304,13 +298,45 @@ class Isolated:
       for ip in ips:iso.w.probe(app_binding,proof['pid'],ip)
       app_before=iso.w.snapshot(app_binding);counter_before['app']=iso.counters(proof['pid'])
       if getattr(probes,'before_phase','in-launch')!='pre-launch':probes.before(names,restored,proof)
-      transaction_journal.append({'phase':'permit-intent','role':'app','id':cid['app'],'plan_sha256':plan_hash,'companions_unsealed':True})
       effects(proof)
      return iso.L.activate_waiting(cc,prepared_app,commit)
 
    # Own the exact fixed name before launch, including ambiguous marker failures.
-   launched=lifecycle.launch(contract,evidence_path,Proxy())
-   transaction_journal.append({'phase':'permit-returned','role':'app','id':cid['app'],'plan_sha256':plan_hash})
+   issued=set()
+   class CopyAdapter:
+    def locks(s):iso.L.lock_proof()
+    def closed(s):
+     if any(not iso.js('closed-network-'+r,['docker','network','inspect',ids[r]])['Internal'] for r in ('backend','frontend')):raise ValueError('copy network opened')
+    def bindings(s,p):
+     for k in ('baseline','env','policy','runtime'):
+      if sha(Path(p[k]['path']))!=p[k]['sha256']:raise ValueError('copy binding moved')
+    def inspect_prepared(s,p):
+     for role in ('pg','bao','app'):
+      x=iso.js('prepared-'+role,['docker','inspect',cid[role]])
+      if x['Id']!=p['new'][role]['id'] or x['Image']!=p['new'][role]['image_id'] or not x['State']['Running'] or x['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('copy writer identity moved')
+    def single_writer(s,p):
+     sources=[Path(v).resolve() for v in p['stores'].values()]
+     for other in iso.do('writers',['docker','ps','-q','--no-trunc']).splitlines():
+      x=iso.js('writer-inspect',['docker','inspect',other])
+      for mount in x.get('Mounts',[]):
+       if mount.get('RW'):
+        path=Path(mount['Source']).resolve()
+        if any(path==root or path in root.parents or root in path.parents for root in sources) and other not in cid.values():raise ValueError('foreign copy writer')
+    def check_permit(s,p,role):
+     if role in issued:raise ValueError('duplicate copy permit')
+     s.inspect_prepared(p)
+     if role in ('pg','bao') and iso.do('copy-fifo-'+role,['docker','exec',cid[role],'sh','-c','test -p '+FIFO+' && printf waiting'])!='waiting':raise ValueError('companion not waiting')
+    def permit(s,p,role):
+     nonlocal launched
+     issued.add(role)
+     if role=='app':launched=lifecycle.launch(contract,evidence_path,Proxy())
+     else:iso.do('release-'+role,['docker','exec',cid[role],'sh','-c','test -p '+FIFO+' && printf "%s\n" start-companion > '+FIFO])
+    def companions_ready(s,p):
+     iso.unseal(names['bao'],c['unseal_key_binding'])
+     if getattr(probes,'before_phase','in-launch')=='pre-launch':iso.before_with_placeholder(eng,{**names,'app':names['app']+'-before'},spec,restored,probes,before_effects)
+    def close_on_failure(s):s.closed()
+   launched=None
+   self.shared_transaction_result=tx.commit(self.source_rw_plan,CopyAdapter(),transaction_journal)
    self.transaction_events=[json.loads(p.read_text()) for p in sorted((root/'source-rw-events').glob('*.json'))]
    pr=probes.after(names,restored,launched)
    after=self.w.snapshot(binding);quiet=self.w.verify_quiet(before,after)
@@ -322,7 +348,7 @@ class Isolated:
       delta={table:[b-a for a,b in zip(counter_before[role][table],current[table])] for table in ('filter','raw')}
       raise ValueError('copy initiated denied traffic after permit: '+role+' counter-delta='+json.dumps(delta,sort_keys=True))
    if not isinstance(pr,dict) or pr.get('ok') is not True:raise ValueError('fixed copy probes failed')
-   result={'source_rw_copy_plan':self.source_rw_plan,'companion_before_permit':self.companion_before_permit,'transaction_events':self.transaction_events,'source_rw_copy_plan_sha256':plan_hash,'all_six_ids_before_companion_permits':True,'normal_start_claimed':False,'direct_execution':True,'baseline':baseline,'target':spec['target'],'historical_preservation_claimed':False,'restored':restored,'guard':quiet,'launch_proof_sha256':hashlib.sha256(json.dumps(launched,sort_keys=True,default=str).encode()).hexdigest(),'probe':pr,'steps':list(self.steps)}
+   result={'shared_transaction_commit_called':True,'shared_transaction_result':self.shared_transaction_result,'source_rw_copy_plan':self.source_rw_plan,'companion_before_permit':self.companion_before_permit,'transaction_events':self.transaction_events,'source_rw_copy_plan_sha256':plan_hash,'all_six_ids_before_companion_permits':True,'normal_start_claimed':False,'direct_execution':True,'baseline':baseline,'target':spec['target'],'historical_preservation_claimed':False,'restored':restored,'guard':quiet,'launch_proof_sha256':hashlib.sha256(json.dumps(launched,sort_keys=True,default=str).encode()).hexdigest(),'probe':pr,'steps':list(self.steps)}
   except BaseException as e:err=e
   finally:
    failures=[]
