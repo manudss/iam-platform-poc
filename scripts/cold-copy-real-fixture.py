@@ -169,6 +169,8 @@ def main():
             cid=docker('create','--name',name,'--network',splitbe,'--ip',ip,'--network-alias',role,'--restart','no','--entrypoint','sh',IMAGE,'-c','sleep 3600')
             splitcompanions[role]={'name':name,'id':cid,'ip':ip}
         splitlock=splitroot/'lock';splitlock.touch(mode=0o600)
+        plan['access']={k:bindings['baseline'] for k in ('caddy','pause','host_network','oci_network')}
+        plan['access']['open_order']=['operations','maintenance','host443','oci443']
         with splitlock.open('rb') as sf:
             fcntl.flock(sf,fcntl.LOCK_EX|fcntl.LOCK_NB);split.LOCK_FDS=(sf.fileno(),);split.LOCK_PATHS=(str(splitlock),)
             c={'format':1,'kind':'isolated-copy','image':IMAGE,'image_id':iid['app'],'source_sha':SHA,'container':'lq-split-'+eng+'-app','data_dir':str(splitdata),'port':18087,'env':{'path':str(splitenv),'sha256':sha(splitenv)},'backend':{'name':splitbe,'id':splitnets['backend']},'frontend':{'name':splitfe,'id':splitnets['frontend']},**splitcompanions,'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':[],'companion_extra_internal':[],'resources':{'memory_bytes':536870912,'pids':128,'nano_cpus':250000000}}
@@ -214,6 +216,8 @@ def main():
         for name in ('baseline','env','policy','runtime'):
             file=txroot/(name+'.json');write_new(file,{'fictional':True,'role':name});bindings[name]={'path':str(file),'sha256':sha(file)}
         plan={'format':1,'kind':'source-rw-normal-transaction','engagement':eng,'target':{'sha':SHA,'digest':DIGEST},**generations,'stores':stores,**bindings,'code':{'transaction':tx.LOADED_SHA256,'adapter':am.LOADED_SHA256,'journal':jm.LOADED_SHA256},'updater':{'container':generations['new']['app']['name'],'runtime':bindings['runtime'],'target':{'sha':SHA,'digest':DIGEST}}}
+        plan['access']={k:bindings['baseline'] for k in ('caddy','pause','host_network','oci_network')}
+        plan['access']['open_order']=['operations','maintenance','host443','oci443']
         with splitlock.open('rb') as sf:
             fcntl.flock(sf,fcntl.LOCK_EX|fcntl.LOCK_NB)
             def check_lock():
@@ -412,7 +416,7 @@ def main():
             raise
 
         result.update(stage='completed',direct_execution=out['direct_execution'],baseline_bound=out['baseline']==baseline,historical_preservation_claimed=out['historical_preservation_claimed'],cleanup=out['cleanup'],retained_private_copy=out['retained_private_copy'],steps=out['steps'],probe={k:out['probe'][k] for k in ('phases','evidence_sha256','transport')},restored_members={r:v['members'] for r,v in out['restored'].items()},launch_proof_sha256=out['launch_proof_sha256'],guard=out['guard'])
-        result['source_rw_real_stores_isolated_composition']={k:out[k] for k in ('source_rw_copy_plan','source_rw_copy_plan_sha256','all_six_ids_before_companion_permits','normal_start_claimed','companion_before_permit','transaction_events')}
+        result['source_rw_real_stores_isolated_composition']={k:out[k] for k in ('shared_transaction_commit_called','shared_transaction_result','source_rw_copy_plan','source_rw_copy_plan_sha256','all_six_ids_before_companion_permits','normal_start_claimed','companion_before_permit','transaction_events')}
         result['source_rw_effect_event_phases']=[json.loads(p.read_text()).get('phase') for p in sorted((root/'effects').glob('*.json'))]
         result['app_lifecycle_journals']={suffix:json.loads(Path(str(root/'normal-attempt-1.json')+suffix).read_text()) for suffix in ('','.effects','.launched')}
         restored_home=Path(out['restored']['dolt']['path'])
