@@ -138,7 +138,7 @@ print(json.dumps(out,sort_keys=True))"""
  except BaseException as error:
      result['host_capture_error_type']=type(error).__name__
      result['host_capture_error_categories']=[v for v in ('lock','stop cleanly','overlapping','restart','space','archive','source changed','permission') if v in str(error)]
-     result['seed_stopped_states']={role:{k:v for k,v in state_diag(name).items() if k in ('Running','ExitCode','OOMKilled','Status')} for role,name in [('app',dolt),('pg',pg),('bao',bao)]}
+     result['seed_stopped_states']={role:{k:v for k,v in json.loads(docker('inspect',name))[0]['State'].items() if k in ('Running','ExitCode','OOMKilled','Status')} for role,name in [('app',dolt),('pg',pg),('bao',bao)]}
      raise
  finally:
      for fh in handles:fh.close()
