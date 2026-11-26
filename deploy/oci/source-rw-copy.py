@@ -267,7 +267,7 @@ class Isolated:
     self.do('release-'+r,['docker','exec',cid[r],'sh','-c','test -p '+FIFO+' && printf "%s\n" start-companion > '+FIFO])
     before_effects({'phase':'companion-permit-returned','role':r,'id':cid[r]})
    self.unseal(names['bao'],c['unseal_key_binding'])
-   if getattr(probes,'before_phase','in-launch')=='pre-launch':self.before_with_placeholder(eng,names,spec,restored,probes,before_effects)
+   if getattr(probes,'before_phase','in-launch')=='pre-launch':self.before_with_placeholder(eng,{**names,'app':names['app']+'-before'},spec,restored,probes,before_effects)
    iso=self
    class Proxy:
     def __getattr__(s,k):return getattr(iso.L,k)
