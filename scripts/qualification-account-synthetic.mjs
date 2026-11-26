@@ -1,7 +1,7 @@
 // Disposable fixture only. No production endpoint or configurable destination.
 import {randomBytes,createHash} from 'node:crypto';
 const origin='http://localhost:18088',base='http://127.0.0.1:8080';
-const id='test-lyam-qualification',temporary='synthetic-only-temporary-1234',permanent='synthetic-only-final-5678';
+const id='test-lyam-qualification',temporary='Synth-Temporary!1234',permanent='Synth-Final!5678';
 function fields(html){const out={};for(const m of html.matchAll(/<input\b[^>]*>/gi)){const n=m[0].match(/\bname="([^"]+)"/i)?.[1],v=m[0].match(/\bvalue="([^"]*)"/i)?.[1]??'';if(n)out[n]=v.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");}return out;}
 async function login(username,password,next){
  const verifier=randomBytes(32).toString('base64url'),state=randomBytes(16).toString('hex');

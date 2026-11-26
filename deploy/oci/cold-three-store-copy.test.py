@@ -1,4 +1,5 @@
 import importlib.util,tempfile,json,io,tarfile,unittest,os,stat
+from unittest.mock import patch
 from pathlib import Path
 H=Path(__file__).parent
 s=importlib.util.spec_from_file_location('r',H/'cold-three-store-copy.py');r=importlib.util.module_from_spec(s);s.loader.exec_module(r)
@@ -9,6 +10,7 @@ def mk(d,role):
  with tarfile.open(out,'w:gz') as t:t.add(src,arcname=role)
  return out
 class W:
+ def probe(s,*args):return {}
  def install(s,l,ips,b):return {'label':l}
  def snapshot(s,b):return {}
  def verify_quiet(s,a,b):return {'host_guard_unchanged':True}
@@ -62,6 +64,7 @@ class Fake:
   return ''
 class T_(unittest.TestCase):
  def setup(s,d):
+  own=patch.object(r.os,'chown');own.start();s.addCleanup(own.stop)
   check=r.check_copy_root;r.check_copy_root=lambda p:None;s.addCleanup(setattr,r,'check_copy_root',check)
   r.COPIES=Path(d)/'copies';base={'target':T,'coherent_three_store_backup':True,'archives':{}};spec={'engagement_id':'test-e1','target':T,'stores':{},'identities':{k:{'uid':70,'gid':70,'image_id':IMG,'image':'ghcr.io/manudss/iam-platform-poc@'+T['digest']} for k in('app','pg','bao')}}
   for k in r.ROLES:

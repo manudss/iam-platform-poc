@@ -26,16 +26,21 @@ FRONT_PORT=18089
 APP_PORT=18088
 BAO_HCL='ui = false\ndisable_mlock = true\nstorage "file" {\n  path = "/bao/file"\n}\nlistener "tcp" {\n  address = "0.0.0.0:8200"\n  tls_disable = 1\n}\napi_addr = "http://127.0.0.1:8200"\n'
 # Runs in a companion's network namespace through host Python (no tool needed in image).
-HTTP_SRC=("import json,sys,time,urllib.request\n"
+HTTP_SRC=("import json,sys,time,urllib.request,urllib.error\n"
 "a=json.loads(sys.stdin.buffer.read());h={'Content-Type':'application/json'}\n"
 "if a.get('token'):h['X-Vault-Token']=a['token']\n"
 "r=urllib.request.Request('http://127.0.0.1:8200'+a['path'],data=(json.dumps(a['body']).encode() if a.get('body') is not None else None),headers=h,method=a['method'])\n"
+"out={'_status':0,'_err':'none'}\n"
 "for i in range(60):\n"
 " try:\n"
-"  with urllib.request.urlopen(r,timeout=5) as x:print(x.read().decode() or '{}');break\n"
+"  with urllib.request.urlopen(r,timeout=5) as x:\n"
+"   raw=x.read().decode() or '{}';out={'_status':x.status,'data':json.loads(raw)};break\n"
+" except urllib.error.HTTPError as e:\n"
+"  out={'_status':e.code,'_err':'http'};break\n"
 " except OSError as e:\n"
-"  if i==59:raise\n"
-"  time.sleep(.5)\n")
+"  out={'_status':0,'_err':type(e).__name__}\n"
+"  time.sleep(.5)\n"
+"print(json.dumps(out))\n")
 
 def run(args,input_bytes=None,timeout=300):
     """Bound subprocess. Failure never carries stdout/stderr (secrets, logs)."""
@@ -72,10 +77,23 @@ def image_user(image,user):
     uid=int(docker('run','--rm','--entrypoint','id',image,'-u',user));gid=int(docker('run','--rm','--entrypoint','id',image,'-g',user))
     return uid,gid
 
-def bao_call(pid,method,path,body=None,token=None):
+def bao_call(pid,method,path,body=None,token=None,phase='bao',diag=None):
+    """Allowlisted diag only: phase, HTTP status code, error class name. Never bodies."""
     payload=json.dumps({'method':method,'path':path,'body':body,'token':token}).encode()
-    out=run(['nsenter','-t',str(pid),'-n','/usr/bin/python3','-c',HTTP_SRC],payload)
-    return json.loads(out)
+    try:out=json.loads(run(['nsenter','-t',str(pid),'-n','/usr/bin/python3','-c',HTTP_SRC],payload))
+    except ValueError:
+        if diag is not None:diag.append({'phase':phase,'status':'nsenter-refused'})
+        raise ValueError('bao nsenter refused at '+phase)
+    if diag is not None:diag.append({'phase':phase,'status':out['_status'],'err':out.get('_err')})
+    if not 200<=out['_status']<300:raise ValueError('bao http %s at %s'%(out['_status'],phase))
+    return out['data']
+
+def state_diag(name):
+    """Container state fields only (no logs)."""
+    try:
+        s=json.loads(docker('inspect',name))[0]['State']
+        return {k:s.get(k) for k in ('Status','Running','ExitCode','Error','OOMKilled','Pid')}
+    except Exception:return {'inspect':'failed'}
 
 class Front(BaseHTTPRequestHandler):
     """Loopback maintenance front: always 503 (qualifier requires it in both phases)."""
@@ -95,7 +113,7 @@ def main():
             p.mkdir(parents=True,exist_ok=True);os.chown(p,0,0);p.chmod(0o755 if p==Path('/opt') else 0o700)
         for d in [src,arch,codedir]:d.mkdir(mode=0o700)
         for f in oci.iterdir():
-            if f.is_file():shutil.copyfile(f,codedir/('normal-runtime.py' if f.name=='coldcopy-runtime.py' else f.name))
+            if f.is_file():shutil.copyfile(f,codedir/f.name)
         shutil.copyfile(oci/'coldcopy-runtime.py',codedir/'normal-runtime.py')
         os.chmod(codedir,0o755)
         for image in [IMAGE,PG_IMAGE,BAO_IMAGE]:docker('pull',image)
@@ -122,12 +140,14 @@ def main():
         docker('stop','-t','60',pg)
         result['stage']='seed-bao'
         owned.append(bao);docker('run','-d',*safety,'--user',f'{bao_uid}:{bao_gid}','--name',bao,'--network',seednet,'-v',f'{src/"bao-storage"}:/bao/file','-v',f'{hcl_seed}:/bao/config/bao.hcl:ro',BAO_IMAGE,'server','-config=/bao/config/bao.hcl')
+        result['bao_diag']=bd=[];result['bao_state_after_start']=state_diag(bao);time.sleep(2)
         pid=json.loads(docker('inspect',bao))[0]['State']['Pid']
-        init=bao_call(pid,'PUT','/v1/sys/init',{'secret_shares':1,'secret_threshold':1})
+        if not pid:result['bao_state_at_failure']=state_diag(bao);raise ValueError('bao not running after start')
+        init=bao_call(pid,'PUT','/v1/sys/init',{'secret_shares':1,'secret_threshold':1},phase='init',diag=bd)
         keys=init['keys_base64'];token=init['root_token']
-        bao_call(pid,'PUT','/v1/sys/unseal',{'key':keys[0]})
-        bao_call(pid,'POST','/v1/sys/mounts/secret',{'type':'kv','options':{'version':'2'}},token)
-        bao_call(pid,'POST','/v1/secret/data/iam/qualification',{'data':{'value':'fictional-bao-row'}},token)
+        bao_call(pid,'PUT','/v1/sys/unseal',{'key':keys[0]},phase='unseal',diag=bd)
+        bao_call(pid,'POST','/v1/sys/mounts/secret',{'type':'kv','options':{'version':'2'}},token,phase='mount',diag=bd)
+        bao_call(pid,'POST','/v1/secret/data/iam/qualification',{'data':{'value':'fictional-bao-row'}},token,phase='kv',diag=bd)
         # Operator-shaped key file, never printed. Fictional root token only in this disposable fixture.
         root.mkdir(mode=0o700)
         keyfile=root/'unseal-keys.json'
@@ -161,7 +181,7 @@ def main():
         result['stage']='copy-setup'
         for d in ['effects','evidence','backup','qual']:(root/d).mkdir(mode=0o700)
         (root/'barrier').write_text('armed\n');(root/'barrier').chmod(0o600)
-        hcl=root/'qual/bao.hcl';write_new(hcl,BAO_HCL.encode(),0o644)
+        hcl=root/'qual/bao.hcl';write_new(hcl,BAO_HCL.encode())
         auth=root/'qual/auth.json';write_new(auth,{'username':'demo-alice','password':'demo-only-not-a-secret'})
         be={'name':'lq-'+eng+'-be','subnet':'172.29.0.0/24'};fe={'name':'lq-'+eng+'-fe','subnet':'172.30.0.0/24'};ips={'pg':'172.29.0.10','bao':'172.29.0.11'}
         policy={'format':1,'isolatedCopy':True,'isolatedLoopbackTest':True,'requireAutomationHold':False,'origins':[f'http://127.0.0.1:{FRONT_PORT}'],'issuer':f'http://127.0.0.1:{FRONT_PORT}/core','tenant':'acme-demo','network':be['name'],'pgContainer':'lq-'+eng+'-pg','baoContainer':'lq-'+eng+'-bao','pgUser':'lyam','pgDatabase':'lyam','baoAddress':'http://'+ips['bao']+':8200','baoTokenFile':str(tokenfile),'baoMetadataRoots':['secret/metadata/iam'],'authFile':str(auth),'credentialFiles':['core-state/credentials.json','core-state/iam-poc-account-blocks.json','core-state/iam-poc-authn-enrollments.json','core-state/iam-poc-password-history.json'],'appendOnlyTables':['public.activations','public.decision_audit'],'transformationVerifiers':{}}
@@ -198,6 +218,9 @@ def main():
         result['passed']=out['direct_execution'] is True and out['baseline']==baseline and out['cleanup']==[]
     finally:
         failures=[]
+        if not result['passed'] and result['stage'].startswith('seed'):
+            for k,n in (('pg_state',locals().get('pg')),('bao_state',locals().get('bao')),('dolt_state',locals().get('dolt'))):
+                if n:result[k+'_at_failure']=state_diag(n)
         try:
             if front:front.shutdown();front.server_close()
         except Exception:failures.append('front')

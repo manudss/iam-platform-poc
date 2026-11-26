@@ -225,7 +225,12 @@ class Isolated:
    ids={}
    for role in ('backend','frontend'):
     ids[role]=self.network(eng,c[role]['name'],c[role]['subnet'],nets)
-   bao_hcl=private_root_file(c['bao_hcl_copy'])  # revised COPY config, storage path /bao/file, no TLS unless reviewed
+   bao_source=private_root_file(c['bao_hcl_copy'])
+   # Keep reviewed source root600. Runtime bind is group-readable ONLY by copied
+   # Bao native gid; directory traversal on host is not exposed inside bind.
+   bao_hcl=root/'bao-runtime.hcl';fd=os.open(bao_hcl,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o640)
+   with os.fdopen(fd,'wb') as file:file.write(bao_source.read_bytes());file.flush();os.fsync(file.fileno())
+   os.chown(bao_hcl,0,self.uidgid(spec,'bao')[1]);bao_hcl.chmod(0o640)
    cid={}
    cid['pg']=self.companion(eng,'pg',names['pg'],spec['identities']['pg']['image_id'],c['backend']['name'],c['ips']['pg'],[(restored['pg']['path'],'/var/lib/postgresql/data')],user=self.own(spec,'pg'),tmpfs=['/var/run/postgresql:uid=%d,gid=%d,mode=0755'%self.uidgid(spec,'pg')]);made.append(names['pg'])
    cid['bao']=self.companion(eng,'bao',names['bao'],spec['identities']['bao']['image_id'],c['backend']['name'],c['ips']['bao'],[(restored['bao']['path'],'/bao/file')],[(str(bao_hcl),'/bao/config/bao.hcl')],cmd=BAO_CMD,user=self.own(spec,'bao'));made.append(names['bao'])
@@ -239,8 +244,12 @@ class Isolated:
     x=self.js('inspect-'+r,['docker','inspect',names[r]])
     nw=x['NetworkSettings']['Networks'][c['backend']['name']]
     if x['HostConfig'].get('PortBindings') or nw['IPAddress']!=c['ips'][r] or r not in nw.get('Aliases',[]) or x['State'].get('Running') is not True:raise ValueError('companion identity/ip/alias differs')
-    pids[r]=x['State']['Pid'];self.fence(pids[r],c['public_probe'],str(ipaddress.IPv4Network(c['backend']['subnet']).network_address+1))
+    pids[r]=x['State']['Pid']
+    self.w.probe(binding,pids[r],c['ips'][r])
+    self.fence(pids[r],c['public_probe'],str(ipaddress.IPv4Network(c['backend']['subnet']).network_address+1))
     counter_before[r]=self.counters(pids[r])
+   before=self.w.snapshot(binding)
+   for r in ('pg','bao'):
     self.do('release-'+r,['docker','exec',names[r],'sh','-c','test -p '+FIFO+' && printf "%s\\n" start-companion > '+FIFO])
    self.unseal(names['bao'],c['unseal_key_binding'])
    contract={'format':1,'kind':'isolated-copy','image':spec['identities']['app']['image'],'image_id':spec['identities']['app']['image_id'],'container':names['app'],'data_dir':restored['dolt']['path'],'port':c['port'],'env':env_binding,'backend':{'name':c['backend']['name'],'id':ids['backend']},'frontend':{'name':c['frontend']['name'],'id':ids['frontend']},'pg':{'name':names['pg'],'id':cid['pg'],'ip':c['ips']['pg']},'bao':{'name':names['bao'],'id':cid['bao'],'ip':c['ips']['bao']},'public_probe':c['public_probe'],'source_sha':spec['target']['sha'],'tls_probe':c['tls_probe'],'dns_upstreams':[],'companion_extra_internal':[],'resources':c['resources']}
@@ -256,6 +265,7 @@ class Isolated:
       app=iso.js('copy-app-identity',['docker','inspect',proof['container_id']])
       ips=[entry['IPAddress'] for entry in app['NetworkSettings']['Networks'].values()]
       app_binding=iso.w.install('LQ'+hashlib.sha256((eng+'app').encode()).hexdigest()[:12],ips,c['backend']['subnet'])
+      for ip in ips:iso.w.probe(app_binding,proof['pid'],ip)
       app_before=iso.w.snapshot(app_binding);counter_before['app']=iso.counters(proof['pid'])
       if getattr(probes,'before_phase','in-launch')!='pre-launch':probes.before(names,restored,proof)
       effects(proof)
