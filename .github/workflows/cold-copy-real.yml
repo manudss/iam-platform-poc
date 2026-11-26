@@ -10,6 +10,7 @@ on:
       - 'deploy/oci/isolated-capture*'
       - 'deploy/oci/isolated-copy-witness*'
       - 'deploy/oci/qualification*'
+      - 'deploy/oci/current-baseline-host*'
       - '.github/workflows/cold-copy-real.yml'
   workflow_dispatch:
 permissions:

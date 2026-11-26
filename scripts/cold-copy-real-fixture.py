@@ -163,7 +163,6 @@ def main():
             time.sleep(1)
         else:raise ValueError('final pg server never ready')
         docker('exec',pg,'psql','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1','-c',"CREATE TABLE cold_fixture(id int primary key,v text);INSERT INTO cold_fixture VALUES(1,'fictional-pg-row');")
-        docker('stop','-t','60',pg)
         result['stage']='seed-bao'
         owned.append(bao);docker('run','-d',*safety,'--user',f'{bao_uid}:{bao_gid}','--name',bao,'--network',seednet,'-v',f'{src/"bao-storage"}:/bao/file','-v',f'{hcl_seed}:/bao/config/bao.hcl:ro',BAO_IMAGE,'server','-config=/bao/config/bao.hcl')
         result['bao_diag']=bd=[];result['bao_state_after_start']=state_diag(bao);time.sleep(2);result['bao_state_t2']=state_diag(bao);result['bao_log_class_t2']=log_class(bao)
@@ -180,11 +179,9 @@ def main():
         write_new(keyfile,{'unseal_keys_b64':keys,'unseal_threshold':1,'root_token':token})
         tokenfile=root/'bao-token';write_new(tokenfile,token.encode())
         del keys,init
-        docker('stop','-t','60',bao)
         result['stage']='seed-dolt'
         # Seed the same PG-backed app mode used on replay, so startup creates
         # its own native tables BEFORE the preservation baseline is archived.
-        docker('start',pg)
         for _ in range(90):
             if subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=10).returncode==0:break
             time.sleep(1)
@@ -203,21 +200,29 @@ def main():
                      "const b=new AuditService();await b.list('acme-demo');"
                      "await a.onModuleDestroy();await b.onModuleDestroy();")
         docker('exec',dolt,'node','--input-type=module','-e',seed_native)
-        docker('stop','-t','30',dolt)
-        docker('stop','-t','60',pg)
-        # All three writers must be stopped before archiving.
-        for n in (pg,bao,dolt):
-            if json.loads(docker('inspect',n))[0]['State']['Running']:raise ValueError('writer still running before cold archive')
+        # Execute the HOST capture adapter itself on actual fictional stores.
+        # Locks are real; fixed host TLS/gates are NOT tested on this runner.
+        result['stage']='host-capture'
         dolt_stat=(src/'data').lstat()
-        ledger=src/'data'/'migrations'/'journal.json'  # hashed AFTER writers stopped, BEFORE archive
+        ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}
+        hostmod=load(codedir/'current-baseline-host.py','capture_host')
+        capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':{
+          role:{'id':ids[name],'name':name,'image_id':iid[role]} for role,name in [('app',dolt),('pg',pg),('bao',bao)]},
+          'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[]}
+        handles=[];bindings={}
+        for role in ('journal','updater'):
+            lp=Path('/root')/(eng+'-'+role+'.lock');lp.touch(mode=0o600);fh=lp.open('rb');fcntl.flock(fh,fcntl.LOCK_EX|fcntl.LOCK_NB);handles.append(fh);bindings[role]=(str(lp),fh.fileno())
+        capture=hostmod.Host(capture_spec,bindings);capture.backup=arch
+        capture.close_access=lambda:None  # NOT proof of production TLS/gates.
+        try:baseline=capture.capture_current_baseline(capture_spec)
+        finally:
+            for fh in handles:fh.close()
+        result['host_capture_actual']=True;result['host_gates_tested']=False
+        result['host_capture_checkpoint']=bool(list(arch.glob('current-baseline-*/capture-complete.json')))
+        ledger=src/'data'/'migrations'/'journal.json'
         ledger_binding={'present':ledger.is_file(),'sha256':(sha(ledger) if ledger.is_file() else None)}
         result['migration_ledger_present']=ledger_binding['present']
-        result['stage']='archive'
-        archives={}
-        for role,top in [('dolt','data'),('pg','pg-data'),('bao','bao-storage')]:
-            out=arch/(role+'.tar.gz');tar_cold(src,top,out);archives[role]={'path':str(out),'sha256':sha(out)}
-        baseline={'target':{'sha':SHA,'digest':DIGEST},'coherent_three_store_backup':True,'archives':archives}
-        ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}
+        archives=baseline['archives']
 
         # ---------- copy engagement ----------
         result['stage']='copy-setup'
