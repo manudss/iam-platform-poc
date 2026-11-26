@@ -214,6 +214,9 @@ def main():
         expected_hashes={'/app/demo/start.sh':'a3e24bcb8d4983b4ba5a86f819d917be358aec587bc0c12adc9a2caa8359429d','/app/demo/server.mjs':'1c502ba4616c43c69b397bd33ba467a10568f8b99412f5fb9e018ceed5932c36'}
         result['actual_image_source_equivalence']=result['actual_image_inspection']['sourceHashes']==expected_hashes
         if not result['actual_image_source_equivalence']:raise ValueError('image source bytes differ from Git revision')
+        sentinel_paths=['core-state/.cold-proof-sentinel','nats-js/.cold-proof-sentinel','migrations/.cold-proof-sentinel']
+        for rel in sentinel_paths:
+            (src/'data'/rel).write_bytes(('fictional-sentinel:'+rel).encode());(src/'data'/rel).chmod(0o600)
         # DEV-only exit-observation experiment, deliberately no backup claim.
         result['stage']='dev-process-exit-experiment'
         probe=load(codedir/'dev-process-exit-probe.py','dev_exit_probe')
@@ -349,6 +352,15 @@ print(json.dumps(out,sort_keys=True))"""
         ledger_binding={'present':ledger.is_file(),'sha256':(sha(ledger) if ledger.is_file() else None)}
         result['migration_ledger_present']=ledger_binding['present']
         archives=baseline['archives']
+        # Verify PG clean cluster state from an independent archive extraction,
+        # never run pg_controldata or Dolt tools on original source directories.
+        pg_control_root=root/'pg-control-copy';pg_control_root.mkdir(mode=0o700)
+        with tarfile.open(archives['pg']['path'],'r:gz') as t:t.extractall(pg_control_root,filter='data')
+        control=docker('run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--entrypoint','pg_controldata','-v',str(pg_control_root/'pg-data')+':/verify:ro',PG_IMAGE,'/verify')
+        result['dev_pg_copy_control_shut_down']=bool(re.search(r'Database cluster state:\s+shut down\s*$',control,re.M))
+        if not result['dev_pg_copy_control_shut_down']:raise ValueError('PG copy control not shut down')
+        shutil.rmtree(pg_control_root)
+
 
         # ---------- copy engagement ----------
         result['stage']='copy-setup'
@@ -399,6 +411,9 @@ print(json.dumps(out,sort_keys=True))"""
             raise
 
         result.update(stage='completed',direct_execution=out['direct_execution'],baseline_bound=out['baseline']==baseline,historical_preservation_claimed=out['historical_preservation_claimed'],cleanup=out['cleanup'],retained_private_copy=out['retained_private_copy'],steps=out['steps'],probe={k:out['probe'][k] for k in ('phases','evidence_sha256','transport')},restored_members={r:v['members'] for r,v in out['restored'].items()},launch_proof_sha256=out['launch_proof_sha256'],guard=out['guard'])
+        restored_home=Path(out['restored']['dolt']['path'])
+        result['dev_restored_app_home_sentinels']=all((restored_home/rel).read_bytes()==('fictional-sentinel:'+rel).encode() for rel in sentinel_paths)
+        if not result['dev_restored_app_home_sentinels']:raise ValueError('app_home sentinel restore differs')
         result['passed']=out['direct_execution'] is True and out['baseline']==baseline and out['cleanup']==[]
     finally:
         failures=[]
