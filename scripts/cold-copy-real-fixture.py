@@ -175,7 +175,12 @@ def main():
             before=sorted(str(v.relative_to(splitdata)) for v in splitdata.rglob('*'))
             waiting=split.create_waiting(c,lambda intent:write_new(splitroot/'create-intent.json',intent))
             observed=json.loads(docker('inspect',waiting['container_id']))[0]
-            fifo=docker('exec',waiting['container_id'],'sh','-c','test -p '+split.FIFO+' && printf waiting')
+            for _ in range(50):
+                fifo_try=subprocess.run(['docker','exec',waiting['container_id'],'sh','-c','test -p '+split.FIFO+' && printf waiting'],capture_output=True,timeout=10)
+                if fifo_try.returncode==0:break
+                time.sleep(.1)
+            else:raise ValueError('split FIFO not ready')
+            fifo=fifo_try.stdout.decode()
             result['source_rw_split_preparation_actual']={'app_full_id':waiting['container_id'],'companion_full_ids':{r:v['id'] for r,v in splitcompanions.items()},'all_ids_before_any_permit':all(not json.loads(docker('inspect',v['id']))[0]['State']['Running'] for v in splitcompanions.values()),'app_fifo_waiting':fifo=='waiting','source_tree_unchanged':before==sorted(str(v.relative_to(splitdata)) for v in splitdata.rglob('*')),'application_permit_released':False,'module_sha256':split.LOADED_SHA256,'runtime_kind':'isolated-copy','normal_egress_claimed':False}
             if not all(result['source_rw_split_preparation_actual'][k] for k in ('all_ids_before_any_permit','app_fifo_waiting','source_tree_unchanged')):raise ValueError('split source preparation refused')
         for name in [c['container'],*[v['name'] for v in splitcompanions.values()]]:docker('rm','-f',name);owned.remove(name)
