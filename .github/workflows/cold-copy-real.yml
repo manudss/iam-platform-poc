@@ -13,6 +13,7 @@ on:
       - 'deploy/oci/current-baseline-host*'
       - 'deploy/oci/dev-process-exit-probe*'
       - 'deploy/oci/variant-b-capture*'
+      - 'deploy/oci/source-rw-runtime*'
       - '.github/workflows/cold-copy-real.yml'
   workflow_dispatch:
 permissions:
@@ -33,6 +34,7 @@ jobs:
           python3 deploy/oci/cold-three-store-copy.test.py
           python3 deploy/oci/dev-process-exit-probe.test.py
           python3 deploy/oci/variant-b-capture.test.py
+          python3 deploy/oci/source-rw-runtime.test.py
       - name: Cold actual PG Bao Dolt archives, exact restore and isolated full qualifier
         run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_SHA python3 scripts/cold-copy-real-fixture.py
       - uses: actions/upload-artifact@v4

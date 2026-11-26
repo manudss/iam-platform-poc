@@ -152,6 +152,35 @@ def main():
         hcl_seed=src/'bao.hcl';hcl_seed.write_text(BAO_HCL);hcl_seed.chmod(0o644)
         pg='lq-seed-'+eng+'-pg';bao='lq-seed-'+eng+'-bao';dolt='lq-seed-'+eng+'-dolt'
         safety=['--cap-drop','ALL','--security-opt','no-new-privileges:true','--sysctl','net.ipv6.conf.all.disable_ipv6=1','--sysctl','net.ipv6.conf.default.disable_ipv6=1','--restart','no']
+        # Actual split preparation only. Fresh fictional empty data directory;
+        # companion IDs exist but are not started, app waits FIFO, no permit.
+        split=load(codedir/'source-rw-runtime.py','source_rw_runtime')
+        splitroot=COPIES/eng/'preparation-only';splitroot.mkdir(parents=True,mode=0o700)
+        splitdata=splitroot/'data';splitdata.mkdir(mode=0o700)
+        splitenv=splitroot/'env';splitenv.write_text('IAM_DEMO_SEED_MODE=never\n');splitenv.chmod(0o600)
+        splitbe='lq-split-'+eng+'-be';splitfe='lq-split-'+eng+'-fe'
+        for name,subnet in [(splitbe,'172.25.0.0/24'),(splitfe,'172.26.0.0/24')]:
+            docker('network','create','--internal','--subnet',subnet,name);nets.append(name)
+        splitnets={r:json.loads(docker('network','inspect',name))[0]['Id'] for r,name in [('backend',splitbe),('frontend',splitfe)]}
+        splitcompanions={}
+        for role,ip in [('pg','172.25.0.10'),('bao','172.25.0.11')]:
+            name='lq-split-'+eng+'-'+role;owned.append(name)
+            cid=docker('create','--name',name,'--network',splitbe,'--ip',ip,'--network-alias',role,'--restart','no','--entrypoint','sh',IMAGE,'-c','sleep 3600')
+            splitcompanions[role]={'name':name,'id':cid,'ip':ip}
+        splitlock=splitroot/'lock';splitlock.touch(mode=0o600)
+        with splitlock.open('rb') as sf:
+            fcntl.flock(sf,fcntl.LOCK_EX|fcntl.LOCK_NB);split.LOCK_FDS=(sf.fileno(),);split.LOCK_PATHS=(str(splitlock),)
+            c={'format':1,'kind':'isolated-copy','image':IMAGE,'image_id':iid['app'],'source_sha':SHA,'container':'lq-split-'+eng+'-app','data_dir':str(splitdata),'port':18087,'env':{'path':str(splitenv),'sha256':sha(splitenv)},'backend':{'name':splitbe,'id':splitnets['backend']},'frontend':{'name':splitfe,'id':splitnets['frontend']},**splitcompanions,'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':[],'companion_extra_internal':[],'resources':{'memory_bytes':536870912,'pids':128,'nano_cpus':250000000}}
+            owned.append(c['container'])
+            before=sorted(str(v.relative_to(splitdata)) for v in splitdata.rglob('*'))
+            waiting=split.create_waiting(c,lambda intent:write_new(splitroot/'create-intent.json',intent))
+            observed=json.loads(docker('inspect',waiting['container_id']))[0]
+            fifo=docker('exec',waiting['container_id'],'sh','-c','test -p '+split.FIFO+' && printf waiting')
+            result['source_rw_split_preparation_actual']={'app_full_id':waiting['container_id'],'companion_full_ids':{r:v['id'] for r,v in splitcompanions.items()},'all_ids_before_any_permit':all(not json.loads(docker('inspect',v['id']))[0]['State']['Running'] for v in splitcompanions.values()),'app_fifo_waiting':fifo=='waiting','source_tree_unchanged':before==sorted(str(v.relative_to(splitdata)) for v in splitdata.rglob('*')),'application_permit_released':False,'module_sha256':split.LOADED_SHA256,'runtime_kind':'isolated-copy','normal_egress_claimed':False}
+            if not all(result['source_rw_split_preparation_actual'][k] for k in ('all_ids_before_any_permit','app_fifo_waiting','source_tree_unchanged')):raise ValueError('split source preparation refused')
+        for name in [c['container'],*[v['name'] for v in splitcompanions.values()]]:docker('rm','-f',name);owned.remove(name)
+        for name in (splitbe,splitfe):docker('network','rm',name);nets.remove(name)
+        shutil.rmtree(root)
         result['stage']='seed-pg'
         owned.append(pg);docker('run','-d',*safety,'--user',f'{pg_uid}:{pg_gid}','--name',pg,'--network',seednet,'-v',f'{src/"pg-data"}:/var/lib/postgresql/data','--tmpfs',f'/var/run/postgresql:uid={pg_uid},gid={pg_gid},mode=0755','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',PG_IMAGE)
         for _ in range(90):
