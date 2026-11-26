@@ -88,6 +88,15 @@ def bao_call(pid,method,path,body=None,token=None,phase='bao',diag=None):
     if not 200<=out['_status']<300:raise ValueError('bao http %s at %s'%(out['_status'],phase))
     return out['data']
 
+def log_class(name):
+    """Booleans only, computed in memory from container logs; log text never stored or printed."""
+    try:
+        r=subprocess.run(['docker','logs',name],capture_output=True,timeout=30);s=(r.stdout+r.stderr).decode('utf-8','replace').lower()
+    except Exception:return {'logs':'unreadable'}
+    keys={'permission_denied':'permission denied','read_only_fs':'read-only file system','mlock':'mlock','listener':'listener','address_in_use':'address already in use','hcl_syntax':'error parsing config','config_not_found':'no such file','storage':'storage','unknown_flag':'flag provided but not defined','chown':'chown','setcap_or_cap':'operation not permitted','missing_config_dir':'/openbao/config','exec_format':'exec format','cluster_addr':'cluster_addr','api_addr':'api_addr','empty':''}
+    c={k:(v in s) for k,v in keys.items() if k!='empty'};c['empty']=not s.strip();c['lines']=min(s.count('\n'),999)
+    return c
+
 def state_diag(name):
     """Container state fields only (no logs)."""
     try:
@@ -140,9 +149,9 @@ def main():
         docker('stop','-t','60',pg)
         result['stage']='seed-bao'
         owned.append(bao);docker('run','-d',*safety,'--user',f'{bao_uid}:{bao_gid}','--name',bao,'--network',seednet,'-v',f'{src/"bao-storage"}:/bao/file','-v',f'{hcl_seed}:/bao/config/bao.hcl:ro',BAO_IMAGE,'server','-config=/bao/config/bao.hcl')
-        result['bao_diag']=bd=[];result['bao_state_after_start']=state_diag(bao);time.sleep(2)
+        result['bao_diag']=bd=[];result['bao_state_after_start']=state_diag(bao);time.sleep(2);result['bao_state_t2']=state_diag(bao);result['bao_log_class_t2']=log_class(bao)
         pid=json.loads(docker('inspect',bao))[0]['State']['Pid']
-        if not pid:result['bao_state_at_failure']=state_diag(bao);raise ValueError('bao not running after start')
+        if not pid:result['bao_state_at_failure']=state_diag(bao);result['bao_log_class']=log_class(bao);raise ValueError('bao not running after start')
         init=bao_call(pid,'PUT','/v1/sys/init',{'secret_shares':1,'secret_threshold':1},phase='init',diag=bd)
         keys=init['keys_base64'];token=init['root_token']
         bao_call(pid,'PUT','/v1/sys/unseal',{'key':keys[0]},phase='unseal',diag=bd)

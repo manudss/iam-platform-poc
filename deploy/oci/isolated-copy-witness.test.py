@@ -24,6 +24,20 @@ class PartialTests(unittest.TestCase):
  def test_foreign_change_refuses(self):
   with patch.object(w,'call',return_value='foreign change'):
    with self.assertRaises(ValueError):w.cleanup({'label':'LQ0123456789ab','pre_v4':'prior','pre_v6':'prior'})
+class ProbeCleanup(unittest.TestCase):
+ def test_first_delete_error_still_attempts_second_and_route_restore(self):
+  trace=[]
+  def call(a):
+   trace.append(a)
+   if 'show' in a:return 'default via 10.0.0.1 dev eth0'
+   if '-S' in a:return '-P OUTPUT DROP'
+   if '-D' in a and '1.1.1.1' in a:raise ValueError('first delete fails')
+   return ''
+  binding={'ips':['10.0.0.2'],'backend':'10.0.0.0/24'}
+  with patch.object(w,'call',side_effect=call),patch.object(w,'snapshot',return_value={}):
+   with self.assertRaisesRegex(ValueError,'cleanup incomplete'):w.probe(binding,123,'10.0.0.2')
+  self.assertEqual(sum(1 for a in trace if '-D' in a),2)
+  self.assertTrue(any(a[-7:]==['ip','route','replace','default','via','10.0.0.1','dev','eth0'][-7:] for a in trace))
 class OwnershipTest(unittest.TestCase):
  def test_foreign_hook_not_deleted(self):
   label='LQ0123456789ab';foreign='-A INPUT -j '+label

@@ -45,15 +45,28 @@ def install(label,ips,backend):
 def probe(binding,pid,ip):
  if ip not in binding['ips']:raise ValueError('probe source outside witness')
  gateway=str(ipaddress.IPv4Network(binding['backend']).network_address+1)
- call(['nsenter','-t',str(pid),'-n','ip','route','replace','default','via',gateway])
+ ns=['nsenter','-t',str(pid),'-n'];routes=call([*ns,'ip','route','show','default']).strip();rules_before=call([*ns,'iptables','-S'])
+ if len(routes.splitlines())>1:raise ValueError('ambiguous copy default routes')
+ call([*ns,'ip','route','replace','default','via',gateway])
  before=snapshot(binding)
  source="import socket,sys\nfor host in sys.argv[2:]:\n s=socket.socket();s.bind((sys.argv[1],0));s.settimeout(.5)\n try:s.connect((host,443))\n except OSError:pass\n s.close()"
  prefix=['nsenter','-t',str(pid),'-n','iptables'];rules=[['OUTPUT','-d',dst,'-p','tcp','--dport','443','-j','ACCEPT'] for dst in (gateway,'1.1.1.1')]
+ added=[]
  try:
-  for rule in rules:call([*prefix,'-I',rule[0],'1',*rule[1:]])
+  for rule in rules:
+   call([*prefix,'-I',rule[0],'1',*rule[1:]]);added.append(rule)
   call(['nsenter','-t',str(pid),'-n','/usr/bin/python3','-c',source,ip,gateway,'1.1.1.1'])
  finally:
-  for rule in reversed(rules):call([*prefix,'-D',*rule])
+  failures=[]
+  for rule in reversed(added):
+   try:call([*prefix,'-D',*rule])
+   except BaseException:failures.append('temporary-rule')
+  try:
+   if routes:call([*ns,'ip','route','replace',*shlex.split(routes)])
+   else:call([*ns,'ip','route','del','default'])
+  except BaseException:failures.append('temporary-route')
+  if call([*ns,'iptables','-S'])!=rules_before or call([*ns,'ip','route','show','default']).strip()!=routes:failures.append('namespace-not-restored')
+  if failures:raise ValueError('copy witness probe cleanup incomplete: '+','.join(failures))
  after=snapshot(binding)
  if after['reject_packets']<=before['reject_packets'] or after['host_input_reject_packets']<=before['host_input_reject_packets']:raise ValueError('host witness hooks not reachable or not counted')
  return {'source_ip':ip,'host_and_forward_counters_advanced':True}
