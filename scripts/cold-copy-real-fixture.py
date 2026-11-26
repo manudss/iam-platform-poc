@@ -174,6 +174,7 @@ def main():
             c={'format':1,'kind':'isolated-copy','image':IMAGE,'image_id':iid['app'],'source_sha':SHA,'container':'lq-split-'+eng+'-app','data_dir':str(splitdata),'port':18087,'env':{'path':str(splitenv),'sha256':sha(splitenv)},'backend':{'name':splitbe,'id':splitnets['backend']},'frontend':{'name':splitfe,'id':splitnets['frontend']},**splitcompanions,'public_probe':'1.1.1.1','tls_probe':'example.com','dns_upstreams':[],'companion_extra_internal':[],'resources':{'memory_bytes':536870912,'pids':128,'nano_cpus':250000000}}
             owned.append(c['container'])
             before=sorted(str(v.relative_to(splitdata)) for v in splitdata.rglob('*'))
+            result['split_companion_prepared_networks']={r:json.loads(docker('inspect',v['id']))[0]['NetworkSettings']['Networks'] for r,v in splitcompanions.items()}
             waiting=split.create_waiting(c,lambda intent:write_new(splitroot/'create-intent.json',intent))
             observed=json.loads(docker('inspect',waiting['container_id']))[0]
             for _ in range(50):
