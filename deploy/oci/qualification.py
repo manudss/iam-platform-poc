@@ -189,6 +189,8 @@ if __name__=='__main__':
         # Diagnostic enums and source line numbers only. Private messages and subprocess output never leave.
         frames=traceback.extract_tb(error.__traceback__)
         lines=[f.lineno for f in frames if Path(f.filename).name=='qualification.py'][-8:]
+        helper_lines=[f.lineno for f in frames if Path(f.filename).name=='isolated-capture.py'][-8:]
+        print('CAPTURE_LINES_V1:'+','.join(str(n) for n in helper_lines),file=sys.stderr)
         kind=type(error).__name__
         if kind not in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError'}:kind='Other'
         print('QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':kind,'sourceLines':lines},sort_keys=True),file=sys.stderr)
