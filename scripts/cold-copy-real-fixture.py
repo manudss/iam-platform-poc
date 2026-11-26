@@ -300,7 +300,7 @@ print(json.dumps(out,sort_keys=True))"""
         app_before=hostmod.inventory(src/'data')
         receipt={'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
         receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
-        if json.loads(receipt_path.read_bytes())!=receipt or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
+        if receipt_path.read_bytes()!=json.dumps(receipt,sort_keys=True).encode() or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
         final_process_check()
         checkpoint({'phase':'dev-envelope-kill-intent','id':current['Id'],'receipt_sha256':receipt_sha})
         docker('kill','--signal','KILL',current['Id'])
