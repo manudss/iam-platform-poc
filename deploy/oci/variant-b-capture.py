@@ -7,19 +7,47 @@ from pathlib import Path
 
 def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run):
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam-recovery').exists():raise ValueError('DEV runner only')
+ original=json.loads(docker('inspect',dolt))[0]
+ if original['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('restart policy must be no before any signal')
+ hostmod=load(codedir/'current-baseline-host.py','capture_host')
+ capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':{
+   role:{'id':json.loads(docker('inspect',name))[0]['Id'],'name':name,'image_id':iid[role],'restart_count':json.loads(docker('inspect',name))[0]['RestartCount'],'mounts':json.loads(docker('inspect',name))[0]['Mounts']} for role,name in [('app',dolt),('pg',pg),('bao',bao)]},
+   'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[]}
+ handles=[];bindings={}
+ for role in ('journal','updater'):
+     lp=Path('/root')/(eng+'-'+role+'.lock');lp.touch(mode=0o600);fh=lp.open('rb');fcntl.flock(fh,fcntl.LOCK_EX|fcntl.LOCK_NB);handles.append(fh);bindings[role]=(str(lp),fh.fileno())
+ capture=hostmod.Host(capture_spec,bindings);capture.backup=arch
+ capture.close_access=lambda:None  # NOT proof of production TLS/gates.
+
+ retained_handles={}
+ try:
+     capture.locks()
+     for role,destination,source in [('app','/data',src/'data'),('pg','/var/lib/postgresql/data',src/'pg-data'),('bao','/bao/file',src/'bao-storage')]:
+         mounts=[v for v in capture_spec['identities'][role]['mounts'] if v['Destination']==destination and v['Type']=='bind']
+         if len(mounts)!=1 or Path(mounts[0]['Source']).resolve(strict=True)!=source.resolve(strict=True):raise ValueError('exact source mount differs')
+     capture.assert_single_writer_sources(capture_spec,allowed_ids=[capture_spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
+     return _quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run,capture,capture_spec,retained_handles)
+ finally:
+     for fh in handles:fh.close()
+     for fd in retained_handles.values():os.close(fd)
+
+def _quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run,capture,capture_spec,retained_handles):
+ if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam-recovery').exists():raise ValueError('DEV runner only')
  # DEV-only exit-observation experiment, deliberately no backup claim.
  result['stage']='dev-process-exit-experiment'
  original_inspect=json.loads(docker('inspect',dolt))[0]
  if original_inspect['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('restart policy must be no before any signal')
  original_restart_count=original_inspect['RestartCount']
+ if original_inspect['Id']!=capture_spec['identities']['app']['id'] or original_inspect['Image']!=capture_spec['identities']['app']['image_id'] or original_inspect['Mounts']!=capture_spec['identities']['app']['mounts']:raise ValueError('app source identity moved before signals')
  probe=load(codedir/'dev-process-exit-probe.py','dev_exit_probe')
  probe_events=[]
  evidence=root/'dev-exit-events';evidence.mkdir(mode=0o700)
  def checkpoint(event):
+     capture.locks()
      write_new(evidence/('%03d.json'%len(probe_events)),event);probe_events.append(event)
  try:
      current=json.loads(docker('inspect',dolt))[0]
-     result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint)
+     result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint,retain_handles=retained_handles)
      # Independent network observation in the same app namespace.
      network_probe="""import json;from pathlib import Path
 out={}
@@ -43,7 +71,7 @@ print(json.dumps(out,sort_keys=True))"""
      if Path('/proc',str(current['State']['Pid']),'net/tcp6').read_text().count(' 0A '):raise ValueError('unexpected IPv6 listener')
      result['dev_residual_listeners_bound']=listeners
      checkpoint({'phase':'dev-network-store-quiet','observation':network,'residual_listeners':listeners})
-     clients=int(docker('exec',pg,'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND client_addr IS NOT NULL"))
+     clients=int(docker('exec',pg,'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()"))
      result['dev_pg_remaining_remote_clients']=clients
      if clients:raise ValueError('PG remote client remains')
      checkpoint({'phase':'dev-pg-no-app-clients','count':clients})
@@ -52,10 +80,20 @@ print(json.dumps(out,sort_keys=True))"""
      if not result['dev_nats_shutdown_log_confirmed']:raise ValueError('NATS shutdown marker absent')
      result['dev_companion_clean_exits']={}
      for role,name in [('pg',pg),('bao',bao)]:
+         expected=capture_spec['identities'][role];observed=json.loads(docker('inspect',expected['id']))[0]
+         if observed['Image']!=expected['image_id'] or observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['RestartCount']!=expected['restart_count'] or observed['Mounts']!=expected['mounts']:raise ValueError('companion identity changed')
+         name=expected['id']
          checkpoint({'phase':'dev-companion-stop-intent','role':role,'id':json.loads(docker('inspect',name))[0]['Id']})
-         docker('stop','-t','60',name)
-         state=json.loads(docker('inspect',name))[0]['State']
-         value={k:state[k] for k in ('Running','ExitCode','OOMKilled')};result['dev_companion_clean_exits'][role]=value
+         docker('kill','--signal','TERM',name)
+         deadline=time.monotonic()+60
+         while True:
+             after=json.loads(docker('inspect',name))[0]
+             if not after['State']['Running']:break
+             if time.monotonic()>deadline:raise ValueError('companion TERM deadline, no KILL fallback')
+             time.sleep(.1)
+         if after['Id']!=expected['id'] or after['Image']!=expected['image_id'] or after['Mounts']!=expected['mounts'] or after['RestartCount']!=expected['restart_count'] or after['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('companion identity changed after stop')
+         state=after['State']
+         value={k:state[k] for k in ('Running','ExitCode','OOMKilled')};result['dev_companion_clean_exits'][role]={**value,'identity':expected}
          if value!={'Running':False,'ExitCode':0,'OOMKilled':False}:raise ValueError('DEV companion clean exit refused')
          checkpoint({'phase':'dev-companion-clean-exit','role':role,'state':value})
      result['dev_all_store_processes_exited']=True
@@ -69,6 +107,7 @@ print(json.dumps(out,sort_keys=True))"""
      raise
  # Explicit DEV variant B: all checks precede any envelope termination.
  result['stage']='dev-variant-b-envelope'
+ capture.locks()
  hostmod=load(codedir/'current-baseline-host.py','capture_host')
  original_records=result['dev_exit_probe']['records']
  def final_process_check():
@@ -79,22 +118,29 @@ print(json.dumps(out,sort_keys=True))"""
      for f in [cg/'cgroup.procs',*cg.rglob('cgroup.procs')]:current_ids.update(int(v) for v in f.read_text().split())
      # Linux cgroup.procs may omit zombies, but no unbound live task may appear.
      if not current_ids.issubset(set(original_records)):raise ValueError('new process before envelope intent')
+     final_records={}
      for pid,record in original_records.items():
          now=probe.stat(pid)
          expected='T' if record['role'] in ('edge','supervisor') else 'Z'
          if now['start']!=record['start'] or now['state']!=expected:raise ValueError('process identity/state changed before envelope')
-     return {'live_cgroup_ids':sorted(current_ids),'records':original_records,'cgroup_path':str(cg)}
+         if expected=='T':
+             exact,_=probe.identity(pid)
+             if any(exact[k]!=record[k] for k in ('cmd_sha256','exe','pidns','ppid','start')):raise ValueError('frozen identity changed')
+         final_records[pid]={**now,'role':record['role'],'pidns':record['pidns']}
+     return {'live_cgroup_ids':sorted(current_ids),'initial_records':original_records,'final_records':final_records,'cgroup_path':str(cg)}
  scan_a=final_process_check();time.sleep(.1);scan_b=final_process_check()
  if scan_a!=scan_b:raise ValueError('no fixed final process set')
  # Flush each mounted filesystem, no claim of business multi-store atomicity.
  libc=ctypes.CDLL(None,use_errno=True)
+ syncfs_results=[]
  for directory in (src/'data',src/'pg-data',src/'bao-storage'):
      fd=os.open(directory,os.O_RDONLY)
      try:
          if libc.syncfs(fd)!=0:raise OSError(ctypes.get_errno(),'syncfs refused')
+         syncfs_results.append({'path':str(directory),'success':True})
      finally:os.close(fd)
  app_before=hostmod.inventory(src/'data')
- receipt={'code_commit':os.environ.get('GITHUB_SHA'),'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
+ receipt={'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(src/d),sort_keys=True).encode()).hexdigest() for r,d in [('app','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'code_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(src/'data'),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
  result['dev_variant_b_receipt']=receipt
  receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
  if receipt_path.read_bytes()!=json.dumps(receipt,sort_keys=True).encode() or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
@@ -103,7 +149,12 @@ print(json.dumps(out,sort_keys=True))"""
  if latest['Id']!=original_inspect['Id'] or latest['HostConfig']['RestartPolicy']['Name']!='no' or latest['RestartCount']!=original_restart_count:raise ValueError('restart identity moved before envelope')
  checkpoint({'phase':'dev-envelope-kill-intent','id':current['Id'],'receipt_sha256':receipt_sha})
  docker('kill','--signal','KILL',current['Id'])
- envelope=json.loads(docker('inspect',current['Id']))[0]['State']
+ until=time.monotonic()+30
+ while True:
+     envelope=json.loads(docker('inspect',current['Id']))[0]['State']
+     if not envelope['Running']:break
+     if time.monotonic()>until:raise ValueError('envelope exit deadline')
+     time.sleep(.05)
  result['dev_restart_count_after_envelope']=json.loads(docker('inspect',current['Id']))[0]['RestartCount']
  if result['dev_restart_count_after_envelope']!=original_restart_count:raise ValueError('restart count changed after envelope')
  result['dev_envelope_exit']={k:envelope[k] for k in ('Running','ExitCode','OOMKilled')}
@@ -123,14 +174,6 @@ print(json.dumps(out,sort_keys=True))"""
  dolt_stat=(src/'data').lstat()
  ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}
  hostmod=load(codedir/'current-baseline-host.py','capture_host')
- capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':{
-   role:{'id':json.loads(docker('inspect',name))[0]['Id'],'name':name,'image_id':iid[role]} for role,name in [('app',dolt),('pg',pg),('bao',bao)]},
-   'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[]}
- handles=[];bindings={}
- for role in ('journal','updater'):
-     lp=Path('/root')/(eng+'-'+role+'.lock');lp.touch(mode=0o600);fh=lp.open('rb');fcntl.flock(fh,fcntl.LOCK_EX|fcntl.LOCK_NB);handles.append(fh);bindings[role]=(str(lp),fh.fileno())
- capture=hostmod.Host(capture_spec,bindings);capture.backup=arch
- capture.close_access=lambda:None  # NOT proof of production TLS/gates.
  try:
      capture.assert_single_writer_sources(capture_spec)
      folder=arch/('current-baseline-'+eng);folder.mkdir(mode=0o700)
@@ -142,7 +185,6 @@ print(json.dumps(out,sort_keys=True))"""
      result['seed_stopped_states']={role:{k:v for k,v in json.loads(docker('inspect',name))[0]['State'].items() if k in ('Running','ExitCode','OOMKilled','Status')} for role,name in [('app',dolt),('pg',pg),('bao',bao)]}
      raise
  finally:
-     for fh in handles:fh.close()
      boot_lock.close()
  result['host_archive_stage_actual']=True;result['host_capture_actual']=False;result['host_gates_tested']=False;result['dev_variant_b_capture_actual']=True
  result['host_capture_checkpoint']=bool(list(arch.glob('current-baseline-*/capture-complete.json')))

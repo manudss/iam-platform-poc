@@ -11,13 +11,13 @@ class Tests(unittest.TestCase):
   def stat(pid):return {**records[pid],'state':states[pid],'exit_raw':codes[pid]}
   def scan(pid):return {p:{**v,'state':states[p]} for p,v in records.items()},roles
   return records,states,codes,trace,events,send,stat,scan
- def run_case(self,alter=None):
+ def run_case(self,alter=None,retain=None):
   case=self.setup_probe();records,states,codes,trace,events,send,stat,scan=case
   poll=type('Poll',(),{'register':lambda *a:None,'poll':lambda *a:[(1,1)]})()
   options={'scan':scan,'stat':stat,'network_boundary':lambda *a:{}}
   if alter:alter(case,options,poll)
   with patch.dict(os.environ,{'GITHUB_ACTIONS':'true','RUNNER_ENVIRONMENT':'github-hosted'}),patch.object(m.os,'geteuid',return_value=0),patch.object(m.Path,'exists',return_value=False),patch.object(m.os,'pidfd_open',side_effect=lambda p,f:p),patch.object(m.os,'close'),patch.object(m.signal,'pidfd_send_signal',side_effect=send),patch.object(m.select,'poll',return_value=poll),patch.object(m,'scan',side_effect=options['scan']),patch.object(m,'stat',side_effect=options['stat']),patch.object(m,'network_boundary',side_effect=options['network_boundary']):
-   return m.experiment(1,options.get('checkpoint',events.append),timeout=.01),case
+   return m.experiment(1,options.get('checkpoint',events.append),timeout=.01,retain_handles=retain),case
  def test_observation_order_and_no_kill(self):
   proof,case=self.run_case();self.assertFalse(proof['writers_quiesced']);self.assertFalse(proof['capture_qualified']);self.assertNotIn(signal.SIGKILL,[s for p,s in case[3]])
   self.assertEqual([e['role'] for e in proof['events']],['api','core','ssr','nats','dolt'])
@@ -91,4 +91,7 @@ class Tests(unittest.TestCase):
    saved.append(case);o['stat']=lambda pid:(_ for _ in ()).throw(PermissionError('proc'))
   with self.assertRaises(PermissionError):self.run_case(alter)
   self.assertEqual(saved[0][3],[])
+ def test_pidfds_retained_for_outer_commit(self):
+  handles={};proof,case=self.run_case(retain=handles)
+  self.assertEqual(set(handles),set(case[0]))
 if __name__=='__main__':unittest.main()

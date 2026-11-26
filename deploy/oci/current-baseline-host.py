@@ -18,9 +18,26 @@ def protected(p,private=False):
  return p
 
 def run(args,fds=()):
- p=subprocess.run(args,capture_output=True,text=True,timeout=180,pass_fds=fds)
+ archive=args[0] in ('tar','gzip')
+ try:
+  # Listing output is intentionally discarded after successful verification;
+  # archive member proof comes from streaming verify_archive, not tar stdout.
+  p=subprocess.run(args,stdout=subprocess.DEVNULL if archive else subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=3600 if archive else 180,pass_fds=fds)
+ except subprocess.TimeoutExpired as error:
+  raise ValueError('fixed command deadline; partial archives retained private, no completion receipt') from error
  if p.returncode:raise ValueError('fixed baseline command refused; retain gates and private evidence')
- return p.stdout.strip()
+ return (p.stdout or '').strip()
+
+def stream_sha(stream):
+ h=hashlib.sha256()
+ while True:
+  block=stream.read(1024*1024)
+  if not block:break
+  h.update(block)
+ return h.hexdigest()
+
+def file_sha(path):
+ with Path(path).open('rb') as f:return stream_sha(f)
 
 def inventory(source):
  source=Path(source);out={}
@@ -28,7 +45,7 @@ def inventory(source):
   st=p.lstat()
   if p.is_symlink() or not (p.is_file() or p.is_dir()) or (p.is_file() and st.st_nlink!=1):raise ValueError('cold source special file/link refused')
   name=str(p.relative_to(source.parent))
-  out[name]={'size':st.st_size if p.is_file() else 0,'uid':st.st_uid,'gid':st.st_gid,'mode':stat.S_IMODE(st.st_mode),'sha256':hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None}
+  out[name]={'size':st.st_size if p.is_file() else 0,'uid':st.st_uid,'gid':st.st_gid,'mode':stat.S_IMODE(st.st_mode),'sha256':file_sha(p) if p.is_file() else None}
  return out
 
 def verify_archive(path,expected):
@@ -37,7 +54,7 @@ def verify_archive(path,expected):
   for item in t:
    if not (item.isfile() or item.isdir()) or item.name in actual:raise ValueError('cold archive member refused')
    stream=t.extractfile(item) if item.isfile() else None
-   actual[item.name]={'size':item.size if item.isfile() else 0,'uid':item.uid,'gid':item.gid,'mode':item.mode,'sha256':hashlib.sha256(stream.read()).hexdigest() if stream else None}
+   actual[item.name]={'size':item.size if item.isfile() else 0,'uid':item.uid,'gid':item.gid,'mode':item.mode,'sha256':stream_sha(stream) if stream else None}
  if actual!=expected:raise ValueError('cold archive does not equal stopped source inventory')
 
 class Host:
@@ -116,7 +133,9 @@ class Host:
     if temporary.exists():temporary.unlink()
   self.verify_closed_tls()
  def capture_current_baseline(self,spec):
-  self.locks();self.close_access()
+  self.locks()
+  if any(Path(b['path']) in (GATE_ROOT/'MAINTENANCE',GATE_ROOT/'OPS-MAINTENANCE') for b in spec.get('files',[])):raise ValueError('gates must be separate from source files')
+  self.close_access()
   if not re.fullmatch('[a-z0-9-]{1,32}',spec['engagement_id']):raise ValueError('bounded engagement id required')
   self.assert_single_writer_sources(spec,allowed_ids=[spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
   # Conservative uncompressed budget checked before stopping any writer.
@@ -161,8 +180,9 @@ class Host:
    if inventory(source)!=inventories[role]:raise ValueError('cold source changed during archive')
    with out.open('rb') as archive_file:os.fsync(archive_file.fileno())
    self.assert_single_writer_sources(spec)
-   archives[role]={'path':str(out),'sha256':hashlib.sha256(out.read_bytes()).hexdigest()}
+   archives[role]={'path':str(out),'sha256':file_sha(out)}
   for b in spec['files']:
+   if Path(b['path']) in (GATE_ROOT/'MAINTENANCE',GATE_ROOT/'OPS-MAINTENANCE'):raise ValueError('gates are mutable controls, not source files')
    p,raw=self.read_binding(b,b['path'].endswith(('.env','.json','UPDATE_PAUSED','MAINTENANCE')));out=folder/('file-'+hashlib.sha256(str(p).encode()).hexdigest())
    fd=os.open(out,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
    with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())

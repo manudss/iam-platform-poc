@@ -48,7 +48,7 @@ def network_boundary(init,closed_ports):
  if any(v['listeners'] or v['established'] for v in observations.values()):raise ValueError('process network boundary not closed')
  return observations
 
-def experiment(init,checkpoint,timeout=30):
+def experiment(init,checkpoint,timeout=30,retain_handles=None):
  """Fixed external-bao-v1 profile. checkpoint must fsync exclusive event bytes.
  This deliberately leaves the envelope/supervisors stopped for outer DEV cleanup.
  No process is resumed, retried, or KILLed here. Any mismatch refuses.
@@ -100,4 +100,6 @@ def experiment(init,checkpoint,timeout=30):
   proof={'records':records,'kind':'DEV-process-exit-experiment','events':events,'writers_quiesced':False,'envelope_terminated':False,'application_drain_claimed':False,'capture_qualified':False,'limitation':'Exit observation only; no file/TCP/inflight/PG/Bao durability or envelope termination proof'}
   checkpoint(proof);return proof
  finally:
-  for fd in handles.values():os.close(fd)
+  if retain_handles is not None:retain_handles.update(handles)
+  else:
+   for fd in handles.values():os.close(fd)

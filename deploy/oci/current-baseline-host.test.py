@@ -105,4 +105,20 @@ class ArchiveEvidence(unittest.TestCase):
     with self.assertRaises(TimeoutError):h.capture_current_baseline(spec)
     self.assertFalse(any(a[:2]==['docker','start'] for a in calls))
 
+class BoundedArchives(unittest.TestCase):
+ def test_streaming_hash_never_unbounded_read(self):
+  class Stream:
+   def __init__(self):self.left=3000000
+   def read(self,n):
+    if n<=0 or n>1048576:raise AssertionError('unbounded read')
+    take=min(n,self.left);self.left-=take;return b'x'*take
+  self.assertEqual(m.stream_sha(Stream()),hashlib.sha256(b'x'*3000000).hexdigest())
+ def test_archive_timeout_is_closed_error(self):
+  with patch.object(m.subprocess,'run',side_effect=m.subprocess.TimeoutExpired(['tar'],3600)):
+   with self.assertRaisesRegex(ValueError,'deadline'):m.run(['tar','-czf','private.partial','source'])
+ def test_gate_source_binding_refused_before_gate_write(self):
+  h=m.Host({},{});h.locks=lambda:None;h.close_access=lambda:self.fail('must refuse before replacing gate')
+  with self.assertRaisesRegex(ValueError,'separate'):
+   h.capture_current_baseline({'files':[{'path':str(m.GATE_ROOT/'MAINTENANCE')}]})
+
 if __name__=='__main__':unittest.main()
