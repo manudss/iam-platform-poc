@@ -145,6 +145,13 @@ def main():
             if subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=10).returncode==0:break
             time.sleep(1)
         else:raise ValueError('seed pg never ready')
+        # pg_isready can observe initdb's temporary server before the entrypoint
+        # shuts it down. Wait for the final postgres PID1, then execute once.
+        for _ in range(90):
+            ready=subprocess.run(['docker','exec',pg,'sh','-c','test "$(cat /proc/1/comm)" = postgres && pg_isready -U lyam'],capture_output=True,timeout=10)
+            if ready.returncode==0:break
+            time.sleep(1)
+        else:raise ValueError('final pg server never ready')
         docker('exec',pg,'psql','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1','-c',"CREATE TABLE cold_fixture(id int primary key,v text);INSERT INTO cold_fixture VALUES(1,'fictional-pg-row');")
         docker('stop','-t','60',pg)
         result['stage']='seed-bao'
