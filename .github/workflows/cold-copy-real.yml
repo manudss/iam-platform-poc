@@ -12,6 +12,7 @@ on:
       - 'deploy/oci/qualification*'
       - 'deploy/oci/current-baseline-host*'
       - 'deploy/oci/dev-process-exit-probe*'
+      - 'deploy/oci/variant-b-capture*'
       - '.github/workflows/cold-copy-real.yml'
   workflow_dispatch:
 permissions:
