@@ -232,8 +232,15 @@ for name in ('tcp','tcp6'):
 print(json.dumps(out,sort_keys=True))"""
             network=json.loads(run(['nsenter','-t',str(current['State']['Pid']),'-n','/usr/bin/python3','-c',network_probe]))
             result['dev_network_after_store_exits']=network
-            if any(v['established'] or any(port in (3000,3307,4222,8081) for port in v['listeners']) for v in network.values()):raise ValueError('active store connection/listener remains')
+            if any(v['established'] or any(port in (3000,4000,3307,4222,8081) for port in v['listeners']) for v in network.values()):raise ValueError('active store connection/listener remains')
             checkpoint({'phase':'dev-network-store-quiet','observation':network})
+            clients=int(docker('exec',pg,'psql','-X','-A','-t','-U','lyam','-d','lyam','-c',"SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND client_addr IS NOT NULL"))
+            result['dev_pg_remaining_remote_clients']=clients
+            if clients:raise ValueError('PG remote client remains')
+            checkpoint({'phase':'dev-pg-no-app-clients','count':clients})
+            nats_log=(src/'data/nats.log').read_text()
+            result['dev_nats_shutdown_log_confirmed']='Server Exiting' in nats_log
+            if not result['dev_nats_shutdown_log_confirmed']:raise ValueError('NATS shutdown marker absent')
             result['dev_companion_clean_exits']={}
             for role,name in [('pg',pg),('bao',bao)]:
                 checkpoint({'phase':'dev-companion-stop-intent','role':role,'id':json.loads(docker('inspect',name))[0]['Id']})

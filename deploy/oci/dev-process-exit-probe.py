@@ -39,6 +39,15 @@ def scan(init):
   if records[roles[role][0]]['ppid'] not in roles['supervisor']:raise ValueError('producer parent is not supervisor')
  return records,roles
 
+def network_boundary(init,closed_ports):
+ observations={}
+ for name in ('tcp','tcp6'):
+  rows=[line.split() for line in Path('/proc',str(init),'net',name).read_text().splitlines()[1:]]
+  relevant=[row for row in rows if int(row[1].split(':')[1],16) in closed_ports or int(row[2].split(':')[1],16) in closed_ports]
+  observations[name]={'listeners':sum(row[3]=='0A' for row in relevant),'established':sum(row[3]=='01' for row in relevant)}
+ if any(v['listeners'] or v['established'] for v in observations.values()):raise ValueError('process network boundary not closed')
+ return observations
+
 def experiment(init,checkpoint,timeout=30):
  """Fixed external-bao-v1 profile. checkpoint must fsync exclusive event bytes.
  This deliberately leaves the envelope/supervisors stopped for outer DEV cleanup.
@@ -66,6 +75,7 @@ def experiment(init,checkpoint,timeout=30):
   after,_=scan(init)
   # Only state may differ. No fork/exec/new PID may escape the fixed inventory.
   if set(after)!=set(records) or any(any(after[p][k]!=records[p][k] for k in ('start','cmd_sha256','exe','pidns','role','ppid')) for p in records):raise ValueError('process set changed during freeze')
+  closed_ports=[]
   for role in ('api','core','ssr','nats','dolt'):
    for parent in [init,*roles['supervisor']]:
     if same(parent)['state']!='T':raise ValueError('supervisor/envelope resumed')
@@ -78,6 +88,8 @@ def experiment(init,checkpoint,timeout=30):
    if role in ('nats','dolt') and stopped['exit_raw']!=0:raise ValueError('store process exit not zero: '+role)
    event={'role':role,'pid':pid,'start':stopped['start'],'state':stopped['state'],'exit_raw':stopped['exit_raw'],'clean_exit_zero':stopped['exit_raw']==0,'application_drain_claimed':False}
    checkpoint({'phase':'dev-process-exit-observed',**event});events.append(event)
+   closed_ports.extend({'api':[3000],'core':[8081],'ssr':[4000],'nats':[4222],'dolt':[3307]}[role])
+   checkpoint({'phase':'dev-network-boundary','after_role':role,'closed_ports':list(closed_ports),'observation':network_boundary(init,closed_ports)})
   # No active userspace writers remain in this exact cgroup. Zombies are not
   # executing; envelope and respawn shells must still be stopped, never resumed.
   for pid in records:
