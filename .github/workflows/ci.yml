@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      ai_timeout_policy_required: ${{ steps.plan.outputs.ai_timeout_policy_required }}
+      ai_timeout_network_required: ${{ steps.plan.outputs.ai_timeout_network_required }}
       password_eye_required: ${{ steps.plan.outputs.password_eye_required }}
       gallery_bootstrap_required: ${{ steps.plan.outputs.gallery_bootstrap_required }}
       gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
@@ -236,7 +238,13 @@ jobs:
       - name: Demo edge framing policy (only /login?preview=1 may be framed)
         run: node --test demo/frame-policy.test.mjs demo/warm-signin.test.mjs
       - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
-        run: node --test demo/server.test.mjs demo/timeout-policy.test.mjs demo/chat-timeout.test.mjs
+        run: node --test demo/server.test.mjs
+      - name: AI edge timeout route policy
+        if: needs.control_policy.outputs.ai_timeout_policy_required == 'true'
+        run: node --test demo/timeout-policy.test.mjs
+      - name: AI edge delayed streaming network regression
+        if: needs.control_policy.outputs.ai_timeout_network_required == 'true'
+        run: node --test demo/chat-timeout.test.mjs
       # These are controller tests, not tests belonging to an older application SHA.
       # Pin their tree to the called workflow revision. Never silently skip a missing test.
       - name: Check out the pinned workflow controller test tree separately

@@ -111,4 +111,24 @@ describe('versioned CI control applicability', () => {
     }
   });
 
+  it('versions chat timeout regressions without applying new scripts to historical targets', () => {
+    const repo = process.cwd();
+    const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    const workflow = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
+    for (const id of ['ai_timeout_policy', 'ai_timeout_network']) {
+      const c = CONTROLS.find(x => x.id === id);
+      assert.equal(c.introducedBy, 'aa2c52c53771dee07d0422886e7db4284e1abdcd');
+      const legacy = git('rev-parse', c.introducedBy + '^1');
+      const plan = controlPlan(repo, legacy);
+      assert.equal(plan.controls.find(x => x.id === id).required, false);
+      auditReferences(repo, legacy, plan, workflow);
+      assert.throws(() => auditReferences(repo, legacy, plan, workflow.replaceAll("if: needs.control_policy.outputs." + id + "_required == 'true'", 'if: true')), /not protected/);
+      for (const target of [c.introducedBy, git('rev-parse', 'HEAD')]) {
+        const current = controlPlan(repo, target);
+        assert.equal(current.controls.find(x => x.id === id).required, true);
+        auditReferences(repo, target, current, workflow);
+      }
+    }
+  });
+
 });
