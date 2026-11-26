@@ -35,10 +35,20 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
      capture.assert_single_writer_sources(capture_spec,allowed_ids=[capture_spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
      out=capture.capture_variant_b_review_only(capture_spec,result,{'docker':docker,'run':run,'write_new':write_new,'sha':sha,'load':load})
      result['host_review_candidate_spec_bound_actual']=True
-     return out
+     result['candidate_output_contract']={k:out[k] for k in ('kind','eligible_for_isolated_qualification_only','source_rw_authorized','gates_opened')}
+     return out['baseline'],out['ledger_binding'],out['archives']
  finally:
      for fh in handles:fh.close()
      for fd in retained_handles.values():os.close(fd)
+
+def pre_signal_budget(spec):
+ sources=[Path(spec['stores'][r]['path']) for r in ('dolt','pg','bao')]
+ logical=sum(p.stat().st_size for source in sources for p in source.rglob('*') if p.is_file())
+ # Originals remain; compressed archives may be incompressible, restored copy
+ # and independent verification extraction coexist. Reserve 4x + 1GiB.
+ required=logical*4+1024**3;free=shutil.disk_usage(spec['archive_root']).free
+ if free<required:raise ValueError('insufficient pre-signal capture space')
+ return {'logical_source_bytes':logical,'required_free_bytes':required,'observed_free_bytes':free,'factor':4,'reserve_bytes':1024**3}
 
 def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
  """Internal fixed external-bao-v1 path. Caller holds source locks and closed gates.
@@ -51,7 +61,9 @@ def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
  homes={r:Path(spec['stores'][r]['path']) for r in ('dolt','pg','bao')}
  PG_IMAGE=spec['identities']['pg']['image']
  if spec['quiescence']['profile']!='external-bao-v1':raise ValueError('unsupported fixed process profile')
- capture.locks();capture.close_access()
+ capture.locks()
+ result['pre_signal_budget']=pre_signal_budget(spec)
+ capture.close_access()
  capture.assert_single_writer_sources(spec,allowed_ids=[spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
  for role in ('app','pg','bao'):
      expected=spec['identities'][role];observed=json.loads(docker('inspect',expected['id']))[0]
@@ -60,7 +72,10 @@ def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
      destination={'app':'/data','pg':'/var/lib/postgresql/data','bao':'/bao/file'}[role]
      mounts=[v for v in observed['Mounts'] if v['Destination']==destination and v['Type']=='bind']
      if len(mounts)!=1 or Path(mounts[0]['Source']).resolve(strict=True)!=homes[store].resolve(strict=True):raise ValueError('spec source mount mismatch')
- # DEV-only exit-observation experiment, deliberately no backup claim.
+ boot_initial=(homes['dolt']/'.boot.lock').stat()
+ boot_identity=(boot_initial.st_dev,boot_initial.st_ino)
+ result['boot_lock_initial']={'device':boot_identity[0],'inode':boot_identity[1]}
+ # Physical exit observation, no application drain claim.
  result['stage']='dev-process-exit-experiment'
  original_inspect=json.loads(docker('inspect',dolt))[0]
  if original_inspect['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('restart policy must be no before any signal')
@@ -71,6 +86,8 @@ def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
  evidence=root/'dev-exit-events';evidence.mkdir(mode=0o700)
  def checkpoint(event):
      capture.locks()
+     now=(homes['dolt']/'.boot.lock').stat()
+     if (now.st_dev,now.st_ino)!=boot_identity:raise ValueError('boot lock initial inode changed at boundary')
      for expected in capture_spec['identities'].values():
          observed=json.loads(docker('inspect',expected['id']))[0]
          changed=[k for k in ('id','image','restart','mounts','policy') if {'id':observed['Id']!=expected['id'],'image':observed['Image']!=expected['image_id'],'restart':observed['RestartCount']!=expected['restart_count'],'mounts':canonical_mounts(observed['Mounts'])!=expected['mounts'],'policy':observed['HostConfig']['RestartPolicy']['Name']!='no'}[k]]
@@ -175,7 +192,7 @@ print(json.dumps(out,sort_keys=True))"""
          syncfs_results.append({'path':str(directory),'success':True})
      finally:os.close(fd)
  app_before=hostmod.inventory(homes['dolt'])
- receipt={'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(homes[r]),sort_keys=True).encode()).hexdigest() for r,d in [('dolt','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'checkout_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(homes['dolt']),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
+ receipt={'boot_lock_initial':result['boot_lock_initial'],'pre_signal_budget':result['pre_signal_budget'],'syncfs':syncfs_results,'source_inventories':{r:hashlib.sha256(json.dumps(hostmod.inventory(homes[r]),sort_keys=True).encode()).hexdigest() for r,d in [('dolt','data'),('pg','pg-data'),('bao','bao-storage')]},'checkpoint_events':list(probe_events),'spec_sha256':hashlib.sha256(json.dumps(capture_spec,sort_keys=True).encode()).hexdigest(),'checkout_commit':os.environ.get('GITHUB_SHA'),'source_identities':capture_spec['identities'],'locks':[{'path':p,'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino} for p,fd in capture.lock_bindings.values()],'probe_module_sha256':sha(codedir/'dev-process-exit-probe.py'),'host_module_sha256':sha(codedir/'current-baseline-host.py'),'module_sha256':LOADED_SHA256,'restart_policy':'no','restart_count':original_restart_count,'app_home':str(homes['dolt']),'kind':'DEV-writers-stopped-before-envelope','container_id':current['Id'],'image_id':current['Image'],'processes':scan_b,'final_scan_sha256':hashlib.sha256(json.dumps(scan_b,sort_keys=True).encode()).hexdigest(),'exits':result['dev_exit_probe']['events'],'network':network,'pg_remote_clients':clients,'companion_exits':result['dev_companion_clean_exits'],'app_home_inventory_sha256':hashlib.sha256(json.dumps(app_before,sort_keys=True).encode()).hexdigest(),'inflight_unknown':True,'application_drain_claimed':False,'clean_exit_zero':False,'writers_quiesced':True,'at':time.time()}
  result['dev_variant_b_receipt']=receipt
  receipt_path=root/'dev-before-envelope.json';receipt_sha=write_new(receipt_path,receipt)
  if receipt_path.read_bytes()!=json.dumps(receipt,sort_keys=True).encode() or sha(receipt_path)!=receipt_sha:raise ValueError('durable receipt reread differs')
@@ -199,7 +216,7 @@ print(json.dumps(out,sort_keys=True))"""
  result['dev_app_home_identical_after_envelope']=app_before==app_after
  if app_before!=app_after:raise ValueError('app home bytes changed after envelope')
  lock_path=homes['dolt']/'.boot.lock';lock_stat=lock_path.stat();boot_lock=lock_path.open('rb');fcntl.flock(boot_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
- if (os.fstat(boot_lock.fileno()).st_dev,os.fstat(boot_lock.fileno()).st_ino)!=(lock_stat.st_dev,lock_stat.st_ino):raise ValueError('boot lock inode changed')
+ if (lock_stat.st_dev,lock_stat.st_ino)!=boot_identity or (os.fstat(boot_lock.fileno()).st_dev,os.fstat(boot_lock.fileno()).st_ino)!=boot_identity:raise ValueError('boot lock inode changed')
  result['dev_variant_b_receipt_sha256']=receipt_sha
  result['dev_boot_lock_same_inode_held']=True
 
@@ -237,4 +254,4 @@ print(json.dumps(out,sort_keys=True))"""
  shutil.rmtree(pg_control_root)
 
 
- return baseline,ledger_binding,archives
+ return {'kind':'variant-b-captured-review-only','baseline':baseline,'ledger_binding':ledger_binding,'archives':archives,'receipt':receipt,'receipt_sha256':receipt_sha,'eligible_for_isolated_qualification_only':True,'source_rw_authorized':False,'gates_opened':False}

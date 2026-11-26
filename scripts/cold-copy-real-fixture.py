@@ -254,6 +254,20 @@ def main():
         if not all(result['dev_real_unknown_profile_negative'].values()):raise ValueError('unknown negative container changed')
         docker('rm','-f',unknown);owned.remove(unknown)
 
+        # Real source preflight disk refusal. A sparse fictional file raises
+        # logical worst-case archive budget without consuming the runner disk.
+        budget_file=src/'data/.sparse-budget-negative'
+        with budget_file.open('wb') as sparse:sparse.truncate(shutil.disk_usage(arch).free//2+1024**3)
+        before_budget={name:json.loads(docker('inspect',name))[0] for name in (pg,bao,dolt)}
+        try:
+            adapter.quiesce_archive({},codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run)
+        except ValueError as e:
+            if str(e)!='insufficient pre-signal capture space':raise
+        else:raise ValueError('insufficient space not refused')
+        finally:budget_file.unlink()
+        after_budget={name:json.loads(docker('inspect',name))[0] for name in (pg,bao,dolt)}
+        result['dev_real_space_negative']={'refused':True,'all_running':all(v['State']['Running'] for v in after_budget.values()),'all_started_at_unchanged':all(before_budget[n]['State']['StartedAt']==after_budget[n]['State']['StartedAt'] for n in before_budget),'restart_counts_unchanged':all(before_budget[n]['RestartCount']==after_budget[n]['RestartCount'] for n in before_budget),'no_candidate_effect_journal':not (root/'candidate-events').exists(),'no_signal_evidence':not (root/'dev-exit-events').exists()}
+        if not all(result['dev_real_space_negative'].values()):raise ValueError('disk refusal changed source state')
         baseline,ledger_binding,archives=adapter.quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run)
         dolt_stat=(src/'data').lstat()
         ids={n:json.loads(docker('inspect',n))[0]['Id'] for n in (pg,bao,dolt)}

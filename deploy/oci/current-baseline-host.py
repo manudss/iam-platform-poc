@@ -141,11 +141,16 @@ class Host:
  def capture_variant_b_review_only(self,spec,result,dependencies):
   # Internal candidate, no installed CLI. preflight above unconditionally refuses.
   # Caller must not select this through the strict exit0 capture path.
-  self.locks();self.close_access()
+  self.locks()
   binding=spec['code_bindings']['variant-b-capture.py'];p,raw=self.read_binding(binding,False)
   if p!=Path(__file__).with_name('variant-b-capture.py'):raise ValueError('fixed adjacent B module required')
   module=types.ModuleType('bound_variant_b');module.__file__=str(p);module.LOADED_SHA256=hashlib.sha256(raw).hexdigest()
   exec(compile(raw,str(p),'exec'),module.__dict__)
+  result['candidate_pre_signal_budget']=module.pre_signal_budget(spec)
+  events=Path(spec['evidence_root'])/'candidate-events';events.mkdir(mode=0o700)
+  dependencies['write_new'](events/'000-gates-close-intent.json',{'phase':'gates-close-intent','module_sha256':module.LOADED_SHA256,'at':time.time()})
+  self.close_access()
+  dependencies['write_new'](events/'001-gates-closed.json',{'phase':'gates-closed','at':time.time()})
   retained={}
   try:return module.capture_spec_bound(result,spec,self,dependencies,retained)
   finally:

@@ -27,4 +27,11 @@ class Tests(unittest.TestCase):
   self.assertEqual(m.canonical_mounts(a),m.canonical_mounts(list(reversed(a))))
   b=[dict(v) for v in a];b[0]['RW']=False
   self.assertNotEqual(m.canonical_mounts(a),m.canonical_mounts(b))
+ def test_budget_refuses_without_any_effect(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);spec={'archive_root':d,'stores':{r:{'path':d} for r in ('dolt','pg','bao')}}
+   (root/'row').write_bytes(b'row')
+   from types import SimpleNamespace
+   with patch.object(m.shutil,'disk_usage',return_value=SimpleNamespace(free=0)):
+    with self.assertRaisesRegex(ValueError,'pre-signal'):m.pre_signal_budget(spec)
 if __name__=='__main__':unittest.main()
