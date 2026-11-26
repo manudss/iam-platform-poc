@@ -187,6 +187,47 @@ def main():
             if not all(result['source_rw_split_preparation_actual'][k] for k in ('all_ids_before_any_permit','app_fifo_waiting','source_tree_unchanged')):raise ValueError('split source preparation refused')
         for name in [c['container'],*[v['name'] for v in splitcompanions.values()]]:docker('rm','-f',name);owned.remove(name)
         for name in (splitbe,splitfe):docker('network','rm',name);nets.remove(name)
+        # Separate six-ID transaction mechanism, shell-only fictional writers.
+        # Not PG/Bao/app normal startup and not production sources.
+        result['stage']='dev-source-rw-transaction'
+        tx=load(codedir/'source-rw-transaction.py','source_rw_tx');jm=load(codedir/'source-rw-journal.py','source_rw_jm');am=load(codedir/'source-rw-dev-adapter.py','source_rw_dev')
+        txroot=splitroot/'transaction';txroot.mkdir(mode=0o700)
+        stores={r:str(txroot/r) for r in ('dolt','pg','bao')}
+        for path in stores.values():Path(path).mkdir(mode=0o700)
+        generations={'old':{},'new':{}}
+        for gen in ('old','new'):
+            for role in ('app','pg','bao'):
+                name='lq-tx-'+eng+'-'+gen+'-'+role;owned.append(name)
+                store='dolt' if role=='app' else role
+                command='create' if gen=='old' else 'run'
+                a=[command]
+                if gen=='new':a+=['-d']
+                cid=docker(*a,'--name',name,'--network','none','--restart','no','--cap-drop','ALL','--security-opt','no-new-privileges:true','-v',stores[store]+':/data','--entrypoint','sh',IMAGE,'-c',am.GUARD)
+                generations[gen][role]={'name':name,'id':cid,'image_id':iid['app']}
+        for e in generations['new'].values():
+            for _ in range(50):
+                v=subprocess.run(['docker','exec',e['id'],'sh','-c','test -p '+am.FIFO],capture_output=True,timeout=10)
+                if v.returncode==0:break
+                time.sleep(.1)
+            else:raise ValueError('transaction FIFO not ready')
+        bindings={}
+        for name in ('baseline','env','policy','runtime'):
+            file=txroot/(name+'.json');write_new(file,{'fictional':True,'role':name});bindings[name]={'path':str(file),'sha256':sha(file)}
+        plan={'format':1,'kind':'source-rw-normal-transaction','engagement':eng,'target':{'sha':SHA,'digest':DIGEST},**generations,'stores':stores,**bindings,'code':{'transaction':tx.LOADED_SHA256,'adapter':am.LOADED_SHA256,'journal':jm.LOADED_SHA256},'updater':{'container':generations['new']['app']['name'],'runtime':bindings['runtime'],'target':{'sha':SHA,'digest':DIGEST}}}
+        with splitlock.open('rb') as sf:
+            fcntl.flock(sf,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            def check_lock():
+                with splitlock.open('rb') as other:
+                    try:fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    except BlockingIOError:return
+                    raise ValueError('transaction lock missing')
+            adapter_tx=am.Adapter(plan,docker,check_lock);journal=jm.Journal(txroot/'events')
+            committed=tx.commit(plan,adapter_tx,journal)
+        events=[json.loads(v.read_text()) for v in sorted((txroot/'events').glob('*.json'))]
+        result['source_rw_dev_transaction_actual']={'shell_writers_only':True,'normal_start_claimed':False,'plan_sha256':committed['plan_sha256'],'all_six_ids_in_initial_event':len({v['id'] for g in ('old','new') for v in events[0]['event']['plan'][g].values()})==6,'event_phases':[v['event'].get('phase','prepared') for v in events],'all_three_markers_written':all((Path(v)/'committed').read_text()=='committed' for v in stores.values()),'old_ids_never_started':all(not json.loads(docker('inspect',v['id']))[0]['State']['Running'] for v in generations['old'].values()),'module_hashes':plan['code']}
+        if not all(result['source_rw_dev_transaction_actual'][k] for k in ('all_six_ids_in_initial_event','all_three_markers_written','old_ids_never_started')):raise ValueError('DEV transaction contract refused')
+        for gen in generations.values():
+            for e in gen.values():docker('rm','-f',e['id']);owned.remove(e['name'])
         shutil.rmtree(root)
         result['stage']='seed-pg'
         owned.append(pg);docker('run','-d',*safety,'--user',f'{pg_uid}:{pg_gid}','--name',pg,'--network',seednet,'-v',f'{src/"pg-data"}:/var/lib/postgresql/data','--tmpfs',f'/var/run/postgresql:uid={pg_uid},gid={pg_gid},mode=0755','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',PG_IMAGE)
