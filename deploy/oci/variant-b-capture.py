@@ -5,6 +5,9 @@ General clean-stop is not changed. Productors interrupted, not drained.
 import ctypes,fcntl,hashlib,json,os,re,shutil,tarfile,time
 from pathlib import Path
 
+def canonical_mounts(values):
+ return sorted(values,key=lambda v:json.dumps(v,sort_keys=True))
+
 def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAGE,PG_IMAGE,BAO_IMAGE,iid,write_new,sha,load,docker,run):
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or Path('/opt/lyam-recovery').exists():raise ValueError('DEV runner only')
  original=json.loads(docker('inspect',dolt))[0]
@@ -14,7 +17,7 @@ def quiesce_archive(result,codedir,root,src,arch,eng,pg,bao,dolt,SHA,DIGEST,IMAG
  for role,name in [('app',dolt),('pg',pg),('bao',bao)]:
      observed=json.loads(docker('inspect',name))[0]
      if observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['Image']!=iid[role] or not observed['State']['Running']:raise ValueError('all three running identities/restart policies required before signals')
-     identities[role]={'id':observed['Id'],'name':name,'image_id':iid[role],'image':{'app':IMAGE,'pg':PG_IMAGE,'bao':BAO_IMAGE}[role],'restart_count':observed['RestartCount'],'restart_policy':'no','mounts':observed['Mounts']}
+     identities[role]={'id':observed['Id'],'name':name,'image_id':iid[role],'image':{'app':IMAGE,'pg':PG_IMAGE,'bao':BAO_IMAGE}[role],'restart_count':observed['RestartCount'],'restart_policy':'no','mounts':canonical_mounts(observed['Mounts'])}
  capture_spec={'engagement_id':eng,'target':{'sha':SHA,'digest':DIGEST},'identities':identities,
    'stores':{'dolt':{'path':str(src/'data')},'pg':{'path':str(src/'pg-data')},'bao':{'path':str(src/'bao-storage')}},'files':[],'code_directory':str(codedir),'evidence_root':str(root),'archive_root':str(arch),'quiescence':{'profile':'external-bao-v1','pg_user':'lyam','pg_database':'lyam','nats_log_relative':'nats.log'}}
  handles=[];bindings={}
@@ -50,7 +53,7 @@ def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
  capture.assert_single_writer_sources(spec,allowed_ids=[spec['identities'][r]['id'] for r in ('app','pg','bao')],require_stopped=False)
  for role in ('app','pg','bao'):
      expected=spec['identities'][role];observed=json.loads(docker('inspect',expected['id']))[0]
-     if observed['Id']!=expected['id'] or observed['Image']!=expected['image_id'] or observed['RestartCount']!=expected['restart_count'] or observed['Mounts']!=expected['mounts'] or observed['HostConfig']['RestartPolicy']['Name']!='no' or not observed['State']['Running']:raise ValueError('source identities before first signal differ')
+     if observed['Id']!=expected['id'] or observed['Image']!=expected['image_id'] or observed['RestartCount']!=expected['restart_count'] or canonical_mounts(observed['Mounts'])!=canonical_mounts(expected['mounts']) or observed['HostConfig']['RestartPolicy']['Name']!='no' or not observed['State']['Running']:raise ValueError('source identities before first signal differ')
      store='dolt' if role=='app' else role
      destination={'app':'/data','pg':'/var/lib/postgresql/data','bao':'/bao/file'}[role]
      mounts=[v for v in observed['Mounts'] if v['Destination']==destination and v['Type']=='bind']
@@ -60,7 +63,7 @@ def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
  original_inspect=json.loads(docker('inspect',dolt))[0]
  if original_inspect['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('restart policy must be no before any signal')
  original_restart_count=original_inspect['RestartCount']
- if original_inspect['Id']!=capture_spec['identities']['app']['id'] or original_inspect['Image']!=capture_spec['identities']['app']['image_id'] or original_inspect['Mounts']!=capture_spec['identities']['app']['mounts']:raise ValueError('app source identity moved before signals')
+ if original_inspect['Id']!=capture_spec['identities']['app']['id'] or original_inspect['Image']!=capture_spec['identities']['app']['image_id'] or canonical_mounts(original_inspect['Mounts'])!=canonical_mounts(capture_spec['identities']['app']['mounts']):raise ValueError('app source identity moved before signals')
  probe=load(codedir/'dev-process-exit-probe.py','dev_exit_probe')
  probe_events=[]
  evidence=root/'dev-exit-events';evidence.mkdir(mode=0o700)
@@ -68,7 +71,7 @@ def capture_spec_bound(result,spec,capture,dependencies,retained_handles):
      capture.locks()
      for expected in capture_spec['identities'].values():
          observed=json.loads(docker('inspect',expected['id']))[0]
-         changed=[k for k in ('id','image','restart','mounts','policy') if {'id':observed['Id']!=expected['id'],'image':observed['Image']!=expected['image_id'],'restart':observed['RestartCount']!=expected['restart_count'],'mounts':observed['Mounts']!=expected['mounts'],'policy':observed['HostConfig']['RestartPolicy']['Name']!='no'}[k]]
+         changed=[k for k in ('id','image','restart','mounts','policy') if {'id':observed['Id']!=expected['id'],'image':observed['Image']!=expected['image_id'],'restart':observed['RestartCount']!=expected['restart_count'],'mounts':canonical_mounts(observed['Mounts'])!=expected['mounts'],'policy':observed['HostConfig']['RestartPolicy']['Name']!='no'}[k]]
          if changed:
              result['identity_boundary_failure']={'role':next(r for r,v in capture_spec['identities'].items() if v['id']==expected['id']),'fields':changed,'mounts_expected':expected['mounts'],'mounts_observed':observed['Mounts']}
              raise ValueError('bound source identity moved at boundary')
@@ -111,7 +114,7 @@ print(json.dumps(out,sort_keys=True))"""
      result['dev_companion_clean_exits']={}
      for role,name in [('pg',pg),('bao',bao)]:
          expected=capture_spec['identities'][role];observed=json.loads(docker('inspect',expected['id']))[0]
-         if observed['Image']!=expected['image_id'] or observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['RestartCount']!=expected['restart_count'] or observed['Mounts']!=expected['mounts']:raise ValueError('companion identity changed')
+         if observed['Image']!=expected['image_id'] or observed['HostConfig']['RestartPolicy']['Name']!='no' or observed['RestartCount']!=expected['restart_count'] or canonical_mounts(observed['Mounts'])!=canonical_mounts(expected['mounts']):raise ValueError('companion identity changed')
          name=expected['id']
          checkpoint({'phase':'dev-companion-stop-intent','role':role,'id':json.loads(docker('inspect',name))[0]['Id']})
          docker('kill','--signal','TERM',name)
@@ -121,7 +124,7 @@ print(json.dumps(out,sort_keys=True))"""
              if not after['State']['Running']:break
              if time.monotonic()>deadline:raise ValueError('companion TERM deadline, no KILL fallback')
              time.sleep(.1)
-         if after['Id']!=expected['id'] or after['Image']!=expected['image_id'] or after['Mounts']!=expected['mounts'] or after['RestartCount']!=expected['restart_count'] or after['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('companion identity changed after stop')
+         if after['Id']!=expected['id'] or after['Image']!=expected['image_id'] or canonical_mounts(after['Mounts'])!=canonical_mounts(expected['mounts']) or after['RestartCount']!=expected['restart_count'] or after['HostConfig']['RestartPolicy']['Name']!='no':raise ValueError('companion identity changed after stop')
          state=after['State']
          value={k:state[k] for k in ('Running','ExitCode','OOMKilled')};result['dev_companion_clean_exits'][role]={**value,'identity':expected}
          if value!={'Running':False,'ExitCode':0,'OOMKilled':False}:raise ValueError('DEV companion clean exit refused')

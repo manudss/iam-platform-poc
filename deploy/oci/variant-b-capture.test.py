@@ -22,4 +22,9 @@ class Tests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'profile'):
    m.capture_spec_bound({},spec,SimpleNamespace(locks=lambda:effects.append('lock')),dict(docker=lambda *a:effects.append(a),run=None,write_new=None,sha=None,load=None),{})
   self.assertEqual(effects,[])
+ def test_mount_order_not_identity_but_fields_are(self):
+  a=[{'Destination':'/data','Source':'/fixed','RW':True},{'Destination':'/config','Source':'/fixed/config','RW':False}]
+  self.assertEqual(m.canonical_mounts(a),m.canonical_mounts(list(reversed(a))))
+  b=[dict(v) for v in a];b[0]['RW']=False
+  self.assertNotEqual(m.canonical_mounts(a),m.canonical_mounts(b))
 if __name__=='__main__':unittest.main()
