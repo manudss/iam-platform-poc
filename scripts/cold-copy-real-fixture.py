@@ -186,7 +186,7 @@ def main():
             if subprocess.run(['docker','exec',pg,'pg_isready','-U','lyam'],capture_output=True,timeout=10).returncode==0:break
             time.sleep(1)
         else:raise ValueError('seed pg restart never ready')
-        owned.append(dolt);docker('run','-d','--name',dolt,'--network',seednet,'-e','IAM_PG_URL=postgres://lyam@'+pg+':5432/lyam','--memory','2048m','--pids-limit','256','-v',f'{src/"data"}:/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',IMAGE)
+        owned.append(dolt);docker('run','-d','--name',dolt,'--network',seednet,'-e','IAM_PG_URL=postgres://lyam@'+pg+':5432/lyam','-e','IAM_BAO_ADDR=http://'+bao+':8200','-e','IAM_BAO_TOKEN='+token,'-e','IAM_DEMO_LOCAL_BAO=0','--memory','2048m','--pids-limit','256','-v',f'{src/"data"}:/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',IMAGE)
         for _ in range(100):
             if subprocess.run(['docker','exec',dolt,'node','-e',"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],capture_output=True,timeout=10).returncode==0:break
             if not json.loads(docker('inspect',dolt))[0]['State']['Running']:raise ValueError('seed app died')
@@ -208,6 +208,7 @@ def main():
         else:raise ValueError('seed edge never reached steady PID1')
         # Safe actual-image evidence before any shutdown experiment.
         inspection="""const f=require('fs'),c=require('crypto');const out={sourceHashes:{},processes:[]};for(const path of ['/app/demo/start.sh','/app/demo/server.mjs'])out.sourceHashes[path]=c.createHash('sha256').update(f.readFileSync(path)).digest('hex');for(const n of f.readdirSync('/proc').filter(x=>/^[0-9]+$/.test(x))){try{const cmd=f.readFileSync('/proc/'+n+'/cmdline','utf8').split('\\0').filter(Boolean),stat=f.readFileSync('/proc/'+n+'/stat','utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');let role='unknown';if(cmd.includes('/app/demo/server.mjs'))role='edge';else if(cmd.includes('sql-server'))role='dolt';else if(cmd.some(x=>x.endsWith('nats-server')))role='nats';else if(cmd.includes('/app/iam-core'))role='core';else if(cmd.includes('dist/main.js'))role='api';else if(cmd.includes('/app/demo/secret-store.mjs'))role='local-bao';else if(cmd.some(x=>x.endsWith('/bao')))role='local-bao-server';else if(cmd.some(x=>x.endsWith('/web/server/server.mjs')))role='ssr';else if(cmd[0]==='sh'||cmd[0]==='/bin/sh')role='shell';else if(cmd[0]==='sleep')role='sleep';else if(cmd.includes('-e'))role='inspection';out.processes.push({pid:+n,ppid:+fields[1],state:fields[0],start:fields[19],role});}catch{}}console.log(JSON.stringify(out))"""
+        result['seed_process_profile']='external-bao-v1'
         result['actual_image_inspection']=json.loads(docker('exec',dolt,'node','-e',inspection))
         result['actual_nats_version']=docker('exec',dolt,'nats-server','-v').strip()
         expected_hashes={'/app/demo/start.sh':'a3e24bcb8d4983b4ba5a86f819d917be358aec587bc0c12adc9a2caa8359429d','/app/demo/server.mjs':'1c502ba4616c43c69b397bd33ba467a10568f8b99412f5fb9e018ceed5932c36'}
