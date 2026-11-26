@@ -48,7 +48,7 @@ def run(args,input_bytes=None,timeout=300):
     if r.returncode:
         stage=re.findall(rb'(?:QUALIFICATION_DIAG_V1|QUALIFICATION_STAGE_V1|CAPTURE_STAGE_V1):([a-zA-Z0-9/-]+)',r.stderr)[-2:]
         lines=re.findall(rb'CAPTURE_LINES_V1:([0-9,]{0,100})',r.stderr)[-1:]
-        diagnostics=re.findall(rb'^(DOLT_THREAD_FAILURE_V1|DOLT_QUERY_KIND_V1|QUALIFICATION_REASON_V1):(-?[0-9]{1,2})$',r.stderr,re.M)[-3:]
+        diagnostics=re.findall(rb'^(DOLT_ERROR_MASK_V1|DOLT_THREAD_FAILURE_V1|DOLT_QUERY_KIND_V1|QUALIFICATION_REASON_V1):(-?[0-9]{1,4})$',r.stderr,re.M)[-4:]
         raise ValueError('capture-lines='+','.join(x.decode() for x in lines)+' node-enums='+','.join(k.decode()+':'+v.decode() for k,v in diagnostics)+' fixture command refused: '+' '.join(args[:3])+' stages='+','.join(x.decode() for x in stage))
     return r.stdout.decode().strip()
 
@@ -240,7 +240,7 @@ def main():
             chain=[];seen=set();current=error
             while current is not None and id(current) not in seen and len(chain)<8:
                 seen.add(id(current));message=str(current)
-                chain.append({'type':type(current).__name__,'categories':[x for x in stages if x.lower() in message.lower()],'counter_missing':'not counted' in message or 'not reachable' in message,'foreign':'foreign' in message,'firewall_changed':'firewall-changed' in message,'rule_remains':'own-rule-remains' in message,'stages':re.findall(r'stages=([a-zA-Z0-9/,-]{0,160})',message),'node_enums':re.findall(r'(DOLT_THREAD_FAILURE_V1|DOLT_QUERY_KIND_V1|QUALIFICATION_REASON_V1):(-?[0-9]{1,2})',message),'capture_lines':re.findall(r'capture-lines=([0-9,]{0,100})',message),'witness_reasons':[x for x in ('delete-own-hook','foreign-reference-or-chain-content','delete-own-chain','own-rule-remains','protected-firewall-changed') if x in message]})
+                chain.append({'type':type(current).__name__,'categories':[x for x in stages if x.lower() in message.lower()],'counter_missing':'not counted' in message or 'not reachable' in message,'foreign':'foreign' in message,'firewall_changed':'firewall-changed' in message,'rule_remains':'own-rule-remains' in message,'stages':re.findall(r'stages=([a-zA-Z0-9/,-]{0,160})',message),'node_enums':re.findall(r'(DOLT_ERROR_MASK_V1|DOLT_THREAD_FAILURE_V1|DOLT_QUERY_KIND_V1|QUALIFICATION_REASON_V1):(-?[0-9]{1,4})',message),'capture_lines':re.findall(r'capture-lines=([0-9,]{0,100})',message),'witness_reasons':[x for x in ('delete-own-hook','foreign-reference-or-chain-content','delete-own-chain','own-rule-remains','protected-firewall-changed') if x in message]})
                 current=current.__cause__ or current.__context__
             result['module_failure_chain']=chain
             raise
