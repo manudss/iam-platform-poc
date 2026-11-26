@@ -286,13 +286,13 @@ class Isolated:
   finally:
    failures=[]
    try:self.cleanup(made,nets,names)
-   except BaseException as e:failures.append(type(e).__name__)
+   except BaseException as e:failures.append(type(e).__name__+':'+('witness' if 'witness' in str(e) else 'container-network'))
    if app_binding and hasattr(self.w,'cleanup'):
     try:self.w.cleanup(app_binding)
-    except BaseException as e:failures.append(type(e).__name__)
+    except BaseException as e:failures.append(type(e).__name__+':'+('witness' if 'witness' in str(e) else 'container-network'))
    if binding and hasattr(self.w,'cleanup'):
     try:self.w.cleanup(binding)
-    except BaseException as e:failures.append(type(e).__name__)
+    except BaseException as e:failures.append(type(e).__name__+':'+('witness' if 'witness' in str(e) else 'container-network'))
    if failures:raise ValueError('copy cleanup incomplete: '+','.join(failures)) from err
   if err:raise err
   result['cleanup']=[]

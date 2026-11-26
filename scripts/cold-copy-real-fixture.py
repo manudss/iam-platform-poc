@@ -12,7 +12,7 @@ stores Bao keys/token/env/PG logs. Seeds are fictional.
 Status of this file when written: NOT RUN. Syntax checked and helper units tested
 without Docker only; the real proof is the GHA run.
 """
-import fcntl,hashlib,importlib.util,json,os,secrets,shutil,subprocess,sys,tarfile,threading,time
+import re,fcntl,hashlib,importlib.util,json,os,secrets,shutil,subprocess,sys,tarfile,threading,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 
@@ -45,7 +45,9 @@ HTTP_SRC=("import json,sys,time,urllib.request,urllib.error\n"
 def run(args,input_bytes=None,timeout=300):
     """Bound subprocess. Failure never carries stdout/stderr (secrets, logs)."""
     r=subprocess.run(args,input=(input_bytes.encode() if isinstance(input_bytes,str) else input_bytes),capture_output=True,timeout=timeout)
-    if r.returncode:raise ValueError('fixture command refused: '+' '.join(args[:3]))
+    if r.returncode:
+        stage=re.findall(rb'(?:QUALIFICATION_DIAG_V1|QUALIFICATION_STAGE_V1):([a-zA-Z0-9/-]+)',r.stderr)[-2:]
+        raise ValueError('fixture command refused: '+' '.join(args[:3])+' stages='+','.join(x.decode() for x in stage))
     return r.stdout.decode().strip()
 
 def docker(*a,inp=None):return run(['docker',*a],inp)
@@ -232,7 +234,7 @@ def main():
         try:out=iso.qualify(baseline,spec,env_binding,q,before_effects,l,str(root/'normal-attempt-1.json'))
         except BaseException as error:
             result['module_steps']=iso.steps
-            stages=['witness','counter','cleanup','private','policy','restore','network','companion','FIFO','placeholder','ledger','unseal','launcher','command refused']
+            stages=['witness','counter','cleanup','private','policy','restore','network','companion','FIFO','placeholder','ledger','unseal','launcher','command refused','capture','postgres','tls-barriers','credentials','ledger-load','evidence-setup','policy-load','smoke']
             chain=[];seen=set();current=error
             while current is not None and id(current) not in seen and len(chain)<8:
                 seen.add(id(current));message=str(current)
