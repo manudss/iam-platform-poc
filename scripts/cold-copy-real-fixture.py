@@ -226,6 +226,8 @@ def main():
             result['dev_exit_probe']=probe.experiment(current['State']['Pid'],checkpoint)
         except BaseException as error:
             result['dev_exit_error_type']=type(error).__name__
+            if str(error).startswith('unknown process in external-bao-v1: '):
+                result['dev_exit_unknown_identity']=json.loads(str(error).split(': ',1)[1])
             result['dev_exit_error_categories']=[v for v in ('unknown process','roles absent','parent','changed','deadline','not zero','cgroup','count') if v in str(error)]
             result['dev_exit_events']=probe_events
             raise

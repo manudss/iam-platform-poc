@@ -25,13 +25,13 @@ def scan(init):
  for pid in sorted(pids):
   rec,args=identity(pid);cmd=[v.decode() for v in args if v];role='unknown'
   if cmd==['node','/app/demo/server.mjs']:role='edge'
-  elif len(cmd)>1 and cmd[0].endswith('/dolt') and cmd[1]=='sql-server':role='dolt'
+  elif len(cmd)>1 and cmd[0] in ('dolt','/usr/local/bin/dolt') and cmd[1]=='sql-server':role='dolt'
   elif len(cmd)>1 and cmd[0].endswith('nats-server') and cmd[1]=='-c':role='nats'
   elif cmd and cmd[0]=='/app/iam-core':role='core'
   elif 'dist/main.js' in cmd and os.readlink('/proc/'+str(pid)+'/cwd')=='/app/api':role='api'
   elif '/app/web/dist/web/server/server.mjs' in cmd:role='ssr'
   elif cmd and cmd[0] in ('sh','/bin/sh') and cmd[1:]==['/app/demo/start.sh']:role='supervisor'
-  if role=='unknown':raise ValueError('unknown process in external-bao-v1')
+  if role=='unknown':raise ValueError('unknown process in external-bao-v1: '+json.dumps({'exe_name':Path(rec['exe']).name,'argc':len(cmd),'cmd_sha256':rec['cmd_sha256'],'ppid':rec['ppid']},sort_keys=True))
   rec['role']=role;records[pid]=rec
  roles={r:[p for p,v in records.items() if v['role']==r] for r in ('edge','dolt','nats','core','api','ssr','supervisor')}
  if any(len(roles[r])!=1 for r in roles if r!='supervisor') or len(roles['supervisor'])!=3 or roles['edge']!=[init]:raise ValueError('exact external-bao-v1 process roles absent')
