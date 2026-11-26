@@ -132,8 +132,11 @@ def main():
             p.mkdir(parents=True,exist_ok=True);os.chown(p,0,0);p.chmod(0o755 if p==Path('/opt') else 0o700)
         for d in [src,arch,codedir]:d.mkdir(mode=0o700)
         for f in oci.iterdir():
-            if f.is_file():shutil.copyfile(f,codedir/f.name)
+            if f.is_file():
+                shutil.copyfile(f,codedir/f.name);(codedir/f.name).chmod(0o644)
         shutil.copyfile(oci/'coldcopy-runtime.py',codedir/'normal-runtime.py')
+        result['code_manifest']={p.name:sha(p) for p in sorted(codedir.iterdir()) if p.is_file() and p.suffix in ('.py','.mjs','.sh')}
+        result['checkout_commit']=os.environ.get('GITHUB_SHA')
         os.chmod(codedir,0o755)
         for image in [IMAGE,PG_IMAGE,BAO_IMAGE]:docker('pull',image)
         iid={k:json.loads(docker('image','inspect',v))[0]['Id'] for k,v in [('app',IMAGE),('pg',PG_IMAGE),('bao',BAO_IMAGE)]}

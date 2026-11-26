@@ -93,6 +93,12 @@ class Host:
    if observed['Image']!=expected['image_id']:raise ValueError('current store image moved')
   app=self.inspect(spec['container'])
   if app['Config']['Image']!='ghcr.io/manudss/iam-platform-poc@'+spec['target']['digest'] or 'IAM_AUTOMATION_HOLD=1' not in app['Config']['Env']:raise ValueError('exact held immutable image required')
+  mounts=[m for m in app.get('Mounts',[]) if m.get('Destination')=='/data' and m.get('Type')=='bind']
+  if len(mounts)!=1:raise ValueError('exact app HOME bind required')
+  app_home=Path(spec['stores']['dolt']['path'])
+  if app_home!=ROOT/'data' or app_home.resolve(strict=True)!=Path(mounts[0]['Source']).resolve(strict=True):raise ValueError('app home must be full canonical data parent')
+  env=dict(v.split('=',1) for v in app['Config']['Env'])
+  if env.get('IAM_DEMO_HOME')!='/data':raise ValueError('exact app HOME environment required')
   # Explicit protected source files and ownership-bound store directories.
   for b in spec['files']:self.read_binding(b,b['path'].endswith(('.env','.json','UPDATE_PAUSED','MAINTENANCE')))
   for role in ['dolt','pg','bao']:
@@ -209,7 +215,7 @@ class Host:
    finally:os.close(fd)
   # Real companion readiness/unseal is part of the not-yet-implemented replay
   # adapter. Do not restart sealed Bao blindly or call arbitrary shell strings.
-  return {'target':spec['target'],'coherent_three_store_backup':True,'archives':archives,'at':time.time(),'stores_stopped':True,'historical_preservation_claimed':False}
+  return {'coverage':{'app_home':spec['stores']['dolt']['path'],'includes':['dolt','core-state','nats-js','migrations','credentials-and-history']},'target':spec['target'],'coherent_three_store_backup':True,'archives':archives,'at':time.time(),'stores_stopped':True,'historical_preservation_claimed':False}
  def qualify_isolated(self,spec,baseline):
   # Caller supplies only pinned adjacent modules in installed root-owned tree.
   # Preflight is still unconditionally disabled until complete host review.

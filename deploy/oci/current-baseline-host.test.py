@@ -1,4 +1,4 @@
-import importlib.util,json,tempfile,unittest,hashlib,tarfile
+import importlib.util,json,tempfile,unittest,hashlib,tarfile,fcntl,subprocess,sys
 from pathlib import Path
 from unittest.mock import patch
 s=importlib.util.spec_from_file_location('host',Path(__file__).with_name('current-baseline-host.py'));m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
@@ -104,6 +104,20 @@ class ArchiveEvidence(unittest.TestCase):
     h.command=command
     with self.assertRaises(TimeoutError):h.capture_current_baseline(spec)
     self.assertFalse(any(a[:2]==['docker','start'] for a in calls))
+
+
+
+class LockOwnership(unittest.TestCase):
+ def test_actual_exclusive_descriptor_and_foreign_owner(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d)/'lock';p.touch();owner=p.open('rb');fcntl.flock(owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   h=m.Host({}, {'journal':(str(p),owner.fileno()),'updater':(str(p),owner.fileno())})
+   with patch.object(m,'protected',side_effect=lambda p,*a:Path(p)):h.locks()
+   # A different fd referencing the same inode is not ownership proof.
+   other=p.open('rb');h.lock_bindings={'journal':(str(p),other.fileno()),'updater':(str(p),other.fileno())}
+   with patch.object(m,'protected',side_effect=lambda p,*a:Path(p)):
+    with self.assertRaises(BlockingIOError):h.locks()
+   other.close();owner.close()
 
 class BoundedArchives(unittest.TestCase):
  def test_streaming_hash_never_unbounded_read(self):
