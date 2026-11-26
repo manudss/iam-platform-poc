@@ -155,7 +155,8 @@ def main():
         # Actual split preparation only. Fresh fictional empty data directory;
         # companion IDs exist but are not started, app waits FIFO, no permit.
         split=load(codedir/'source-rw-runtime.py','source_rw_runtime')
-        splitroot=COPIES/eng/'preparation-only';splitroot.mkdir(parents=True,mode=0o700)
+        root.mkdir(mode=0o700)
+        splitroot=root/'preparation-only';splitroot.mkdir(mode=0o700)
         splitdata=splitroot/'data';splitdata.mkdir(mode=0o700)
         splitenv=splitroot/'env';splitenv.write_text('IAM_DEMO_SEED_MODE=never\n');splitenv.chmod(0o600)
         splitbe='lq-split-'+eng+'-be';splitfe='lq-split-'+eng+'-fe'
