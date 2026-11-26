@@ -295,7 +295,7 @@ class Isolated:
    if failures:raise ValueError('copy cleanup incomplete: '+','.join(failures)) from err
   if err:raise err
   result['cleanup']=[]
-  result['retained_private_copy']={'path':str(root),'mode':'0700','contains_copied_secrets':True,'purged':False}
+  result['retained_private_copy']={'path':str(root),'mode':'0700','contains_copied_secrets':True,'purged':False,'retained_at':time.time(),'purge_due_at':time.time()+7200,'purge_requires_operator':True}
   return result
 
  def cleanup(self,made,nets,names):

@@ -24,7 +24,7 @@ BAO_IMAGE='openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a77833
 COPIES=Path('/opt/lyam-qualification/copies')
 FRONT_PORT=18089
 APP_PORT=18088
-BAO_HCL='ui = false\ndisable_mlock = true\nstorage "file" {\n  path = "/bao/file"\n}\nlistener "tcp" {\n  address = "0.0.0.0:8200"\n  tls_disable = 1\n}\napi_addr = "http://127.0.0.1:8200"\n'
+BAO_HCL='ui = false\nstorage "pebbledb" {\n  path = "/bao/file"\n}\nlistener "tcp" {\n  address = "0.0.0.0:8200"\n  tls_disable = 1\n}\napi_addr = "http://127.0.0.1:8200"\n'
 # Runs in a companion's network namespace through host Python (no tool needed in image).
 HTTP_SRC=("import json,sys,time,urllib.request,urllib.error\n"
 "a=json.loads(sys.stdin.buffer.read());h={'Content-Type':'application/json'}\n"
