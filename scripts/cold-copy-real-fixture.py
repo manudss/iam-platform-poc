@@ -412,8 +412,9 @@ def main():
             raise
 
         result.update(stage='completed',direct_execution=out['direct_execution'],baseline_bound=out['baseline']==baseline,historical_preservation_claimed=out['historical_preservation_claimed'],cleanup=out['cleanup'],retained_private_copy=out['retained_private_copy'],steps=out['steps'],probe={k:out['probe'][k] for k in ('phases','evidence_sha256','transport')},restored_members={r:v['members'] for r,v in out['restored'].items()},launch_proof_sha256=out['launch_proof_sha256'],guard=out['guard'])
-        result['source_rw_real_stores_isolated_composition']={k:out[k] for k in ('source_rw_copy_plan','source_rw_copy_plan_sha256','all_six_ids_before_companion_permits','normal_start_claimed')}
+        result['source_rw_real_stores_isolated_composition']={k:out[k] for k in ('source_rw_copy_plan','source_rw_copy_plan_sha256','all_six_ids_before_companion_permits','normal_start_claimed','companion_before_permit','transaction_events')}
         result['source_rw_effect_event_phases']=[json.loads(p.read_text()).get('phase') for p in sorted((root/'effects').glob('*.json'))]
+        result['app_lifecycle_journals']={suffix:json.loads(Path(str(root/'normal-attempt-1.json')+suffix).read_text()) for suffix in ('','.effects','.launched')}
         restored_home=Path(out['restored']['dolt']['path'])
         result['dev_restored_app_home_sentinels']=all((restored_home/rel).read_bytes()==('fictional-sentinel:'+rel).encode() for rel in sentinel_paths)
         if not result['dev_restored_app_home_sentinels']:raise ValueError('app_home sentinel restore differs')

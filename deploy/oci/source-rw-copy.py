@@ -9,7 +9,7 @@ static IP + FIFO guard (not started) -> witness bound to IPs -> start -> namespa
 fence -> release FIFO -> Bao unseal from local root-0600 file via stdin ->
 producer normal-runtime.launch(kind isolated-copy) -> fixed probes -> exact cleanup.
 """
-import hashlib,ipaddress,json,os,re,stat,tarfile,time
+import importlib.util,hashlib,ipaddress,json,os,re,stat,tarfile,time
 from pathlib import Path
 COPIES=Path('/opt/lyam-qualification/copies')
 ROLES=('dolt','pg','bao')
@@ -235,6 +235,12 @@ class Isolated:
    cid={}
    cid['pg']=self.companion(eng,'pg',names['pg'],spec['identities']['pg']['image_id'],c['backend']['name'],c['ips']['pg'],[(restored['pg']['path'],'/var/lib/postgresql/data')],user=self.own(spec,'pg'),tmpfs=['/var/run/postgresql:uid=%d,gid=%d,mode=0755'%self.uidgid(spec,'pg')]);made.append(names['pg'])
    cid['bao']=self.companion(eng,'bao',names['bao'],spec['identities']['bao']['image_id'],c['backend']['name'],c['ips']['bao'],[(restored['bao']['path'],'/bao/file')],[(str(bao_hcl),'/bao/config/bao.hcl')],cmd=BAO_CMD,user=self.own(spec,'bao'));made.append(names['bao'])
+   def source_inventory(path):
+    base=Path(path);out={}
+    for p in [base,*sorted(base.rglob('*'))]:
+     st=p.lstat();out[str(p.relative_to(base))]={'size':st.st_size if p.is_file() else 0,'mtime_ns':st.st_mtime_ns,'mode':st.st_mode,'inode':st.st_ino,'sha256':sha(p) if p.is_file() else None}
+    return out
+   companion_before={r:source_inventory(restored[r]['path']) for r in ('pg','bao')}
    # witness bound to static IPs BEFORE any docker start
    binding=self.w.install('LQ'+hashlib.sha256(eng.encode()).hexdigest()[:12],[c['ips']['pg'],c['ips']['bao']],c['backend']['subnet'])
    before=self.w.snapshot(binding)
@@ -256,16 +262,32 @@ class Isolated:
    made.append(names['app'])
    prepared_app=self.L.create_waiting(contract,lambda intent:before_effects({'phase':'app-create-intent','intent':intent}))
    cid['app']=prepared_app['container_id']
-   self.source_rw_plan={'kind':'source-rw-copy-mechanism-only','engagement':eng,'old':{r:{k:spec['identities'][r][k] for k in ('id','name','image_id')} for r in ('app','pg','bao')},'new':{r:{'id':cid[r],'name':names[r],'image_id':spec['identities'][r]['image_id']} for r in ('app','pg','bao')},'target':spec['target'],'archives':baseline['archives'],'prepared_app':prepared_app,'normal_start_claimed':False}
-   self.source_rw_plan['stores']={r:restored[r]['path'] for r in ('dolt','pg','bao')}
-   self.source_rw_plan['env_binding']=env_binding
-   self.source_rw_plan['runtime_contract_sha256']=hashlib.sha256(json.dumps(contract,sort_keys=True).encode()).hexdigest()
-   before_effects({'phase':'source-rw-all-six-prepared','plan':self.source_rw_plan})
-   before_effects({'phase':'source-effects-committed','plan_sha256':hashlib.sha256(json.dumps(self.source_rw_plan,sort_keys=True).encode()).hexdigest(),'source_effects_committed':True})
+   def load_bound(name):
+    path=Path(__file__).with_name(name);raw=path.read_bytes();sp=importlib.util.spec_from_file_location(name.replace('.','_'),path);m=importlib.util.module_from_spec(sp);exec(compile(raw,str(path),'exec'),m.__dict__);return m,hashlib.sha256(raw).hexdigest()
+   tx,txsha=load_bound('source-rw-transaction.py');jm,jsha=load_bound('source-rw-journal.py')
+   bindroot=root/'source-rw-bindings';bindroot.mkdir(mode=0o700)
+   def binding(name,value):
+    raw=json.dumps(value,sort_keys=True).encode();path=bindroot/name
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+    return {'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
+   runtime_binding=binding('runtime.json',contract)
+   self.source_rw_plan={'format':1,'kind':'source-rw-normal-transaction','engagement':eng,'old':{r:{k:spec['identities'][r][k] for k in ('id','name','image_id')} for r in ('app','pg','bao')},'new':{r:{'id':cid[r],'name':names[r],'image_id':spec['identities'][r]['image_id']} for r in ('app','pg','bao')},'target':spec['target'],'baseline':binding('baseline.json',baseline),'stores':{r:restored[r]['path'] for r in ('dolt','pg','bao')},'env':env_binding,'policy':c['policy_binding'],'runtime':runtime_binding,'code':{'transaction':txsha,'journal':jsha,'copy':sha(Path(__file__))},'updater':{'container':names['app'],'runtime':runtime_binding,'target':spec['target']}}
+   plan_hash=tx.validate(self.source_rw_plan)
+   transaction_journal=jm.Journal(root/'source-rw-events')
+   transaction_journal.create({'kind':'source-rw-prepared','plan':self.source_rw_plan,'plan_sha256':plan_hash,'source_effects_committed':False,'copy_only':True})
+   self.companion_before_permit={}
    for r in ('pg','bao'):
-    before_effects({'phase':'companion-permit-intent','role':r,'id':cid[r]})
+    x=self.js('prepermit-'+r,['docker','inspect',cid[r]])
+    processes=self.do('prepermit-processes-'+r,['docker','top',cid[r],'-eo','pid,comm,args'])
+    unchanged=companion_before[r]==source_inventory(restored[r]['path'])
+    self.companion_before_permit[r]={'container_id':cid[r],'guard_cmd_exact':x['Config']['Cmd']==['-c',GUARD,'sh']+((self.js('prepermit-image-'+r,['docker','image','inspect',spec['identities'][r]['image_id']])['Config'].get('Entrypoint') or [])+(BAO_CMD if r=='bao' else self.js('prepermit-cmd-'+r,['docker','image','inspect',spec['identities'][r]['image_id']])['Config'].get('Cmd') or [])),'fifo_waiting':self.do('prepermit-fifo-'+r,['docker','exec',cid[r],'sh','-c','test -p '+FIFO+' && printf waiting'])=='waiting','source_inventory_unchanged':unchanged,'process_observation':processes}
+    if not unchanged or not self.companion_before_permit[r]['fifo_waiting'] or not self.companion_before_permit[r]['guard_cmd_exact']:raise ValueError('companion source touched before permit')
+   transaction_journal.append({'phase':'source-effects-committed','plan_sha256':plan_hash,'source_effects_committed':True})
+   for r in ('pg','bao'):
+    transaction_journal.append({'phase':'permit-intent','role':r,'id':cid[r],'plan_sha256':plan_hash})
     self.do('release-'+r,['docker','exec',cid[r],'sh','-c','test -p '+FIFO+' && printf "%s\n" start-companion > '+FIFO])
-    before_effects({'phase':'companion-permit-returned','role':r,'id':cid[r]})
+    transaction_journal.append({'phase':'permit-returned','role':r,'id':cid[r],'plan_sha256':plan_hash})
    self.unseal(names['bao'],c['unseal_key_binding'])
    if getattr(probes,'before_phase','in-launch')=='pre-launch':self.before_with_placeholder(eng,{**names,'app':names['app']+'-before'},spec,restored,probes,before_effects)
    iso=self
@@ -282,11 +304,14 @@ class Isolated:
       for ip in ips:iso.w.probe(app_binding,proof['pid'],ip)
       app_before=iso.w.snapshot(app_binding);counter_before['app']=iso.counters(proof['pid'])
       if getattr(probes,'before_phase','in-launch')!='pre-launch':probes.before(names,restored,proof)
+      transaction_journal.append({'phase':'permit-intent','role':'app','id':cid['app'],'plan_sha256':plan_hash,'companions_unsealed':True})
       effects(proof)
      return iso.L.activate_waiting(cc,prepared_app,commit)
 
    # Own the exact fixed name before launch, including ambiguous marker failures.
    launched=lifecycle.launch(contract,evidence_path,Proxy())
+   transaction_journal.append({'phase':'permit-returned','role':'app','id':cid['app'],'plan_sha256':plan_hash})
+   self.transaction_events=[json.loads(p.read_text()) for p in sorted((root/'source-rw-events').glob('*.json'))]
    pr=probes.after(names,restored,launched)
    after=self.w.snapshot(binding);quiet=self.w.verify_quiet(before,after)
    if app_binding:self.w.verify_quiet(app_before,self.w.snapshot(app_binding))
@@ -297,7 +322,7 @@ class Isolated:
       delta={table:[b-a for a,b in zip(counter_before[role][table],current[table])] for table in ('filter','raw')}
       raise ValueError('copy initiated denied traffic after permit: '+role+' counter-delta='+json.dumps(delta,sort_keys=True))
    if not isinstance(pr,dict) or pr.get('ok') is not True:raise ValueError('fixed copy probes failed')
-   result={'source_rw_copy_plan':self.source_rw_plan,'source_rw_copy_plan_sha256':hashlib.sha256(json.dumps(self.source_rw_plan,sort_keys=True).encode()).hexdigest(),'all_six_ids_before_companion_permits':True,'normal_start_claimed':False,'direct_execution':True,'baseline':baseline,'target':spec['target'],'historical_preservation_claimed':False,'restored':restored,'guard':quiet,'launch_proof_sha256':hashlib.sha256(json.dumps(launched,sort_keys=True,default=str).encode()).hexdigest(),'probe':pr,'steps':list(self.steps)}
+   result={'source_rw_copy_plan':self.source_rw_plan,'companion_before_permit':self.companion_before_permit,'transaction_events':self.transaction_events,'source_rw_copy_plan_sha256':plan_hash,'all_six_ids_before_companion_permits':True,'normal_start_claimed':False,'direct_execution':True,'baseline':baseline,'target':spec['target'],'historical_preservation_claimed':False,'restored':restored,'guard':quiet,'launch_proof_sha256':hashlib.sha256(json.dumps(launched,sort_keys=True,default=str).encode()).hexdigest(),'probe':pr,'steps':list(self.steps)}
   except BaseException as e:err=e
   finally:
    failures=[]
