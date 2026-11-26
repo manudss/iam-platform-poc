@@ -266,13 +266,13 @@ class Isolated:
     path=Path(__file__).with_name(name);raw=path.read_bytes();sp=importlib.util.spec_from_file_location(name.replace('.','_'),path);m=importlib.util.module_from_spec(sp);exec(compile(raw,str(path),'exec'),m.__dict__);return m,hashlib.sha256(raw).hexdigest()
    tx,txsha=load_bound('source-rw-transaction.py');jm,jsha=load_bound('source-rw-journal.py')
    bindroot=root/'source-rw-bindings';bindroot.mkdir(mode=0o700)
-   def binding(name,value):
+   def make_binding(name,value):
     raw=json.dumps(value,sort_keys=True).encode();path=bindroot/name
     fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
     with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
     return {'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
-   runtime_binding=binding('runtime.json',contract)
-   self.source_rw_plan={'format':1,'kind':'source-rw-normal-transaction','engagement':eng,'old':{r:{k:spec['identities'][r][k] for k in ('id','name','image_id')} for r in ('app','pg','bao')},'new':{r:{'id':cid[r],'name':names[r],'image_id':spec['identities'][r]['image_id']} for r in ('app','pg','bao')},'target':spec['target'],'baseline':binding('baseline.json',baseline),'stores':{r:restored[r]['path'] for r in ('dolt','pg','bao')},'env':env_binding,'policy':c['policy_binding'],'runtime':runtime_binding,'code':{'transaction':txsha,'journal':jsha,'copy':sha(Path(__file__))},'updater':{'container':names['app'],'runtime':runtime_binding,'target':spec['target']}}
+   runtime_binding=make_binding('runtime.json',contract)
+   self.source_rw_plan={'format':1,'kind':'source-rw-normal-transaction','engagement':eng,'old':{r:{k:spec['identities'][r][k] for k in ('id','name','image_id')} for r in ('app','pg','bao')},'new':{r:{'id':cid[r],'name':names[r],'image_id':spec['identities'][r]['image_id']} for r in ('app','pg','bao')},'target':spec['target'],'baseline':make_binding('baseline.json',baseline),'stores':{r:restored[r]['path'] for r in ('dolt','pg','bao')},'env':env_binding,'policy':c['policy_binding'],'runtime':runtime_binding,'code':{'transaction':txsha,'journal':jsha,'copy':sha(Path(__file__))},'updater':{'container':names['app'],'runtime':runtime_binding,'target':spec['target']}}
    plan_hash=tx.validate(self.source_rw_plan)
    transaction_journal=jm.Journal(root/'source-rw-events')
    transaction_journal.create({'kind':'source-rw-prepared','plan':self.source_rw_plan,'plan_sha256':plan_hash,'source_effects_committed':False,'copy_only':True})
