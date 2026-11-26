@@ -16,6 +16,7 @@
 // /login and /my-applications server-side; the other routes stay client-rendered.
 import http from 'node:http';
 import { framingHeaders } from './frame-policy.mjs';
+import { apiTimeoutMs } from './timeout-policy.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const CORE = { host: '127.0.0.1', port: Number(process.env.IAM_CORE_PORT ?? 8081) };
@@ -116,7 +117,7 @@ const server = http.createServer(async (req, res) => {
       // The admin capability token lives only server-side: the edge attaches it to proxied API calls so
       // signed-in demo visitors can use simulation / plugin admin without ever seeing the secret.
       if (process.env.IAM_API_ADMIN_TOKEN) req.headers['x-api-admin-token'] = process.env.IAM_API_ADMIN_TOKEN;
-      return proxy(req, res, API, true);
+      return proxy(req, res, API, true, undefined, apiTimeoutMs(req.method, p));
     }
     // /authorize and everything under it (login post, theme toggle, the passkey ceremony script
     // /authorize/webauthn.js): an exact-match here once sent the ceremony script to the SPA, which

@@ -6,6 +6,14 @@ import { fileURLToPath } from 'node:url';
 // The first main release containing this control. A missing control is not a
 // reason to skip: only proven strict ancestors of this release are legacy.
 export const CONTROLS = Object.freeze([Object.freeze({
+  id: 'ai_timeout_policy',
+  path: 'demo/timeout-policy.test.mjs',
+  introducedBy: 'aa2c52c53771dee07d0422886e7db4284e1abdcd',
+}), Object.freeze({
+  id: 'ai_timeout_network',
+  path: 'demo/chat-timeout.test.mjs',
+  introducedBy: 'aa2c52c53771dee07d0422886e7db4284e1abdcd',
+}), Object.freeze({
   id: 'password_eye',
   path: 'scripts/password-eye-ui-e2e.cjs',
   introducedBy: 'fa0acdc00895c96acfe52fb217864de101464b37',
