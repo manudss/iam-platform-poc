@@ -44,6 +44,17 @@ describe('lyam-send-mail block', () => {
     }
     assert.equal(Fake.calls.length,0);
   }));
+  it('allow-any-recipient is opt-in: off refuses, on accepts any single address, format and key checks stay', async () => withKey(async () => {
+    const live = (v: any) => ({ liveMailSettings: async () => ({ mailAllowAnyRecipient: v }) });
+    for (const off of [undefined, false, 'false', '', 'yes']) await assert.rejects(() => block().run(base({ config: { to: 'lea.fontaine@dss.name', subject: 's', text: 't' }, ...live(off) }) as any), /allowed recipients/);
+    assert.equal(Fake.calls.length, 0);
+    for (const on of [true, 'true']) await block().run(base({ config: { to: 'lea.fontaine@dss.name', subject: 's', text: 't' }, ...live(on) }) as any);
+    assert.equal(Fake.calls.length, 2);
+    for (const to of ['a@b.c', 'a@x.test,b@x.test', 'A <a@x.test>', 'a@x.test\r\nBcc:b@x.test', '']) await assert.rejects(() => block().run(base({ config: { to, subject: 's', text: 't' }, ...live(true) }) as any));
+    delete process.env.RESEND_API_KEY;
+    await assert.rejects(() => block().run(base({ config: { to: 'lea.fontaine@dss.name', subject: 's', text: 't' }, ...live(true) }) as any), /RESEND_API_KEY/);
+    assert.equal(Fake.calls.length, 2);
+  }));
   it('reads domain policy live and fails closed after revocation despite a stale branch grant', async()=>withKey(async()=>{
     await assert.rejects(()=>block().run(base({config:{to:'camille.martin@dss.name',subject:'Fixture',text:'Fictional'},settings:{mailAllowedDomains:'dss.name'},liveMailSettings:async()=>({})}) as any),/allowed recipients/);
     assert.equal(Fake.calls.length,0);

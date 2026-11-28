@@ -46,6 +46,14 @@
       "group": "Mail"
     },
     {
+      "key": "mailAllowAnyRecipient",
+      "type": "boolean",
+      "label": "Mail block: allow any recipient",
+      "default": false,
+      "help": "Off by default. When on, any single well-formed address is accepted by workflow mail and badge preflight, instead of the exact recipients and domains lists. The sender, the provider key and the one-address format checks still apply. Read from main at runtime. Turn on only with the owner's approval.",
+      "group": "Mail"
+    },
+    {
       "key": "mailFrom",
       "type": "string",
       "label": "Mail block: sender address",
