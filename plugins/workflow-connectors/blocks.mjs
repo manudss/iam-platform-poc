@@ -671,7 +671,9 @@ function checkedMailPolicy(settings, to, label) {
   if (domains.some(x => !domainName.test(x))) bad(`${label}: allowed mail domains must be exact domain names, without @ or wildcards`);
   const [local, domain] = to.toLowerCase().split('@');
   const domainRecipient = /^[a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`{|}~-]+)*$/.test(local) && domainName.test(domain) && domains.includes(domain);
-  if (!allowed.includes(to.toLowerCase()) && !domainRecipient) bad(`${label}: this recipient is not in the allowed recipients or domains setting`);
+  // Explicit owner opt-in (default off): any single, well-formed address is accepted. Format, API key and sender checks below still apply.
+  const anyRecipient = settings?.mailAllowAnyRecipient === true || settings?.mailAllowAnyRecipient === 'true';
+  if (!anyRecipient && !allowed.includes(to.toLowerCase()) && !domainRecipient) bad(`${label}: this recipient is not in the allowed recipients or domains setting`);
   const apiKey = process.env.RESEND_API_KEY;
   if (typeof apiKey !== 'string' || !apiKey.trim()) bad(`${label}: RESEND_API_KEY is not set on the server (nothing sent)`);
   const from = str(settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
